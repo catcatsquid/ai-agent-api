@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>流式聊天测试</title>
+    <style>
+        body { font-family: sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; }
+        textarea { width: 100%; height: 80px; padding: 10px; font-size: 14px; }
+        button { padding: 10px 24px; font-size: 14px; cursor: pointer; background: #4f46e5; color: white; border: none; border-radius: 6px; }
+        button:disabled { background: #9ca3af; }
+        #output { margin-top: 20px; padding: 16px; background: #f3f4f6; border-radius: 8px; min-height: 60px; white-space: pre-wrap; line-height: 1.6; }
+    </style>
+</head>
+<body>
+    <h2>流式聊天测试</h2>
+    <p>输入问题，点击发送，看AI一个字一个字蹦出来：</p>
+    <textarea id="prompt" placeholder="输入你的问题...">用一句话解释什么是SSE流式响应</textarea>
+    <br><br>
+    <button id="sendBtn" onclick="send()">发送</button>
+    <div id="output"></div>
+
+    <script>
+        async function send() {
+            const prompt = document.getElementById('prompt').value;
+            const output = document.getElementById('output');
+            const btn = document.getElementById('sendBtn');
+            output.textContent = '';
+            btn.disabled = true;
+            btn.textContent = '生成中...';
+
+            const response = await fetch('/chat/stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt: prompt, model: 'glm-4-flash' })
+            });
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                const chunk = decoder.decode(value, { stream: true });
+                output.textContent += chunk;
+            }
+
+            btn.disabled = false;
+            btn.textContent = '发送';
+        }
+    </script>
+</body>
+</html>
