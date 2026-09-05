@@ -25,10 +25,20 @@ def chat(prompt, model="glm-4-flash", system_prompt=None):
 
     payload = {"model": model, "messages": messages}
 
-    resp = requests.post(URL, headers=headers, json=payload, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
-    return data["choices"][0]["message"]["content"]
+    try:
+        resp = requests.post(URL, headers=headers, json=payload, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+    except requests.exceptions.HTTPError:
+        print(f"API错误: {resp.status_code} - {resp.text}")
+        sys.exit(1)
+    except requests.exceptions.RequestException as e:
+        print(f"网络错误: {e}")
+        sys.exit(1)
+    except (KeyError, IndexError):
+        print(f"响应格式异常，原始数据: {resp.text}")
+        sys.exit(1)
 
 #把一轮问答记录追加保存到chat_log.json文件里,如果文件不存在就创建一个新的文件
 #如果文件存在就读取原来的内容,然后把新的问答记录追加到原来的内容里,最后再写回到文件里。
@@ -109,17 +119,10 @@ def main():
         print(f"人设: {args.system}")
     print(f"GLM: ", end="")
 
-    try:
-        reply = chat(prompt, model=args.model, system_prompt=args.system)
-        print(reply)
-        if args.save:
-            save_log(prompt, reply, args.model, args.output)
-    except requests.exceptions.HTTPError:
-        print(f"API错误: {resp.status_code} - {resp.text}")
-        sys.exit(1)
-    except requests.exceptions.RequestException as e:
-        print(f"网络错误: {e}")
-        sys.exit(1)
+    reply = chat(prompt, model=args.model, system_prompt=args.system)
+    print(reply)
+    if args.save:
+        save_log(prompt, reply, args.model, args.output)
 
 
 if __name__ == "__main__":

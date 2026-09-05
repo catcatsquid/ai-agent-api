@@ -1,16 +1,18 @@
+from typing import Optional
+
 from pydantic import BaseModel
 
 
 class ChatRequest(BaseModel):
     prompt: str
     model: str = "glm-4-flash"
-    system: str = None
+    system: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
     code: int = 0
     msg: str = "ok"
-    reply: str = None
+    reply: Optional[str] = None
 
 #msg=状态描述
 def success(data=None, msg="ok"):

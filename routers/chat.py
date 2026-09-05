@@ -55,7 +55,19 @@ async def chat_stream(req: ChatRequest):
     }
     #定义生成器函数
     def generate():
-        resp = requests.post(API_URL, headers=headers, json=payload, stream=True, timeout=60)
+        try:
+            resp = requests.post(API_URL, headers=headers, json=payload, stream=True, timeout=60)
+            resp.raise_for_status()
+        except requests.exceptions.Timeout:
+            yield "请求超时，请稍后重试"
+            return
+        except requests.exceptions.HTTPError:
+            yield f"API调用失败（HTTP {resp.status_code}）"
+            return
+        except requests.exceptions.RequestException as e:
+            yield f"网络错误: {e}"
+            return
+
         for line in resp.iter_lines():
             #跳过空行
             if not line:
