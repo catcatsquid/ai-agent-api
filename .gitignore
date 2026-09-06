@@ -1,9 +1,28 @@
+# 环境配置
 .env
-__pycache__/
-*.pyc
 venv/
 .venv/
-*.json
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 日志与数据
 *.log
+*.json
+*.db
+*.sqlite
+
+# IDE
 .vscode/
 .idea/
+
+# 练习脚本（不传 GitHub）
+chat.py
+chat_v2.py
+prompt_lab.py
+rag_lab.py
+rag_complete.py
+embedding_lab.py
+deepseek_demo.py
