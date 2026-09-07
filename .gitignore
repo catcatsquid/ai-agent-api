@@ -26,3 +26,6 @@ rag_lab.py
 rag_complete.py
 embedding_lab.py
 deepseek_demo.py
+tool_lab.py
+react_lab.py
+multi_tool_agent.py
