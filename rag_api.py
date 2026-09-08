@@ -1,14 +1,9 @@
-import os
 import math
 import requests
-from dotenv import load_dotenv
 from fastapi import FastAPI
 from pydantic import BaseModel
-
-load_dotenv()
-API_KEY = os.getenv("ZHIPU_API_KEY")
-CHAT_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-EMBEDDING_URL = "https://open.bigmodel.cn/api/paas/v4/embeddings"
+from config import ZHIPU_API_KEY, ZHIPU_CHAT_URL, ZHIPU_EMBEDDING_URL, DEEPSEEK_API_KEY, DEEPSEEK_CHAT_URL
+from schemas import APIResponse
 
 app = FastAPI(title="RAG问答API", version="1.0")
 
@@ -19,14 +14,15 @@ app = FastAPI(title="RAG问答API", version="1.0")
 
 def get_embedding(text):
     headers = {
-        "Authorization": f"Bearer {API_KEY}",
+        "Authorization": f"Bearer {ZHIPU_API_KEY}",
         "Content-Type": "application/json",
     }
     payload = {"model": "embedding-3", "input": text}
-    resp = requests.post(EMBEDDING_URL, headers=headers, json=payload, timeout=30)
+    resp = requests.post(ZHIPU_EMBEDDING_URL, headers=headers, json=payload, timeout=30)
     resp.raise_for_status()
     data = resp.json()
     return data["data"][0]["embedding"]
+
 
 def cosine_similarity(v1, v2):
     dot = sum(a * b for a, b in zip(v1, v2))
@@ -34,9 +30,10 @@ def cosine_similarity(v1, v2):
     norm2 = math.sqrt(sum(b * b for b in v2))
     return dot / (norm1 * norm2)
 
+
 def chat(prompt, system=None, temperature=0.1):
     headers = {
-        "Authorization": f"Bearer {API_KEY}",
+        "Authorization": f"Bearer {ZHIPU_API_KEY}",
         "Content-Type": "application/json",
     }
     messages = []
@@ -44,14 +41,14 @@ def chat(prompt, system=None, temperature=0.1):
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
     payload = {"model": "glm-4-flash", "messages": messages, "temperature": temperature}
-    resp = requests.post(CHAT_URL, headers=headers, json=payload, timeout=30)
+    resp = requests.post(ZHIPU_CHAT_URL, headers=headers, json=payload, timeout=30)
     resp.raise_for_status()
     data = resp.json()
     return data["choices"][0]["message"]["content"]
 
 
 # ============================================================
-# 知识库 + 向量数据库（启动时初始化）
+# 知识库 + 向量数据库（启动时初始化，带容错）
 # ============================================================
 
 KNOWLEDGE_BASE = """
@@ -68,7 +65,7 @@ Embedding模型embedding-3是智谱提供的文本向量化模型，可以把文
 智谱AI的API遵循OpenAI兼容格式，可以使用OpenAI的SDK直接调用，只需要修改base_url和api_key即可。
 """
 
-# 切块
+
 def chunk_text(text, chunk_size=200, overlap=50):
     chunks = []
     start = 0
@@ -78,50 +75,45 @@ def chunk_text(text, chunk_size=200, overlap=50):
         start = end - overlap
     return chunks
 
-# 启动时建库
+
+# 启动时建库（带容错：API 不可用时不崩溃，打印警告）
 chunks = chunk_text(KNOWLEDGE_BASE, chunk_size=200, overlap=50)
 vector_db = []
-for chunk in chunks:
-    emb = get_embedding(chunk)
-    vector_db.append({"text": chunk, "embedding": emb})
-
-print(f"[启动] 知识库初始化完成，共 {len(vector_db)} 条文档向量")
-
-
-# ============================================================
-# 请求/响应模型
-# ============================================================
-
-#请求格式
-class RAGRequest(BaseModel):
-    query: str
-    top_k: int = 3
-    temperature: float = 0.1
-#响应格式
-class RAGResponse(BaseModel):
-    code: int = 0
-    msg: str = "ok"
-    answer: str = None
-    sources: list = []
+try:
+    for chunk in chunks:
+        emb = get_embedding(chunk)
+        vector_db.append({"text": chunk, "embedding": emb})
+    print(f"[启动] 知识库初始化完成，共 {len(vector_db)} 条文档向量")
+except Exception as e:
+    print(f"[警告] 知识库初始化失败: {e}，RAG 检索将不可用")
 
 
 # ============================================================
 # 接口
 # ============================================================
 
+class RAGRequest(BaseModel):
+    query: str
+    top_k: int = 3
+    temperature: float = 0.1
+
+
 @app.get("/")
 def health():
-    return {"code": 0, "msg": "ok", "data": "RAG问答API正在运行"}
+    return APIResponse(data="RAG问答API 正在运行")
 
 
-@app.post("/rag/ask", response_model=RAGResponse)
+@app.post("/rag/ask")
 def rag_ask(req: RAGRequest):
     """RAG问答接口：用户提问 → 检索知识库 → 大模型基于检索内容回答"""
+    if not vector_db:
+        return APIResponse(code=1, msg="知识库未初始化，RAG检索不可用")
+
     try:
         # 1. 把问题向量化
         query_emb = get_embedding(req.query)
 
-        # 2. 检索最相关的top_k条
+        # 2. 检索最相关的 top_k 条
         results = []
         for item in vector_db:
             sim = cosine_similarity(query_emb, item["embedding"])
@@ -132,7 +124,7 @@ def rag_ask(req: RAGRequest):
         # 3. 拼上下文
         context = "\n\n".join([r["text"] for r in top_results])
 
-        # 4. 构造prompt
+        # 4. 构造 prompt
         rag_prompt = f"""请根据以下参考资料回答用户的问题。如果参考资料中没有答案，请说"根据已有资料无法回答"。
 
 参考资料：
@@ -154,10 +146,10 @@ def rag_ask(req: RAGRequest):
             for r in top_results
         ]
 
-        return RAGResponse(code=0, msg="ok", answer=answer, sources=sources)
+        return APIResponse(data={"answer": answer, "sources": sources})
 
     except Exception as e:
-        return RAGResponse(code=1, msg=f"出错了: {str(e)}", answer=None, sources=[])
+        return APIResponse(code=1, msg=f"出错了: {str(e)}")
 
 
 if __name__ == "__main__":

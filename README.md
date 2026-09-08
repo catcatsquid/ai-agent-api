@@ -26,7 +26,14 @@ AI Agent 应用开发学习路线的代码仓库，包含从零开始搭建的�
 ### 启动
 
 ```bash
+# 1. 创建虚拟环境（venv）
+python -m venv .venv
+.venv\Scripts\activate   # Windows 激活
+
+# 2. 安装依赖
 pip install -r requirements.txt
+
+# 3. 启动服务
 python -m uvicorn api_server:app --reload
 ```
 
@@ -61,7 +68,13 @@ python -m uvicorn api_server:app --reload
 ### 启动
 
 ```bash
+# 1. 激活虚拟环境
+.venv\Scripts\activate
+
+# 2. 安装依赖
 pip install -r requirements.txt
+
+# 3. 启动服务
 python rag_api.py
 ```
 
@@ -101,7 +114,13 @@ python rag_api.py
 ### 启动
 
 ```bash
+# 1. 激活虚拟环境
+.venv\Scripts\activate
+
+# 2. 安装依赖
 pip install -r requirements.txt
+
+# 3. 启动服务
 python -m uvicorn agent_api:app --reload --port 8002
 ```
 
@@ -140,7 +159,7 @@ ai-agent-learning/
 └── routers/            # 聊天 API 路由模块
     ├── __init__.py
     ├── health.py       # 健康检查接口
-    └── chat.py         # 聊天接口（普通 + 流式）
+    └── chat.py         # 联天接口（普通 + 流式）
 ```
 
 ## 环境配置
@@ -156,3 +175,9 @@ ZHIPU_API_KEY=你的智谱API Key
 - ✅ 第 1 周：环境搭建 → API 调用 → FastAPI → SSE 流式 → 项目模板
 - ✅ 第 2 周：Prompt Engineering → RAG 检索 → RAG API 服务
 - ✅ 第 3 周：工具调用 → ReAct Agent → 多工具编排 → Agent API 服务
+
+---
+
+## CSV/TXT 读写示例（第 1 周要求）
+
+> 第 1 周要求掌握 CSV/TXT 文件的基本读写操作，可通过 Python 的 `csv` 和 `open` 函数实现。具体实现可参考 `.lab/csv_txt_test.py` 中的示例代码。

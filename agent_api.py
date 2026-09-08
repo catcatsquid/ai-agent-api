@@ -1,20 +1,48 @@
-import os
 import json
 import time
+import ast
+import operator
 import requests
-from dotenv import load_dotenv
 from fastapi import FastAPI
 from pydantic import BaseModel
-
-load_dotenv()
-API_KEY = os.getenv("ZHIPU_API_KEY")
-URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+from config import ZHIPU_API_KEY, ZHIPU_CHAT_URL, DEEPSEEK_API_KEY, DEEPSEEK_CHAT_URL, DEEPSEEK_API_KEY, DEEPSEEK_CHAT_URL
+from schemas import APIResponse
 
 app = FastAPI(title="Agent API", version="1.0")
 
 
 # ============================================================
-# 工具定义（和 multi_tool_agent.py 一样）
+# 安全计算器（替代 eval，只允许四则运算和幂）
+# ============================================================
+
+SAFE_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+    ast.USub: operator.neg,
+}
+
+
+def _safe_eval(expr: str) -> float:
+    """用 AST 解析数学表达式，只允许数字和四则运算，禁止任意代码执行。"""
+    node = ast.parse(expr, mode="eval").body
+
+    def _eval(n):
+        if isinstance(n, ast.Constant):
+            return n.value
+        if isinstance(n, ast.UnaryOp):
+            return SAFE_OPS[type(n.op)](_eval(n.operand))
+        if isinstance(n, ast.BinOp):
+            return SAFE_OPS[type(n.op)](_eval(n.left), _eval(n.right))
+        raise ValueError(f"不支持的操作: {type(n).__name__}")
+
+    return _eval(node)
+
+
+# ============================================================
+# 工具定义
 # ============================================================
 
 def get_weather(city):
@@ -32,7 +60,7 @@ def get_weather(city):
 
 def calculator(expression):
     try:
-        result = eval(expression)
+        result = _safe_eval(expression)
         return {"result": result}
     except Exception as e:
         return {"error": f"计算失败: {e}"}
@@ -157,19 +185,16 @@ TOOL_MAP = {
 
 
 # ============================================================
-# Agent核心逻辑
+# Agent 核心逻辑
 # ============================================================
 
 def run_agent(user_question, max_steps=8, timeout=60):
     """
-    Agent执行器
+    Agent 执行器
     返回: (answer, action_log, elapsed)
-    - answer: 最终回答
-    - action_log: 工具调用记录
-    - elapsed: 总耗时(秒)
     """
     headers = {
-        "Authorization": f"Bearer {API_KEY}",
+        "Authorization": f"Bearer {ZHIPU_API_KEY}",
         "Content-Type": "application/json",
     }
 
@@ -178,7 +203,6 @@ def run_agent(user_question, max_steps=8, timeout=60):
     start_time = time.time()
 
     for step in range(1, max_steps + 1):
-        # 超时检查
         if time.time() - start_time > timeout:
             return "Agent执行超时", action_log, round(time.time() - start_time, 2)
 
@@ -190,7 +214,7 @@ def run_agent(user_question, max_steps=8, timeout=60):
         }
 
         try:
-            resp = requests.post(URL, headers=headers, json=payload, timeout=30)
+            resp = requests.post(ZHIPU_CHAT_URL, headers=headers, json=payload, timeout=30)
             resp.raise_for_status()
         except requests.exceptions.Timeout:
             return "API请求超时", action_log, round(time.time() - start_time, 2)
@@ -231,7 +255,7 @@ def run_agent(user_question, max_steps=8, timeout=60):
 
 
 # ============================================================
-# 请求/响应模型
+# 接口
 # ============================================================
 
 class AgentRequest(BaseModel):
@@ -239,24 +263,12 @@ class AgentRequest(BaseModel):
     max_steps: int = 8
 
 
-class AgentResponse(BaseModel):
-    code: int = 0
-    msg: str = "ok"
-    answer: str = None
-    tools_used: list = []
-    elapsed: float = 0
-
-
-# ============================================================
-# 接口
-# ============================================================
-
 @app.get("/")
 def health():
-    return {"code": 0, "msg": "ok", "data": "Agent API正在运行"}
+    return APIResponse(data="Agent API 正在运行")
 
 
-@app.post("/agent/ask", response_model=AgentResponse)
+@app.post("/agent/ask")
 def agent_ask(req: AgentRequest):
     """Agent问答接口：用户提问 → Agent自主调用工具 → 返回答案+调用记录"""
     try:
@@ -267,18 +279,10 @@ def agent_ask(req: AgentRequest):
             for log in action_log
         ]
 
-        return AgentResponse(
-            code=0,
-            msg="ok",
-            answer=answer,
-            tools_used=tools_used,
-            elapsed=elapsed,
-        )
+        return APIResponse(data={
+            "answer": answer,
+            "tools_used": tools_used,
+            "elapsed": elapsed,
+        })
     except Exception as e:
-        return AgentResponse(
-            code=1,
-            msg=f"Agent执行出错: {e}",
-            answer=None,
-            tools_used=[],
-            elapsed=0,
-        )
+        return APIResponse(code=1, msg=f"Agent执行出错: {e}")

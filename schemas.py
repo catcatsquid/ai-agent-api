@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Any
 
 from pydantic import BaseModel
 
@@ -9,15 +9,8 @@ class ChatRequest(BaseModel):
     system: Optional[str] = None
 
 
-class ChatResponse(BaseModel):
+class APIResponse(BaseModel):
+    """统一返回体：所有接口都用这个。data 字段放业务数据。"""
     code: int = 0
     msg: str = "ok"
-    reply: Optional[str] = None
-
-#msg=状态描述
-def success(data=None, msg="ok"):
-    return {"code": 0, "msg": msg, "data": data}
-
-#code=状态码，0表示成功，其他数字是错误码
-def error(msg="出错", code=1):
-    return {"code": code, "msg": msg, "data": None}
+    data: Optional[Any] = None

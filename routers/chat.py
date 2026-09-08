@@ -2,16 +2,16 @@ import json
 import requests
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
-from config import API_KEY, API_URL
-from schemas import ChatRequest, ChatResponse, success, error
+from config import ZHIPU_API_KEY, ZHIPU_CHAT_URL
+from schemas import ChatRequest, APIResponse
 
 router = APIRouter()
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat")
 def chat(req: ChatRequest):
     headers = {
-        "Authorization": f"Bearer {API_KEY}",
+        "Authorization": f"Bearer {ZHIPU_API_KEY}",
         "Content-Type": "application/json",
     }
     messages = []
@@ -21,26 +21,24 @@ def chat(req: ChatRequest):
 
     payload = {"model": req.model, "messages": messages}
     try:
-        resp = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+        resp = requests.post(ZHIPU_CHAT_URL, headers=headers, json=payload, timeout=30)
         resp.raise_for_status()
         data = resp.json()
         reply = data["choices"][0]["message"]["content"]
-        return ChatResponse(code=0, msg="ok", reply=reply)
+        return APIResponse(data={"reply": reply})
     except requests.exceptions.Timeout:
-        return ChatResponse(code=1, msg="请求超时", reply=None)
+        return APIResponse(code=1, msg="请求超时")
     except requests.exceptions.HTTPError:
-        return ChatResponse(code=1, msg="API调用失败", reply=None)
+        return APIResponse(code=1, msg="API调用失败")
     except Exception:
-        return ChatResponse(code=1, msg="服务器内部错误", reply=None)
+        return APIResponse(code=1, msg="服务器内部错误")
 
 
 @router.post("/chat/stream")
-#async:流式接口要用异步.
 async def chat_stream(req: ChatRequest):
-    #文档类字符串,鼠标悬浮函数上会弹出提示说明;会生成字符串对象,函数开头会保存为文档
     """流式聊天：AI回复一个字一个字地推给前端"""
     headers = {
-        "Authorization": f"Bearer {API_KEY}",
+        "Authorization": f"Bearer {ZHIPU_API_KEY}",
         "Content-Type": "application/json",
     }
     messages = []
@@ -51,12 +49,12 @@ async def chat_stream(req: ChatRequest):
     payload = {
         "model": req.model,
         "messages": messages,
-        "stream": True,  # 开启流式输出
+        "stream": True,
     }
-    #定义生成器函数
+
     def generate():
         try:
-            resp = requests.post(API_URL, headers=headers, json=payload, stream=True, timeout=60)
+            resp = requests.post(ZHIPU_CHAT_URL, headers=headers, json=payload, stream=True, timeout=60)
             resp.raise_for_status()
         except requests.exceptions.Timeout:
             yield "请求超时，请稍后重试"
@@ -69,19 +67,15 @@ async def chat_stream(req: ChatRequest):
             return
 
         for line in resp.iter_lines():
-            #跳过空行
             if not line:
                 continue
             line_str = line.decode("utf-8")
-            # SSE格式: data: {...}
             if line_str.startswith("data: "):
-                data_str = line_str[6:]  # 去掉 "data: " 前缀
+                data_str = line_str[6:]
                 if data_str == "[DONE]":
-                    break  # 流结束
+                    break
                 try:
-                    #从嵌套字典中取出增量数据
                     chunk = json.loads(data_str)
-                    #取出内容,可能是一个字,也可能为空
                     delta = chunk["choices"][0]["delta"]
                     content = delta.get("content", "")
                     if content:
