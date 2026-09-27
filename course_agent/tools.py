@@ -14,6 +14,7 @@ from langchain_core.tools import tool
 from rag_tool import search_knowledge as _search_knowledge
 from rag_tool import get_knowledge_base
 from config import ZHIPU_API_KEY, ZHIPU_CHAT_URL
+from course_agent.errors import retry_on_rate_limit, APIError
 
 
 @tool
@@ -28,12 +29,11 @@ def search_knowledge(query: str) -> str:
     return _search_knowledge(query, top_k=3)
 
 
-@tool
-def web_search(query: str) -> str:
-    """联网搜索获取互联网上的最新信息。当知识库中没有找到相关内容，或问题涉及课程之外的知识时使用。
+@retry_on_rate_limit(max_retries=3, base_wait=2.0)
+def _call_zhipu_web_search(query: str) -> dict:
+    """调用智谱 API 做联网搜索（带重试）
 
-    Args:
-        query: 搜索关键词，如 "2024年最新TCP拥塞控制算法" 或 "Linux内核调度器CFS原理"
+    429 限流时自动指数退避重试，最多 3 次。
     """
     headers = {
         "Authorization": f"Bearer {ZHIPU_API_KEY}",
@@ -45,7 +45,26 @@ def web_search(query: str) -> str:
         "tools": [{"type": "web_search", "web_search": {"enable": True}}],
     }
     resp = requests.post(ZHIPU_CHAT_URL, headers=headers, json=payload, timeout=60)
-    data = resp.json()
+
+    # 429 抛异常，触发重试装饰器
+    if resp.status_code == 429:
+        raise APIError("Rate limited (429)")
+
+    return resp.json()
+
+
+@tool
+def web_search(query: str) -> str:
+    """联网搜索获取互联网上的最新信息。当知识库中没有找到相关内容，或问题涉及课程之外的知识时使用。
+
+    Args:
+        query: 搜索关键词，如 "2024年最新TCP拥塞控制算法" 或 "Linux内核调度器CFS原理"
+    """
+    try:
+        data = _call_zhipu_web_search(query)
+    except Exception as e:
+        return f"联网搜索失败: {type(e).__name__}: {str(e)[:100]}"
+
     if "choices" in data:
         content = data["choices"][0]["message"].get("content", "")
         refs = data["choices"][0]["message"].get("web_search", [])

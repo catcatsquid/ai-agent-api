@@ -17,6 +17,13 @@ debug.log
 extracted/
 vector_store_test/
 vector_store/
+data/
+
+# 调试脚本
+debug/
+
+# TRAE 内部文件
+.trae-html-share-packages/
 
 # 测试结果（JSON）
 debug/003-exam-qa-results*.json

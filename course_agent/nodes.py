@@ -23,6 +23,7 @@ from course_agent.state import AgentState
 from course_agent.llm import llm
 from course_agent.tools import tools, tools_by_name
 from course_agent.errors import safe_llm_invoke, safe_tool_invoke, LLMError
+from course_agent.memory import trim_messages, summarize_old_messages
 
 llm_with_tools = llm.bind_tools(tools)
 
@@ -249,9 +250,10 @@ def web_search_fallback_node(state: AgentState) -> dict:
 # ============================================================
 
 def synthesizer_node(state: AgentState) -> dict:
-    """综合器节点：基于检索结果生成最终回答
+    """综合器节点：基于检索结果 + 历史对话生成最终回答
 
-    多轮对话：取最新的 HumanMessage 作为当前问题，并提供历史上下文
+    多轮对话：把历史对话上下文传给 LLM，让它记得之前聊了什么。
+    记忆管理：对话太长时自动裁剪（滑动窗口 + 摘要压缩），防止爆 token。
     """
     from langchain_core.messages import HumanMessage as HM
     human_msgs = [m for m in state["messages"] if isinstance(m, HM)]
@@ -264,17 +266,33 @@ def synthesizer_node(state: AgentState) -> dict:
         if isinstance(msg, ToolMessage):
             tool_results.append(msg.content)
 
+    # 提取历史对话（排除系统消息和本轮工具结果）
+    history_msgs = [
+        m for m in state["messages"]
+        if not isinstance(m, SystemMessage)
+        and not isinstance(m, ToolMessage)
+    ]
+
+    # 历史对话裁剪（最多保留最近 10 条，约 5 轮）
+    if len(history_msgs) > 10:
+        history_msgs = trim_messages(history_msgs, max_messages=10, keep_system=False)
+
     if tool_results:
         context = "\n\n---\n\n".join(tool_results[-3:])  # 最多取最近3条工具结果
         messages = [
             SystemMessage(content=SYNTHESIZER_PROMPT),
-            HumanMessage(content=f"用户问题: {user_content}\n\n检索结果:\n{context}"),
         ]
+        # 加上历史对话（让 LLM 有上下文）
+        if len(history_msgs) > 1:  # 不止一条用户消息才加历史
+            messages.extend(history_msgs[:-1])  # 除了最后一条（就是当前问题）
+        messages.append(HumanMessage(content=f"用户问题: {user_content}\n\n检索结果:\n{context}"))
     else:
         messages = [
             SystemMessage(content=CHITCHAT_PROMPT),
-            HumanMessage(content=user_content),
         ]
+        if len(history_msgs) > 1:
+            messages.extend(history_msgs[:-1])
+        messages.append(HumanMessage(content=user_content))
 
     try:
         response = safe_llm_invoke(llm, messages, context="synthesizer")
@@ -291,7 +309,10 @@ def synthesizer_node(state: AgentState) -> dict:
 
 def llm_node(state: AgentState) -> dict:
     """ReAct LLM 节点"""
-    messages = [SystemMessage(content=REACT_PROMPT)] + state["messages"]
+    # 对话太长时裁剪一下，防止爆 token
+    messages = [SystemMessage(content=REACT_PROMPT)] + trim_messages(
+        state["messages"], max_messages=15, keep_system=False
+    )
     response = llm_with_tools.invoke(messages)
     return {"messages": [response]}
 

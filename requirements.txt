@@ -14,3 +14,7 @@ Pillow>=10.0.0
 chromadb>=0.5.0
 python-multipart>=0.0.7
 numpy>=1.24.0
+
+# 开发依赖（测试、压测）
+pytest>=8.0.0
+locust>=2.30.0

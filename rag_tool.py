@@ -3,10 +3,12 @@ import re
 import math
 import json
 import time
+import hashlib
 import requests
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import chromadb
 
@@ -142,6 +144,26 @@ def _load_text(path: str) -> str:
         return f.read()
 
 
+def _extract_chapter(file_path: Path, base_dir: Path) -> str:
+    """从文件路径提取章节信息
+
+    规则:
+      - PPT 文件名通常以 "02-1-进程与线程之进程.pdf" 格式命名
+        前缀数字是章号，后面是章节名
+      - 笔记文件名通常包含章节关键词
+      - 无法提取时返回空字符串
+    """
+    name = file_path.stem
+    # 匹配 "02-1-进程与线程之进程" 或 "03-OS调度" 格式
+    m = re.match(r"^\d+[-_]?\d*[-_](.+)", name)
+    if m:
+        chapter = m.group(1)
+        # 去掉"之"后面的子节（如"进程与线程之进程"→"进程与线程"）
+        chapter = re.sub(r"之.+$", "", chapter)
+        return chapter
+    return ""
+
+
 def _classify_doc(file_path: Path, base_dir: Path) -> str:
     """根据文件路径判断文档类型
 
@@ -191,8 +213,16 @@ def load_documents_from_dir(dir_path: str, skip_textbook: bool = False) -> list[
 
         try:
             text = load_document(str(f))
-            results.append({"source": f.name, "text": text, "doc_type": doc_type})
-            logger.info("加载 [%s] %s (%d 字符)", doc_type, f.name, len(text))
+            chapter = _extract_chapter(f, p)
+            results.append({
+                "source": f.name,
+                "text": text,
+                "doc_type": doc_type,
+                "chapter": chapter,
+                "file_path": str(f),
+            })
+            logger.info("加载 [%s] %s (%d 字符, 章节: %s)",
+                        doc_type, f.name, len(text), chapter or "未知")
         except Exception as e:
             logger.warning("跳过文件 %s: %s", f.name, e)
     return results
@@ -387,6 +417,7 @@ class KnowledgeBase:
             chunks = chunk_text(text, chunk_config)
             source = doc["source"]
             doc_type = doc.get("doc_type", "notes")
+            chapter = doc.get("chapter", "")
 
             try:
                 embeddings = get_embeddings_batch(chunks)
@@ -397,7 +428,13 @@ class KnowledgeBase:
 
             ids = [f"{source}_{i}" for i in range(len(chunks))]
             metas = [
-                {"source": source, "doc_type": doc_type, "chunk_index": i, "char_count": len(c)}
+                {
+                    "source": source,
+                    "doc_type": doc_type,
+                    "chapter": chapter,
+                    "chunk_index": i,
+                    "char_count": len(c),
+                }
                 for i, c in enumerate(chunks)
             ]
             collection.upsert(
@@ -405,13 +442,19 @@ class KnowledgeBase:
             )
             success_count += len(chunks)
             total_chunks += len(chunks)
-            logger.debug("%s: %d 块", source, len(chunks))
+            logger.debug("%s: %d 块 (章节: %s)", source, len(chunks), chapter or "未知")
 
         logger.info("入库完成: %d/%d 个分块，来源: %d 个文件", success_count, total_chunks, len(docs))
         logger.info("存储路径: %s", self.persist_dir)
         return success_count
 
-    def search(self, query: str, top_k: int = 3, doc_types: list[str] = None) -> list[dict]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 3,
+        doc_types: list[str] = None,
+        chapter: str = None,
+    ) -> list[dict]:
         """检索知识库
 
         自己调 get_embedding() 把 query 向量化，然后用 query_embeddings 查询，
@@ -422,8 +465,9 @@ class KnowledgeBase:
             top_k: 返回的文档数
             doc_types: 限定搜索的文档类型列表（如 ["ppt", "notes"]），
                        None 表示不限制
+            chapter: 限定章节（如 "进程与线程"），None 表示不限制
         Returns:
-            [{"text": "...", "source": "...", "score": 0.85, "chunk_index": 3}, ...]
+            [{"text": "...", "source": "...", "score": 0.85, "chunk_index": 3, "chapter": "..."}, ...]
         """
         collection = self._get_collection()
         if collection.count() == 0:
@@ -432,8 +476,17 @@ class KnowledgeBase:
         query_emb = get_embedding(query)
 
         where_filter = None
-        if doc_types:
+        if doc_types and chapter:
+            where_filter = {
+                "$and": [
+                    {"doc_type": {"$in": doc_types}},
+                    {"chapter": chapter},
+                ]
+            }
+        elif doc_types:
             where_filter = {"doc_type": {"$in": doc_types}}
+        elif chapter:
+            where_filter = {"chapter": chapter}
 
         results = collection.query(
             query_embeddings=[query_emb],
@@ -450,22 +503,273 @@ class KnowledgeBase:
                 "text": doc,
                 "source": meta.get("source", "unknown"),
                 "doc_type": meta.get("doc_type", "notes"),
+                "chapter": meta.get("chapter", ""),
                 "score": score,
                 "chunk_index": meta.get("chunk_index", 0),
             })
         return formatted
 
     def count(self) -> int:
-        """返回知识库中的文档数"""
+        """返回知识库中的分块总数"""
         collection = self._get_collection()
         return collection.count()
 
+    def list_documents(self) -> list[dict]:
+        """列出知识库中所有文档（按 source 聚合）
+
+        Returns:
+            [{"source": "02-1-进程与线程之进程.pdf", "doc_type": "ppt",
+              "chapter": "进程与线程", "chunk_count": 15}, ...]
+        """
+        collection = self._get_collection()
+        if collection.count() == 0:
+            return []
+
+        all_data = collection.get()
+        docs_map = {}
+        for i, meta in enumerate(all_data["metadatas"]):
+            source = meta.get("source", "unknown")
+            if source not in docs_map:
+                docs_map[source] = {
+                    "source": source,
+                    "doc_type": meta.get("doc_type", "notes"),
+                    "chapter": meta.get("chapter", ""),
+                    "chunk_count": 0,
+                }
+            docs_map[source]["chunk_count"] += 1
+
+        return sorted(docs_map.values(), key=lambda x: x["source"])
+
+    def get_stats(self) -> dict:
+        """返回知识库统计信息"""
+        docs = self.list_documents()
+        total_chunks = sum(d["chunk_count"] for d in docs)
+
+        by_type = {}
+        by_chapter = {}
+        for d in docs:
+            t = d["doc_type"]
+            by_type[t] = by_type.get(t, 0) + d["chunk_count"]
+            ch = d["chapter"] or "未分类"
+            by_chapter[ch] = by_chapter.get(ch, 0) + d["chunk_count"]
+
+        return {
+            "total_documents": len(docs),
+            "total_chunks": total_chunks,
+            "by_type": by_type,
+            "by_chapter": by_chapter,
+            "documents": docs,
+        }
+
+    def add_document(
+        self,
+        file_path: str,
+        doc_type: str = None,
+        chapter: str = None,
+        chunk_config: ChunkConfig = None,
+    ) -> int:
+        """增量导入单个文件，不重建整个知识库
+
+        Args:
+            file_path: 文件路径
+            doc_type: 文档类型（None 则自动分类）
+            chapter: 章节信息（None 则从文件名提取）
+            chunk_config: 分块配置
+        Returns:
+            入库的分块数
+        """
+        if chunk_config is None:
+            chunk_config = ChunkConfig()
+
+        p = Path(file_path)
+        if not p.exists():
+            logger.warning("文件不存在: %s", file_path)
+            return 0
+
+        # 自动分类
+        if doc_type is None:
+            base_dir = Path("data")
+            doc_type = _classify_doc(p, base_dir)
+            if doc_type is None:
+                logger.info("跳过往年题: %s", p.name)
+                return 0
+
+        # 自动提取章节
+        if chapter is None:
+            chapter = _extract_chapter(p, Path("data"))
+
+        # 计算文件 hash
+        file_hash = hashlib.md5(p.read_bytes()).hexdigest()
+        processed = self._load_processed()
+
+        # 已处理且 hash 没变 → 跳过
+        record = processed.get(str(p))
+        if record and record.get("file_hash") == file_hash:
+            logger.info("文件未变化，跳过: %s", p.name)
+            return 0
+
+        # 先删旧的（如果是更新）
+        if record:
+            self.remove_document(p.name)
+
+        # 加载 + 清洗 + 分块
+        text = clean_text(load_document(str(p)))
+        chunks = chunk_text(text, chunk_config)
+
+        if not chunks:
+            logger.warning("文件内容为空，跳过: %s", p.name)
+            return 0
+
+        # embedding + 入库
+        try:
+            embeddings = get_embeddings_batch(chunks)
+        except Exception as e:
+            logger.warning("embedding 失败 %s: %s", p.name, e)
+            return 0
+
+        source = p.name
+        ids = [f"{source}_{i}" for i in range(len(chunks))]
+        metas = [
+            {
+                "source": source,
+                "doc_type": doc_type,
+                "chapter": chapter,
+                "chunk_index": i,
+                "char_count": len(c),
+            }
+            for i, c in enumerate(chunks)
+        ]
+
+        collection = self._get_collection()
+        collection.upsert(ids=ids, documents=chunks, metadatas=metas, embeddings=embeddings)
+
+        # 更新记录
+        processed[str(p)] = {
+            "source": source,
+            "doc_type": doc_type,
+            "chapter": chapter,
+            "chunk_count": len(chunks),
+            "file_hash": file_hash,
+            "added_at": datetime.now().isoformat(),
+        }
+        self._save_processed(processed)
+
+        logger.info("增量导入完成: %s (%d 块, 章节: %s)", source, len(chunks), chapter or "未知")
+        return len(chunks)
+
+    def remove_document(self, source: str) -> bool:
+        """从知识库删除某文档的所有分块
+
+        Args:
+            source: 文件名（如 "02-1-进程与线程之进程.pdf"）
+        Returns:
+            是否删除成功
+        """
+        collection = self._get_collection()
+
+        # 先查是否存在
+        existing = collection.get(where={"source": source})
+        if not existing["ids"]:
+            logger.info("文档不在知识库中: %s", source)
+            return False
+
+        collection.delete(where={"source": source})
+
+        # 更新记录
+        processed = self._load_processed()
+        to_remove = [k for k, v in processed.items() if v.get("source") == source]
+        for k in to_remove:
+            del processed[k]
+        if to_remove:
+            self._save_processed(processed)
+
+        logger.info("已删除文档: %s (%d 块)", source, len(existing["ids"]))
+        return True
+
+    def add_directory(
+        self,
+        dir_path: str,
+        chunk_config: ChunkConfig = None,
+        skip_textbook: bool = False,
+    ) -> dict:
+        """增量导入目录下的所有新文件
+
+        扫描目录，只处理新增或修改过的文件。
+
+        Returns:
+            {"added": 3, "skipped": 5, "failed": 0, "details": [...]}
+        """
+        if chunk_config is None:
+            chunk_config = ChunkConfig()
+
+        p = Path(dir_path)
+        if not p.exists():
+            logger.warning("目录不存在: %s", dir_path)
+            return {"added": 0, "skipped": 0, "failed": 0, "details": []}
+
+        result = {"added": 0, "skipped": 0, "failed": 0, "details": []}
+
+        for f in sorted(p.rglob("*")):
+            if not f.is_file():
+                continue
+            if f.suffix.lower() not in (".pdf", ".docx", ".md", ".txt", ".markdown"):
+                continue
+
+            doc_type = _classify_doc(f, p)
+            if doc_type is None:
+                continue
+            if skip_textbook and doc_type == "textbook":
+                continue
+
+            try:
+                added = self.add_document(str(f), doc_type=doc_type, chunk_config=chunk_config)
+                if added > 0:
+                    result["added"] += 1
+                    result["details"].append({"file": f.name, "status": "added", "chunks": added})
+                else:
+                    result["skipped"] += 1
+                    result["details"].append({"file": f.name, "status": "skipped"})
+            except Exception as e:
+                result["failed"] += 1
+                result["details"].append({"file": f.name, "status": "failed", "error": str(e)[:100]})
+                logger.warning("导入失败 %s: %s", f.name, e)
+
+        logger.info("增量导入目录完成: 新增 %d, 跳过 %d, 失败 %d",
+                    result["added"], result["skipped"], result["failed"])
+        return result
+
+    def _processed_file_path(self) -> Path:
+        """已处理文件清单的路径"""
+        return Path(self.persist_dir) / "processed_files.json"
+
+    def _load_processed(self) -> dict:
+        """加载已处理文件清单"""
+        p = self._processed_file_path()
+        if p.exists():
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+
+    def _save_processed(self, data: dict):
+        """保存已处理文件清单"""
+        p = self._processed_file_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
     def clear(self):
         """清空知识库"""
-        if self._client is None: #保险措施,确保客户端已初始化
+        if self._client is None:
             self._get_collection()
-        self._client.delete_collection(self.collection_name) #删掉整个集合
-        self._collection = None #本地缓存置空
+        self._client.delete_collection(self.collection_name)
+        self._collection = None
+        # 清空已处理文件清单
+        p = self._processed_file_path()
+        if p.exists():
+            p.unlink()
         logger.info("已清空 collection: %s", self.collection_name)
 
 

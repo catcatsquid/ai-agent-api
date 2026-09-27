@@ -12,6 +12,7 @@
 
 import time
 import json
+import uuid
 from collections import defaultdict
 from threading import Lock
 
@@ -21,7 +22,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 
 from config import RATE_LIMIT_PER_MINUTE
-from course_agent.logger import logger
+from course_agent.logger import logger, set_trace_id, clear_trace_id
 
 
 # ============================================================
@@ -42,46 +43,55 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next):
-        # 记录开始时间
-        start_time = time.time()
-        client_ip = request.client.host if request.client else "unknown"
-        method = request.method
-        path = request.url.path
-
-        # 跳过健康检查的日志（太频繁了）
-        skip_log = path in ["/", "/favicon.ico", "/docs", "/openapi.json"]
+        # 生成 trace_id（取前8位，够短也够唯一）
+        trace_id = uuid.uuid4().hex[:8]
+        set_trace_id(trace_id)
 
         try:
-            # 交给下一层（路由函数）处理
-            response = await call_next(request)
-        except Exception as e:
-            # 异常会被全局异常处理器捕获，这里只记录
-            duration = (time.time() - start_time) * 1000
+            # 记录开始时间
+            start_time = time.time()
+            client_ip = request.client.host if request.client else "unknown"
+            method = request.method
+            path = request.url.path
+
+            # 跳过健康检查的日志（太频繁了）
+            skip_log = path in ["/", "/favicon.ico", "/docs", "/openapi.json"]
+
+            try:
+                # 交给下一层（路由函数）处理
+                response = await call_next(request)
+            except Exception as e:
+                # 异常会被全局异常处理器捕获，这里只记录
+                duration = (time.time() - start_time) * 1000
+                if not skip_log:
+                    logger.error("请求异常 | %s | %s %s | %.0fms | %s",
+                                 client_ip, method, path, duration,
+                                 type(e).__name__)
+                raise
+
+            # 计算耗时
+            duration_ms = (time.time() - start_time) * 1000
+
+            # 打日志
             if not skip_log:
-                logger.error("请求异常 | %s | %s %s | %.0fms | %s",
-                             client_ip, method, path, duration,
-                             type(e).__name__)
-            raise
+                status_code = response.status_code
+                if status_code >= 500:
+                    logger.error("请求完成 | %s | %s %s | %d | %.0fms",
+                                 client_ip, method, path, status_code, duration_ms)
+                elif status_code >= 400:
+                    logger.warning("请求完成 | %s | %s %s | %d | %.0fms",
+                                   client_ip, method, path, status_code, duration_ms)
+                else:
+                    logger.info("请求完成 | %s | %s %s | %d | %.0fms",
+                                client_ip, method, path, status_code, duration_ms)
 
-        # 计算耗时
-        duration_ms = (time.time() - start_time) * 1000
-
-        # 打日志
-        if not skip_log:
-            status_code = response.status_code
-            if status_code >= 500:
-                logger.error("请求完成 | %s | %s %s | %d | %.0fms",
-                             client_ip, method, path, status_code, duration_ms)
-            elif status_code >= 400:
-                logger.warning("请求完成 | %s | %s %s | %d | %.0fms",
-                               client_ip, method, path, status_code, duration_ms)
-            else:
-                logger.info("请求完成 | %s | %s %s | %d | %.0fms",
-                            client_ip, method, path, status_code, duration_ms)
-
-        # 给响应加一个 X-Response-Time 头（方便调试）
-        response.headers["X-Response-Time"] = f"{duration_ms:.0f}"
-        return response
+            # 给响应加自定义头
+            response.headers["X-Response-Time"] = f"{duration_ms:.0f}"
+            response.headers["X-Trace-Id"] = trace_id
+            return response
+        finally:
+            # 请求结束，清理 trace_id
+            clear_trace_id()
 
 
 # ============================================================

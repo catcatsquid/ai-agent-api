@@ -141,9 +141,9 @@ class QAUser(HttpUser):
         with self.client.post(
             "/qa/ask",
             json={
-                "question": q,
+                "query": q,
                 "thread_id": f"loadtest-thread",
-                "use_plan": False,
+                "mode": "plan",
             },
             headers=self.headers,
             name="问答接口",

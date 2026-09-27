@@ -74,3 +74,19 @@ JWT_EXPIRE_MINUTES = int(_optional("JWT_EXPIRE_MINUTES", "60"))
 
 # 每分钟每个 IP 最多请求数（0 表示不限制）
 RATE_LIMIT_PER_MINUTE = int(_optional("RATE_LIMIT_PER_MINUTE", "0"))
+
+# ============================================================
+# 对话记忆管理
+# ============================================================
+
+# 最大消息条数（滑动窗口：超过就裁剪老消息）
+MAX_MESSAGES = int(_optional("MAX_MESSAGES", "20"))
+
+# 启用对话摘要压缩（老消息太多时用 LLM 总结成摘要）
+ENABLE_SUMMARY = _optional("ENABLE_SUMMARY", "true").lower() == "true"
+
+# 超过多少条消息后触发摘要（需要 ENABLE_SUMMARY=true）
+SUMMARY_THRESHOLD = int(_optional("SUMMARY_THRESHOLD", "30"))
+
+# 摘要后保留最近几轮对话（不被摘要掉）
+SUMMARY_KEEP_LAST_N = int(_optional("SUMMARY_KEEP_LAST_N", "10"))

@@ -3,6 +3,7 @@
 Week 5 升级：Plan-and-Execute + 多轮对话持久化
 Week 6 升级：SSE 流式接口
 Week 9 升级：API 认证 + 中间件
+Week 10 升级：知识库管理接口（增量导入 + 检索测试）
 
 启动:
     python -m uvicorn course_agent.server:app --reload --port 8003
@@ -16,7 +17,7 @@ Week 9 升级：API 认证 + 中间件
 
 import json
 import uuid
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, UploadFile, File, Query
 from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage, ToolMessage, AIMessage
@@ -24,6 +25,7 @@ from course_agent.graph import graph, react_graph
 from course_agent.auth import any_auth, create_jwt, api_key_auth
 from course_agent.logger import logger
 from course_agent.middleware import setup_middlewares
+from rag_tool import get_knowledge_base, KnowledgeBase, ChunkConfig
 
 app = FastAPI(title="Course QA Agent API", version="3.0")
 
@@ -295,3 +297,82 @@ async def chat_stream_frontend(req: QueryRequest, auth: dict = Depends(any_auth)
             "Connection": "keep-alive",
         },
     )
+
+
+# ============================================================
+# 知识库管理接口（Week 10 新增）
+# ============================================================
+
+class SearchTestRequest(BaseModel):
+    query: str
+    top_k: int = 5
+    doc_types: list[str] = None
+    chapter: str = None
+
+
+@app.get("/kb/stats")
+def kb_stats(auth: dict = Depends(any_auth)):
+    """知识库统计信息"""
+    kb = get_knowledge_base()
+    return {"code": 0, "msg": "ok", "data": kb.get_stats()}
+
+
+@app.get("/kb/documents")
+def kb_documents(auth: dict = Depends(any_auth)):
+    """知识库文档列表"""
+    kb = get_knowledge_base()
+    return {"code": 0, "msg": "ok", "data": kb.list_documents()}
+
+
+@app.post("/kb/search")
+def kb_search(req: SearchTestRequest, auth: dict = Depends(any_auth)):
+    """检索测试 — 返回 chunk + score，方便调参"""
+    kb = get_knowledge_base()
+    results = kb.search(
+        req.query,
+        top_k=req.top_k,
+        doc_types=req.doc_types,
+        chapter=req.chapter,
+    )
+    return {"code": 0, "msg": "ok", "query": req.query, "count": len(results), "data": results}
+
+
+@app.post("/kb/add")
+def kb_add_document(
+    file_path: str = Query(..., description="文件路径（相对项目根目录）"),
+    doc_type: str = Query(None, description="文档类型：ppt/notes/textbook，留空自动判断"),
+    chapter: str = Query(None, description="章节，留空自动从文件名提取"),
+    auth: dict = Depends(any_auth),
+):
+    """增量导入单个文件"""
+    kb = get_knowledge_base()
+    try:
+        added = kb.add_document(file_path, doc_type=doc_type, chapter=chapter)
+        return {"code": 0, "msg": "ok", "added_chunks": added}
+    except Exception as e:
+        return {"code": 500, "msg": f"导入失败: {str(e)[:200]}"}
+
+
+@app.post("/kb/add-directory")
+def kb_add_directory(
+    dir_path: str = Query(..., description="目录路径"),
+    skip_textbook: bool = Query(False, description="是否跳过课本"),
+    auth: dict = Depends(any_auth),
+):
+    """增量导入目录下所有新文件"""
+    kb = get_knowledge_base()
+    try:
+        result = kb.add_directory(dir_path, skip_textbook=skip_textbook)
+        return {"code": 0, "msg": "ok", "data": result}
+    except Exception as e:
+        return {"code": 500, "msg": f"导入失败: {str(e)[:200]}"}
+
+
+@app.delete("/kb/documents/{source}")
+def kb_remove_document(source: str, auth: dict = Depends(any_auth)):
+    """从知识库删除某文档"""
+    kb = get_knowledge_base()
+    deleted = kb.remove_document(source)
+    if deleted:
+        return {"code": 0, "msg": f"已删除: {source}"}
+    return {"code": 404, "msg": f"文档不在知识库中: {source}"}
