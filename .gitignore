@@ -8,15 +8,24 @@ __pycache__/
 *.pyc
 *.pyo
 
-# 日志与数据
+# 日志与临时数据
 *.log
-*.json
-*.db
 *.sqlite
+debug.log
+
+# 运行时产物
+extracted/
+vector_store_test/
+vector_store/
+
+# 测试结果（JSON）
+debug/003-exam-qa-results*.json
+debug/005-qa-benchmark.json
 
 # IDE
 .vscode/
 .idea/
+.claude/
 
 # 练习脚本（不传 GitHub）
 chat.py

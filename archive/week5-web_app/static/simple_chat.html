@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agent 简单聊天演示</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 800px;
+            height: 80vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            color: white;
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 24px;
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(255,255,255,0.2);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #10b981;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .chat-area {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .message {
+            display: flex;
+            gap: 10px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .user-message {
+            justify-content: flex-end;
+        }
+
+        .message-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .user-avatar {
+            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
+        .bot-avatar {
+            background: #f3f4f6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .message-bubble {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            position: relative;
+        }
+
+        .user-message .message-bubble {
+            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .bot-message .message-bubble {
+            background: #f3f4f6;
+            color: #111827;
+            border-bottom-left-radius: 4px;
+        }
+
+        .message-content {
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .message-time {
+            font-size: 11px;
+            opacity: 0.7;
+            margin-top: 4px;
+        }
+
+        .input-area {
+            padding: 20px;
+            border-top: 1px solid #e5e7eb;
+            background: #f9fafb;
+        }
+
+        .input-form {
+            display: flex;
+            gap: 10px;
+        }
+
+        .input-field {
+            flex: 1;
+            padding: 12px 20px;
+            border: 2px solid #e5e7eb;
+            border-radius: 25px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        .input-field:focus {
+            border-color: #4f46e5;
+        }
+
+        .send-button {
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: transform 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .send-button:hover {
+            transform: scale(1.05);
+        }
+
+        .send-button:active {
+            transform: scale(0.95);
+        }
+
+        .typing-indicator {
+            display: flex;
+            gap: 4px;
+            padding: 12px 16px;
+            background: #f3f4f6;
+            border-radius: 18px;
+            width: fit-content;
+        }
+
+        .typing-dot {
+            width: 8px;
+            height: 8px;
+            background: #9ca3af;
+            border-radius: 50%;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing-dot:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-dot:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-10px); }
+        }
+
+        .welcome-screen {
+            text-align: center;
+            padding: 40px;
+        }
+
+        .welcome-icon {
+            font-size: 64px;
+            color: #4f46e5;
+            margin-bottom: 20px;
+        }
+
+        .welcome-title {
+            font-size: 24px;
+            color: #111827;
+            margin-bottom: 10px;
+        }
+
+        .welcome-subtitle {
+            font-size: 16px;
+            color: #6b7280;
+            margin-bottom: 30px;
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .feature-card {
+            background: #f3f4f6;
+            padding: 15px;
+            border-radius: 12px;
+            text-align: left;
+        }
+
+        .feature-icon {
+            font-size: 24px;
+            color: #4f46e5;
+            margin-bottom: 8px;
+        }
+
+        .feature-title {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .feature-desc {
+            font-size: 12px;
+            color: #6b7280;
+        }
+
+        .quick-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .quick-button {
+            padding: 10px 20px;
+            background: #4f46e5;
+            color: white;
+            border: none;
+            border-radius: 20px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .quick-button:hover {
+            background: #4338ca;
+            transform: translateY(-2px);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>
+                <i class="fas fa-robot"></i>
+                AI Agent 智能助手
+            </h1>
+            <div class="status">
+                <div class="status-dot"></div>
+                <span>在线</span>
+            </div>
+        </div>
+
+        <div class="chat-area" id="chatArea">
+            <div class="welcome-screen">
+                <div class="welcome-icon">🤖</div>
+                <h2 class="welcome-title">AI Agent 智能助手</h2>
+                <p class="welcome-subtitle">基于 Plan-and-Execute 架构的专业课程问答系统</p>
+
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <div class="feature-icon">🧠</div>
+                        <div class="feature-title">智能规划</div>
+                        <div class="feature-desc">先思考后执行</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">🔧</div>
+                        <div class="feature-title">多工具调用</div>
+                        <div class="feature-desc">知识库+搜索</div>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">💬</div>
+                        <div class="feature-title">多轮对话</div>
+                        <div class="feature-desc">上下文理解</div>
+                    </div>
+                </div>
+
+                <div class="quick-buttons">
+                    <button class="quick-button" onclick="sendQuestion('什么是TCP三次握手？')">TCP三次握手</button>
+                    <button class="quick-button" onclick="sendQuestion('进程和线程的区别')">进程 vs 线程</button>
+                    <button class="quick-button" onclick="sendQuestion('死锁的四个条件')">死锁条件</button>
+                    <button class="quick-button" onclick="sendQuestion('虚拟内存原理')">虚拟内存</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="input-area">
+            <form class="input-form" onsubmit="sendMessage(event)">
+                <input
+                    type="text"
+                    class="input-field"
+                    id="messageInput"
+                    placeholder="输入你的问题..."
+                    autocomplete="off"
+                >
+                <button type="submit" class="send-button">
+                    <i class="fas fa-paper-plane"></i>
+                    发送
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        let messageId = 0;
+
+        // 发送消息
+        async function sendMessage(event) {
+            event.preventDefault();
+
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+
+            if (!message) return;
+
+            // 移除欢迎界面
+            const welcomeScreen = document.querySelector('.welcome-screen');
+            if (welcomeScreen) {
+                welcomeScreen.remove();
+            }
+
+            // 添加用户消息
+            addMessage(message, 'user');
+            input.value = '';
+
+            // 显示输入中
+            showTypingIndicator();
+
+            // 调用API获取回复
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        query: message,
+                        thread_id: Date.now(),
+                        max_steps: 8
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('网络请求失败');
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let fullResponse = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(6);
+                            if (data === '[DONE]') {
+                                removeTypingIndicator();
+                                if (fullResponse) {
+                                    addMessage(fullResponse, 'bot');
+                                }
+                                return;
+                            }
+
+                            try {
+                                const parsed = JSON.parse(data);
+                                if (parsed.type === 'content') {
+                                    fullResponse += parsed.content;
+                                    removeTypingIndicator();
+                                    addMessage(fullResponse, 'bot');
+                                }
+                            } catch (e) {
+                                // 忽略解析错误
+                            }
+                        }
+                    }
+                }
+
+            } catch (error) {
+                removeTypingIndicator();
+                addMessage('抱歉，发生了错误：' + error.message, 'bot');
+            }
+        }
+
+        // 快速发送问题
+        function sendQuestion(question) {
+            document.getElementById('messageInput').value = question;
+            sendMessage({ preventDefault: () => {} });
+        }
+
+        // 添加消息
+        function addMessage(content, sender) {
+            messageId++;
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}-message`;
+            messageDiv.id = `message-${messageId}`;
+
+            const avatar = document.createElement('div');
+            avatar.className = `message-avatar ${sender}-avatar`;
+            avatar.innerHTML = sender === 'user' ? '我' : '🤖';
+
+            const bubble = document.createElement('div');
+            bubble.className = 'message-bubble';
+
+            const messageContent = document.createElement('div');
+            messageContent.className = 'message-content';
+            messageContent.textContent = content;
+
+            const time = document.createElement('div');
+            time.className = 'message-time';
+            time.textContent = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+
+            bubble.appendChild(messageContent);
+            bubble.appendChild(time);
+
+            messageDiv.appendChild(avatar);
+            if (sender === 'user') {
+                messageDiv.appendChild(bubble);
+            } else {
+                messageDiv.appendChild(bubble);
+                messageDiv.insertBefore(avatar, messageDiv.firstChild);
+            }
+
+            const chatArea = document.getElementById('chatArea');
+            chatArea.appendChild(messageDiv);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        // 显示输入中
+        function showTypingIndicator() {
+            const chatArea = document.getElementById('chatArea');
+            const typingDiv = document.createElement('div');
+            typingDiv.className = 'message bot-message';
+
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar bot-avatar';
+            avatar.textContent = '🤖';
+
+            const typing = document.createElement('div');
+            typing.className = 'typing-indicator';
+            typing.innerHTML = `
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+            `;
+
+            typingDiv.appendChild(avatar);
+            typingDiv.appendChild(typing);
+
+            chatArea.appendChild(typingDiv);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        // 隐藏输入中
+        function removeTypingIndicator() {
+            const typing = document.getElementById('typingIndicator');
+            if (typing) {
+                typing.remove();
+            }
+        }
+    </script>
+</body>
+</html>

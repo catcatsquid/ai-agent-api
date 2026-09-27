@@ -1,0 +1,20 @@
+services:
+  agent-api:
+    build: .
+    container_name: course-agent
+    ports:
+      - "8003:8003"
+    volumes:
+      - ./vector_store:/app/vector_store
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8003/')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
