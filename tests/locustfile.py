@@ -1,4 +1,4 @@
-"""Locust 压测脚本 - Week9-3
+"""Locust 压测脚本 - Week8
 
 使用方式:
   1. 先启动 API 服务: python -m uvicorn course_agent.server:app --port 8003
@@ -9,163 +9,185 @@
 
   无界面模式（直接跑完出报告）:
      python -m locust -f tests/locustfile.py --host http://localhost:8003 \
-       --users 50 --spawn-rate 10 --run-time 30s --headless --html report.html
+       --users 50 --spawn-rate 10 --run-time 30s --headless --html docs/benchmark_report.html
 
 注意:
-  - 问答接口会真实调用 LLM，压测会烧钱，谨慎使用！
-  - 默认只压测健康检查和登录接口（轻量级）
-  - 要压测问答接口请把 QAUser 的 weight 调高
+  - 问答接口会真实调用 LLM，压测会烧钱，QAUser 默认 weight=0
+  - 默认只压测轻量级 GET 接口
+  - 要压测问答接口请把 QAUser 的 weight 改成 1
 """
 
 import time
+import random
 from locust import HttpUser, task, between, tag
-from locust.clients import HttpSession
 
 
 class QuickUser(HttpUser):
-    """轻量级压测用户 - 只打健康检查和登录
+    """轻量级压测用户 - 只打 GET 接口
 
-    用来测 API 框架本身的性能基线，不涉及 LLM 调用。
-    weight=5 意味着 83% 的用户是这种轻量用户。
+    测 API 框架本身的性能基线，不涉及 LLM 调用。
+    weight=10 意味着大部分用户是这种。
     """
 
-    weight = 5
-    wait_time = between(0.5, 1.5)  # 每个请求之间等 0.5~1.5 秒
+    weight = 10
+    wait_time = between(0.5, 1.5)
 
     @tag("health")
-    @task(10)  # 数字越大，执行频率越高
+    @task(10)
     def health_check(self):
-        """健康检查 - 最轻量的接口"""
         self.client.get("/", name="健康检查")
 
     @tag("health")
     @task(3)
     def docs_page(self):
-        """Swagger 文档页"""
         self.client.get("/docs", name="API文档页")
 
-    @tag("auth")
+    @tag("kb")
+    @task(5)
+    def kb_stats(self):
+        with self.client.get("/kb/stats", name="知识库统计", catch_response=True) as r:
+            if r.status_code == 200 and r.json().get("code") == 0:
+                r.success()
+            else:
+                r.failure(f"status={r.status_code}")
+
+    @tag("kb")
+    @task(3)
+    def kb_documents(self):
+        with self.client.get("/kb/documents", name="文档列表", catch_response=True) as r:
+            if r.status_code == 200 and r.json().get("code") == 0:
+                r.success()
+            else:
+                r.failure(f"status={r.status_code}")
+
+    @tag("qb")
+    @task(3)
+    def qb_list(self):
+        with self.client.get("/qb/list", name="题库列表", catch_response=True) as r:
+            if r.status_code == 200 and r.json().get("code") == 0:
+                r.success()
+            else:
+                r.failure(f"status={r.status_code}")
+
+    @tag("qb")
     @task(2)
-    def login(self):
-        """登录获取 JWT"""
-        with self.client.post(
-            "/auth/login",
-            json={"username": f"loadtest-{int(time.time())}"},
-            name="登录接口",
-            catch_response=True,
-        ) as response:
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("code") == 0:
-                    response.success()
-                    # 保存 token，后面可以用
-                    self.token = data.get("token")
-                else:
-                    response.failure(f"登录失败: {data.get('msg')}")
+    def qb_topics(self):
+        with self.client.get("/qb/topics", name="题库知识点", catch_response=True) as r:
+            if r.status_code == 200 and r.json().get("code") == 0:
+                r.success()
             else:
-                response.failure(f"状态码: {response.status_code}")
+                r.failure(f"status={r.status_code}")
 
-    @tag("auth")
-    @task(1)
-    def invalid_login(self):
-        """空用户名登录 - 测试错误路径"""
-        with self.client.post(
-            "/auth/login",
-            json={"username": ""},
-            name="登录-空用户名",
-            catch_response=True,
-        ) as response:
-            # 预期返回 code=400，这是正常的
-            if response.status_code == 200:
-                response.success()
+    @tag("page")
+    @task(2)
+    def chat_page(self):
+        with self.client.get("/chat", name="聊天页面", catch_response=True) as r:
+            if r.status_code == 200:
+                r.success()
             else:
-                response.failure(f"状态码: {response.status_code}")
+                r.failure(f"status={r.status_code}")
 
+    @tag("page")
     @task(1)
-    def not_found(self):
-        """404 接口 - 测试异常处理性能"""
-        with self.client.get(
-            "/api/nonexistent/path",
-            name="404接口",
-            catch_response=True,
-        ) as response:
-            if response.status_code == 404:
-                response.success()  # 404 是预期的，算成功
+    def kb_page(self):
+        with self.client.get("/kb", name="知识库页面", catch_response=True) as r:
+            if r.status_code == 200:
+                r.success()
             else:
-                response.failure(f"预期404，实际{response.status_code}")
+                r.failure(f"status={r.status_code}")
+
+
+class SearchUser(HttpUser):
+    """检索接口压测用户 - 打 KB/QB 搜索接口
+
+    不涉及 LLM 调用，但会触向量检索，中等负载。
+    weight=3 意味着约 23% 的用户是这种。
+    """
+
+    weight = 3
+    wait_time = between(1, 3)
+
+    KB_QUERIES = [
+        "什么是进程调度",
+        "页面置换算法",
+        "死锁的四个必要条件",
+        "TCP三次握手",
+        "虚拟内存",
+        "磁盘调度算法",
+        "信号量与PV操作",
+        "分页与分段",
+        "CSMA/CD协议",
+        "银行家算法",
+    ]
+
+    QB_QUERIES = ["死锁", "TCP", "进程", "调度", "内存", "路由", "分页", "文件系统"]
+
+    @tag("kb_search")
+    @task(3)
+    def kb_search(self):
+        q = random.choice(self.KB_QUERIES)
+        with self.client.post(
+            "/kb/search",
+            json={"query": q, "top_k": 5},
+            name="知识库检索",
+            catch_response=True,
+        ) as r:
+            if r.status_code == 200 and r.json().get("code") == 0:
+                r.success()
+            else:
+                r.failure(f"status={r.status_code}")
+
+    @tag("qb_search")
+    @task(2)
+    def qb_search(self):
+        q = random.choice(self.QB_QUERIES)
+        with self.client.post(
+            "/qb/search",
+            json={"keyword": q, "filename": "question_bank.json"},
+            name="题库搜索",
+            catch_response=True,
+        ) as r:
+            if r.status_code == 200 and r.json().get("code") == 0:
+                r.success()
+            else:
+                r.failure(f"status={r.status_code}")
 
 
 class QAUser(HttpUser):
     """问答接口压测用户 - 会真实调用 LLM！
 
-    ⚠️  慎用！每次调用都会消耗 Token 额度。
-    weight=1 意味着只有约 17% 的用户是这种。
-    想完全禁用就把 weight 改成 0。
+    慎用！每次调用都会消耗 Token 额度。
+    weight=0 表示默认关闭，要测问答接口请改成 1。
     """
 
-    weight = 0  # 默认关闭，要测问答接口请改成 1 或更大
-    wait_time = between(3, 8)  # 问答比较慢，间隔长一点
+    weight = 0
+    wait_time = between(5, 10)
 
-    def on_start(self):
-        """每个用户启动时先登录拿 token"""
-        import random
-        username = f"qa-user-{random.randint(1, 10000)}"
-        resp = self.client.post(
-            "/auth/login",
-            json={"username": username},
-        )
-        if resp.status_code == 200:
-            self.token = resp.json().get("token")
-            self.headers = {"Authorization": f"Bearer {self.token}"}
-        else:
-            self.token = None
-            self.headers = {}
+    QUESTIONS = [
+        "什么是进程调度？",
+        "解释一下什么是死锁",
+        "页面置换算法有哪些？",
+        "TCP三次握手过程是什么？",
+        "什么是虚拟内存？",
+    ]
 
     @tag("qa")
     @task(1)
     def ask_question(self):
-        """问答接口 - 会调用 LLM，慎用"""
-        if not self.token:
-            return  # 登录失败就不调了
-
-        questions = [
-            "什么是机器学习？",
-            "Python 和 Java 有什么区别？",
-            "解释一下什么是神经网络",
-            "数据库索引有什么用？",
-            "什么是 RESTful API？",
-        ]
-        import random
-        q = random.choice(questions)
-
+        q = random.choice(self.QUESTIONS)
         with self.client.post(
-            "/qa/ask",
+            "/chat/stream",
             json={
                 "query": q,
-                "thread_id": f"loadtest-thread",
+                "thread_id": f"loadtest-{random.randint(1, 100)}",
                 "mode": "plan",
             },
-            headers=self.headers,
-            name="问答接口",
+            name="问答接口(SSE)",
             catch_response=True,
         ) as response:
             if response.status_code == 200:
-                data = response.json()
-                if data.get("code") == 0 and data.get("answer"):
-                    response.success()
-                else:
-                    response.failure(f"返回异常: {data.get('msg', '未知错误')}")
+                response.success()
             elif response.status_code == 429:
                 response.success()  # 被限流也是正常情况
             else:
-                response.failure(f"状态码: {response.status_code}")
-
-
-# ============================================================
-# 压测场景配置
-# ============================================================
-# 可以通过 --tags 参数只跑某类接口:
-#   python -m locust -f tests/locustfile.py --host http://localhost:8003 --tags health
-#   python -m locust -f tests/locustfile.py --host http://localhost:8003 --tags auth
-#   python -m locust -f tests/locustfile.py --host http://localhost:8003 --tags qa
-# ============================================================
+                response.failure(f"status={response.status_code}")

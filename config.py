@@ -43,7 +43,7 @@ DEEPSEEK_CHAT_URL = _optional("DEEPSEEK_CHAT_URL", "https://api.deepseek.com/cha
 # Agent 参数
 # ============================================================
 
-LLM_TEMPERATURE = float(_optional("LLM_TEMPERATURE", "0.7"))
+LLM_TEMPERATURE = float(_optional("LLM_TEMPERATURE", "0.9"))
 MAX_TOOL_STEPS = int(_optional("MAX_TOOL_STEPS", "10"))
 CHUNK_SIZE = int(_optional("CHUNK_SIZE", "300"))
 CHUNK_OVERLAP = int(_optional("CHUNK_OVERLAP", "50"))

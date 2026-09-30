@@ -12,36 +12,16 @@ from datetime import datetime
 
 import chromadb
 
-from config import ZHIPU_API_KEY, ZHIPU_EMBEDDING_URL
+from config import ZHIPU_API_KEY, ZHIPU_EMBEDDING_URL, ZHIPU_CHAT_URL
 from course_agent.errors import retry_on_rate_limit, EmbeddingError
 from course_agent.logger import logger
 
-# ============================================================
-# 结构化输出模型
-# ============================================================
-
 try:
-    from pydantic import BaseModel, Field
-    USE_PYDANTIC = True
+    from rank_bm25 import BM25Okapi
+    HAS_BM25 = True
 except ImportError:
-    USE_PYDANTIC = False
-
-if USE_PYDANTIC:
-    class SearchResult(BaseModel):
-        """单条检索结果"""
-        text: str = Field(description="检索到的文本片段")
-        source: str = Field(description="来源文件名")
-        score: float = Field(description="相似度分数")
-        chunk_index: int = Field(description="分块索引")
-
-    class RAGAnswer(BaseModel):
-        """RAG 回答的结构化输出"""
-        answer: str = Field(description="基于检索内容的回答")
-        sources: list[SearchResult] = Field(default_factory=list, description="引用的来源")
-        has_answer: bool = Field(description="是否在知识库中找到相关内容")
-else:
-    SearchResult = dict #dict存什么都行,没有类型检查
-    RAGAnswer = dict
+    HAS_BM25 = False
+    logger.warning("rank_bm25 未安装，混合检索降级为纯向量检索")
 
 
 # ============================================================
@@ -140,27 +120,44 @@ def _load_docx(path: str) -> str:
 
 def _load_text(path: str) -> str:
     """读取纯文本文件（MD / TXT）"""
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8-sig") as f:
         return f.read()
 
 
 def _extract_chapter(file_path: Path, base_dir: Path) -> str:
     """从文件路径提取章节信息
 
-    规则:
-      - PPT 文件名通常以 "02-1-进程与线程之进程.pdf" 格式命名
-        前缀数字是章号，后面是章节名
-      - 笔记文件名通常包含章节关键词
-      - 无法提取时返回空字符串
+    支持的格式:
+      - "02-1-进程与线程之进程" → 进程与线程
+      - "Chapter4-Network Layer" → Network Layer
+      - "操作系统_补充知识点笔记" → 补充知识点笔记
+      - "计算机网络_传输层" → 传输层
+      - "《计算机网络》复习整理文档" → 复习整理文档
     """
     name = file_path.stem
+
     # 匹配 "02-1-进程与线程之进程" 或 "03-OS调度" 格式
     m = re.match(r"^\d+[-_]?\d*[-_](.+)", name)
     if m:
         chapter = m.group(1)
-        # 去掉"之"后面的子节（如"进程与线程之进程"→"进程与线程"）
         chapter = re.sub(r"之.+$", "", chapter)
         return chapter
+
+    # 匹配 "Chapter4-Network Layer" 格式
+    m = re.match(r"^Chapter\d+[-_](.+)", name, re.IGNORECASE)
+    if m:
+        return m.group(1)
+
+    # 匹配 "操作系统_补充知识点笔记" 或 "计算机网络_传输层" 格式
+    m = re.match(r"^(?:操作系统|计算机网络)[_\-](.+)", name)
+    if m:
+        return m.group(1)
+
+    # 匹配 "《计算机网络》复习整理文档" 格式
+    m = re.match(r"^《.+》(.+)", name)
+    if m:
+        return m.group(1)
+
     return ""
 
 
@@ -361,6 +358,100 @@ class KnowledgeBase:
                 metadata={"description": "课程知识库"}
             )
         return self._collection
+
+    # --- BM25 索引（懒加载） ---
+    _bm25: Optional[object] = None
+    _bm25_corpus: list[str] = []  # 与 BM25 索引对齐的文本列表
+    _bm25_ids: list[str] = []     # 对应的 chunk id
+
+    def _get_bm25(self):
+        """懒加载 BM25 索引"""
+        if not HAS_BM25:
+            return None
+        if self._bm25 is None:
+            collection = self._get_collection()
+            if collection.count() == 0:
+                return None
+            all_data = collection.get()
+            corpus = []
+            for doc in all_data["documents"]:
+                tokens = list(doc)
+                corpus.append(tokens)
+            self._bm25_corpus = all_data["documents"]
+            self._bm25_ids = all_data["ids"]
+            self._bm25 = BM25Okapi(corpus)
+            logger.info("BM25 索引构建完成: %d 个文档", len(corpus))
+        return self._bm25
+
+    def _bm25_search(self, query: str, top_k: int = 20) -> list[dict]:
+        """BM25 关键词检索"""
+        bm25 = self._get_bm25()
+        if bm25 is None:
+            return []
+        tokens = list(query)
+        scores = bm25.get_scores(tokens)
+        ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
+        results = []
+        for idx, score in ranked[:top_k]:
+            if score <= 0:
+                continue
+            results.append({
+                "id": self._bm25_ids[idx],
+                "text": self._bm25_corpus[idx],
+                "bm25_score": float(score),
+            })
+        return results
+
+    def _hybrid_search(
+        self, query: str, top_k: int = 20, doc_types: list[str] = None, chapter: str = None
+    ) -> list[dict]:
+        """混合检索：向量 + BM25 融合召回"""
+        # 向量检索
+        vector_results = self.search(query, top_k=top_k, doc_types=doc_types, chapter=chapter)
+
+        # BM25 检索
+        bm25_results = self._bm25_search(query, top_k=top_k)
+
+        # 用 id 合并，向量分数归一化
+        merged = {}
+        max_vec = max((r["score"] for r in vector_results), default=1)
+        for r in vector_results:
+            merged[r["text"][:100]] = {
+                **r,
+                "vec_score": r["score"] / max(max_vec, 0.001),
+                "bm25_score": 0.0,
+            }
+        max_bm25 = max((r["bm25_score"] for r in bm25_results), default=1)
+        for r in bm25_results:
+            collection = self._get_collection()
+            chroma_data = collection.get(ids=[r["id"]])
+            if not chroma_data["ids"]:
+                continue
+            meta = chroma_data["metadatas"][0]
+            if doc_types and meta.get("doc_type") not in doc_types:
+                continue
+            if chapter and meta.get("chapter") != chapter:
+                continue
+            text = chroma_data["documents"][0]
+            key = text[:100]
+            bm25_norm = r["bm25_score"] / max(max_bm25, 0.001)
+            if key in merged:
+                merged[key]["bm25_score"] = bm25_norm
+            else:
+                merged[key] = {
+                    "text": text,
+                    "source": meta.get("source", ""),
+                    "doc_type": meta.get("doc_type", "notes"),
+                    "chapter": meta.get("chapter", ""),
+                    "score": 0,
+                    "vec_score": 0.0,
+                    "bm25_score": bm25_norm,
+                    "chunk_index": meta.get("chunk_index", 0),
+                }
+        # 融合分数
+        for v in merged.values():
+            v["score"] = round(0.6 * v["vec_score"] + 0.4 * v["bm25_score"], 4)
+        return sorted(merged.values(), key=lambda x: x["score"], reverse=True)
 
     def build_from_dir(
         self,
@@ -787,6 +878,136 @@ def get_knowledge_base(persist_dir: str = "./vector_store") -> KnowledgeBase:
         _kb_instance = KnowledgeBase(persist_dir=persist_dir)
     return _kb_instance
 
+def _llm_rerank(query: str, candidates: list[dict], top_k: int = 5) -> list[dict]:
+    """用 LLM 对检索结果重排序
+
+    把候选列表喂给 GLM-4-Flash，让它根据与查询的相关性打分排序
+    """
+    if len(candidates) <= top_k:
+        return candidates[:top_k]
+
+    LLM_MODEL = "glm-4-flash"
+    headers = {
+        "Authorization": f"Bearer {ZHIPU_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    # 构建候选列表文本（编号 + 摘要）
+    candidate_texts = []
+    for i, c in enumerate(candidates):
+        snippet = c["text"][:120].replace("\n", " ")
+        candidate_texts.append(f"[{i}] {snippet}")
+
+    prompt = (
+        "你是检索重排序器。用户问题和候选文本片段如下，"
+        "请按与问题的相关性从高到低输出编号，用逗号分隔，只输出编号。\n\n"
+        f"问题: {query}\n\n"
+        + "\n".join(candidate_texts)
+        + "\n\n输出格式: 0,3,1,2,...（只输出编号，用逗号分隔）"
+    )
+
+    payload = {
+        "model": LLM_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.1,
+        "max_tokens": 200,
+    }
+
+    try:
+        resp = requests.post(ZHIPU_CHAT_URL, headers=headers, json=payload, timeout=30)
+        resp.raise_for_status()
+        result = resp.json()["choices"][0]["message"]["content"].strip()
+        # 解析编号
+        indices = []
+        for part in re.split(r"[,\s]+", result):
+            part = part.strip("[]()")
+            if part.isdigit():
+                idx = int(part)
+                if 0 <= idx < len(candidates) and idx not in indices:
+                    indices.append(idx)
+        if not indices:
+            return candidates[:top_k]
+        reranked = [candidates[i] for i in indices[:top_k]]
+        # 补全不足的部分
+        if len(reranked) < top_k:
+            for c in candidates:
+                if c not in reranked:
+                    reranked.append(c)
+                    if len(reranked) >= top_k:
+                        break
+        logger.info("LLM rerank: %d → %d", len(candidates), len(reranked))
+        return reranked
+    except Exception as e:
+        logger.warning("LLM rerank 失败，降级为原始排序: %s", str(e)[:100])
+        return candidates[:top_k]
+
+
+def _llm_rewrite_query(query: str) -> list[str]:
+    """用 LLM 改写查询，生成更适合检索的关键词查询
+
+    返回原始查询 + 改写后的关键词查询
+    """
+    LLM_MODEL = "glm-4-flash"
+    headers = {
+        "Authorization": f"Bearer {ZHIPU_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    prompt = (
+        "你是搜索查询改写器。把用户问题改写成 2-3 个适合向量检索和关键词检索的查询变体。\n"
+        "要求：保留核心概念，去掉问句词，补全缩写全称，用空格分隔关键词。\n"
+        "输出格式：每行一个查询，不要编号，不要解释。\n\n"
+        f"用户问题: {query}\n"
+    )
+
+    payload = {
+        "model": LLM_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.3,
+        "max_tokens": 200,
+    }
+
+    try:
+        resp = requests.post(ZHIPU_CHAT_URL, headers=headers, json=payload, timeout=15)
+        resp.raise_for_status()
+        result = resp.json()["choices"][0]["message"]["content"].strip()
+        rewrites = [line.strip() for line in result.split("\n") if line.strip()]
+        queries = [query] + rewrites[:3]
+        # 去重
+        seen = set()
+        unique = []
+        for q in queries:
+            if q not in seen:
+                seen.add(q)
+                unique.append(q)
+        logger.info("LLM 查询改写: %s → %s", query, unique)
+        return unique
+    except Exception as e:
+        logger.warning("LLM 查询改写失败，降级为正则扩展: %s", str(e)[:100])
+        return _expand_query(query)
+
+
+def _is_low_quality_chunk(text: str) -> bool:
+    """检测低质量 chunk
+
+    过滤：纯数字/符号、过短、页眉页脚残留
+    """
+    stripped = text.strip()
+    if len(stripped) < 15:
+        return True
+    # 纯数字和标点
+    if re.match(r"^[\d\s\.\-/:，。、]+$", stripped):
+        return True
+    # 页眉页脚模式
+    if re.match(r"^(第[一二三四五六七八九十\d]+页|Page\s*\d+|目录)$", stripped, re.IGNORECASE):
+        return True
+    # 中文字符占比过低（可能是乱码）
+    chinese_count = sum(1 for c in stripped if '\u4e00' <= c <= '\u9fff' or c.isalpha())
+    if len(stripped) > 0 and chinese_count / len(stripped) < 0.1:
+        return True
+    return False
+
+
 def _expand_query(query: str) -> list[str]:
     """查询扩展：从原始查询生成多个搜索变体
 
@@ -822,33 +1043,30 @@ def _expand_query(query: str) -> list[str]:
 
 
 def search_knowledge(query: str, top_k: int = 5) -> str:
-    """检索课程知识库（查询扩展 + 两层检索）
+    """检索课程知识库（混合检索 + LLM重排序 + 查询改写）
 
-    改进点:
-    1. 查询扩展: 从原始查询生成 2-3 个变体，多路召回
-    2. 多查询合并: 每个变体都搜一遍，按文本去重，保留最高分
-    3. 隐藏原始分数: 不向 LLM 展示相似度数值，避免低分误导判断
-    4. 两层检索: 先搜 ppt+notes，不足再搜 textbook
-
-    Args:
-        query: 搜索关键词或问题
-        top_k: 每个变体返回的文档数
-    Returns:
-        格式化的检索结果文本
+    流程:
+    1. LLM 查询改写: 生成检索变体
+    2. 混合检索: 向量 + BM25 多路召回，融合排序
+    3. LLM Rerank: 对 top_k*4 候选重排序到 top_k
+    4. 两层检索: 先搜 ppt+notes，不足再搜课本
+    5. Chunk 质量过滤: 过滤低质量结果
     """
     kb = get_knowledge_base()
 
-    # 1. 查询扩展
-    queries = _expand_query(query)
+    # 1. LLM 查询改写（失败降级为正则扩展）
+    queries = _llm_rewrite_query(query)
 
-    # 2. 多查询搜索 + 合并去重
-    all_results = []
-    seen_texts = {}  # text -> best_score
+    # 2. 混合检索（多查询 + 合并去重）
+    seen_texts = {}
+    recall_k = max(top_k * 4, 20)
 
     for q in queries:
-        results = kb.search(q, top_k=top_k, doc_types=["ppt", "notes"])
+        results = kb._hybrid_search(q, top_k=recall_k, doc_types=["ppt", "notes"])
         for r in results:
-            text_key = r["text"][:100]  # 用前100字做去重键
+            if _is_low_quality_chunk(r["text"]):
+                continue
+            text_key = r["text"][:100]
             if text_key not in seen_texts or r["score"] > seen_texts[text_key]["score"]:
                 seen_texts[text_key] = r
 
@@ -857,8 +1075,10 @@ def search_knowledge(query: str, top_k: int = 5) -> str:
     # 3. 第二层：如果第一层结果不足，补充搜课本
     if len(all_results) < 2 or (all_results and all_results[0]["score"] < 0.3):
         for q in queries:
-            textbook_results = kb.search(q, top_k=2, doc_types=["textbook"])
+            textbook_results = kb._hybrid_search(q, top_k=5, doc_types=["textbook"])
             for r in textbook_results:
+                if _is_low_quality_chunk(r["text"]):
+                    continue
                 text_key = r["text"][:100]
                 if text_key not in seen_texts or r["score"] > seen_texts[text_key]["score"]:
                     seen_texts[text_key] = r
@@ -867,11 +1087,16 @@ def search_knowledge(query: str, top_k: int = 5) -> str:
     if not all_results:
         return "知识库中未找到相关内容。建议使用 web_search 工具联网搜索获取更多信息。"
 
-    # 检查结果质量：最高分低于 0.3 视为结果不足
-    best_score = all_results[0]["score"]
+    # 4. LLM Rerank（候选数 > top_k 时才触发）
+    if len(all_results) > top_k:
+        all_results = _llm_rerank(query, all_results, top_k=top_k)
+    else:
+        all_results = all_results[:top_k]
+
+    # 5. 格式化输出
+    best_score = all_results[0]["score"] if all_results else 0
     result_count = len(all_results)
 
-    # 4. 格式化输出（不展示原始分数，避免 LLM 根据低分误判为"没找到"）
     formatted = []
     for i, r in enumerate(all_results[:top_k], 1):
         type_label = {
@@ -885,7 +1110,6 @@ def search_knowledge(query: str, top_k: int = 5) -> str:
 
     result_text = "\n\n".join(formatted)
 
-    # 结果不足时提示 LLM 调用 web_search
     if best_score < 0.3 or result_count < 2:
         result_text += "\n\n[提示] 知识库中相关内容较少或相关度不高，建议调用 web_search 工具联网搜索补充信息。"
 

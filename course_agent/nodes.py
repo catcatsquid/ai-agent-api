@@ -23,7 +23,7 @@ from course_agent.state import AgentState
 from course_agent.llm import llm
 from course_agent.tools import tools, tools_by_name
 from course_agent.errors import safe_llm_invoke, safe_tool_invoke, LLMError
-from course_agent.memory import trim_messages, summarize_old_messages
+from course_agent.memory import trim_messages
 
 llm_with_tools = llm.bind_tools(tools)
 
@@ -157,6 +157,7 @@ def executor_node(state: AgentState) -> dict:
             results.append(ToolMessage(
                 content=f"未知工具: {tool_name}",
                 tool_call_id=f"plan_{len(results)}",
+                name=tool_name,
             ))
             continue
 
@@ -166,6 +167,7 @@ def executor_node(state: AgentState) -> dict:
         results.append(ToolMessage(
             content=str(result),
             tool_call_id=f"plan_{len(results)}",
+            name=tool_name,
         ))
 
     return {"messages": results}
@@ -282,9 +284,8 @@ def synthesizer_node(state: AgentState) -> dict:
         messages = [
             SystemMessage(content=SYNTHESIZER_PROMPT),
         ]
-        # 加上历史对话（让 LLM 有上下文）
-        if len(history_msgs) > 1:  # 不止一条用户消息才加历史
-            messages.extend(history_msgs[:-1])  # 除了最后一条（就是当前问题）
+        if len(history_msgs) > 1:
+            messages.extend(history_msgs[:-1])
         messages.append(HumanMessage(content=f"用户问题: {user_content}\n\n检索结果:\n{context}"))
     else:
         messages = [
@@ -309,12 +310,15 @@ def synthesizer_node(state: AgentState) -> dict:
 
 def llm_node(state: AgentState) -> dict:
     """ReAct LLM 节点"""
-    # 对话太长时裁剪一下，防止爆 token
     messages = [SystemMessage(content=REACT_PROMPT)] + trim_messages(
         state["messages"], max_messages=15, keep_system=False
     )
-    response = llm_with_tools.invoke(messages)
-    return {"messages": [response]}
+    try:
+        response = safe_llm_invoke(llm_with_tools, messages, context="react_llm")
+        return {"messages": [response]}
+    except LLMError:
+        from langchain_core.messages import AIMessage
+        return {"messages": [AIMessage(content="抱歉，处理请求时遇到服务问题，请稍后重试。")]}
 
 
 def tool_node(state: AgentState) -> dict:
@@ -323,10 +327,18 @@ def tool_node(state: AgentState) -> dict:
     last_message = state["messages"][-1]
 
     for tool_call in last_message.tool_calls:
-        tool = tools_by_name[tool_call["name"]]
-        result = tool.invoke(tool_call["args"])
+        tool_name = tool_call["name"]
+        tool = tools_by_name.get(tool_name)
+        if tool is None:
+            results.append(ToolMessage(
+                content=f"未知工具: {tool_name}",
+                tool_call_id=tool_call["id"],
+                name=tool_name,
+            ))
+            continue
+        result = safe_tool_invoke(tool, tool_call["args"], tool_name=tool_name)
         results.append(
-            ToolMessage(content=str(result), tool_call_id=tool_call["id"])
+            ToolMessage(content=str(result), tool_call_id=tool_call["id"], name=tool_name)
         )
 
     return {"messages": results}
@@ -338,9 +350,52 @@ FORCE_SEARCH_MSG = SystemMessage(
     "然后基于搜索结果回答。请立即调用 search_knowledge 工具。"
 )
 
+# 课程知识点关键词（用于判断是否需要强制搜索）
+_COURSE_KEYWORDS = [
+    # OS
+    "进程", "线程", "调度", "死锁", "同步", "互斥", "信号量", "PV", "管程",
+    "内存", "分页", "分段", "虚拟内存", "页面置换", "缺页", "段页式",
+    "磁盘", "文件系统", "索引", "目录", "FCFS", "SJF", "RR", "优先级",
+    "银行家", "安全序列", "临界区", "忙等待", "自旋锁", "互斥锁",
+    "进程调度", "作业调度", "中级调度", "上下文切换", "PCB",
+    "TLB", "快表", "多级页表", "反置页表", "抖动", "工作集",
+    "SCAN", "C-SCAN", "SSTF", "磁盘调度", "寻道",
+    "inode", "软链接", "硬链接", "挂载",
+    # 计网
+    "TCP", "UDP", "IP", "HTTP", "DNS", "DHCP", "ARP", "ICMP", "NAT",
+    "三次握手", "四次挥手", "拥塞控制", "流量控制", "滑动窗口",
+    "路由", "路由器", "交换机", "集线器", "子网", "掩码", "网关",
+    "OSI", "TCP/IP", "应用层", "传输层", "网络层", "数据链路层", "物理层",
+    "以太网", "MAC", "CSMA", "VLAN", "STP",
+    "RIP", "OSPF", "BGP", "距离向量", "链路状态",
+    "可靠传输", "超时重传", "快重传", "快恢复", "慢启动", "拥塞避免",
+    "套接字", "socket", "端口",
+    "协议", "报文", "分组", "帧", "比特",
+    "知识点", "课程", "考试", "题目",
+]
+
+
+def _is_course_question(text: str) -> bool:
+    """判断是否为课程知识点问题（简单关键词匹配）"""
+    text_lower = text.lower()
+    # 明显的闲聊/问候
+    greetings = ["你好", "您好", "hi", "hello", "在吗", "在不在", "早上好", "下午好",
+                 "晚上好", "拜拜", "再见", "谢谢", "感谢", "ok", "好的", "嗯", "哦"]
+    for g in greetings:
+        if text_lower.strip().startswith(g) and len(text) < 20:
+            return False
+    # 关键词匹配
+    for kw in _COURSE_KEYWORDS:
+        if kw.lower() in text_lower:
+            return True
+    # 问句且较长 → 可能是课程问题
+    if len(text) > 15 and ("?" in text or "？" in text or "什么" in text or "怎么" in text or "为什么" in text):
+        return True
+    return False
+
 
 def force_search_node(state: AgentState) -> dict:
-    """守卫节点：LLM 未调工具就回答时，注入提醒消息让其重试"""
+    """守卫节点：LLM 未调工具就回答课程问题时，注入提醒消息让其重试"""
     return {"messages": [FORCE_SEARCH_MSG]}
 
 
@@ -353,7 +408,10 @@ def should_continue(state: AgentState) -> str:
     ai_count = sum(1 for msg in state["messages"] if isinstance(msg, AIMessage))
     has_tool_msg = any(isinstance(msg, ToolMessage) for msg in state["messages"])
 
-    if not has_tool_msg and ai_count <= 1:
+    # 只有课程知识点问题才强制搜索，问候语/闲聊直接结束
+    user_msg = state["messages"][0]
+    user_text = user_msg.content if hasattr(user_msg, "content") else str(user_msg)
+    if not has_tool_msg and ai_count <= 1 and _is_course_question(user_text):
         return "force_search"
 
     return END

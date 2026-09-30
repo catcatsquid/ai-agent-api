@@ -1,0 +1,670 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>课程问答助手</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #f0f2f5; color: #333; height: 100vh; display: flex; flex-direction: column; }
+
+  /* 顶部导航 */
+  .navbar { background: #1a1a2e; color: #fff; padding: 0 24px; height: 56px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+  .navbar .logo { display: flex; align-items: center; gap: 10px; }
+  .navbar .logo-icon { width: 32px; height: 32px; background: #3b82f6; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+  .navbar h1 { font-size: 18px; font-weight: 600; }
+  .navbar .nav-links { display: flex; gap: 6px; }
+  .navbar .nav-link { padding: 6px 14px; border-radius: 6px; font-size: 13px; color: #aaa; text-decoration: none; transition: all .2s; cursor: pointer; }
+  .navbar .nav-link:hover { background: rgba(255,255,255,0.1); color: #fff; }
+
+  /* 主布局 */
+  .main { display: flex; flex: 1; overflow: hidden; }
+
+  /* 侧边栏 */
+  .sidebar { width: 260px; background: #1a1a2e; color: #fff; display: flex; flex-direction: column; flex-shrink: 0; border-right: 1px solid rgba(255,255,255,0.08); transition: width .2s ease, margin-left .2s ease; overflow: hidden; }
+  .sidebar.collapsed { width: 0; margin-left: -1px; border-right: none; }
+
+  /* 收起按钮 */
+  .btn-toggle-sidebar { background: none; border: none; color: #aaa; font-size: 18px; cursor: pointer; padding: 6px 10px; border-radius: 6px; transition: all .15s; }
+  .btn-toggle-sidebar:hover { background: rgba(255,255,255,0.1); color: #fff; }
+  .sidebar-header { padding: 16px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .btn-new-chat { width: 100%; padding: 10px; background: #3b82f6; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; transition: background .15s; }
+  .btn-new-chat:hover { background: #2563eb; }
+  .sidebar-list { flex: 1; overflow-y: auto; padding: 8px; }
+  .chat-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; margin-bottom: 4px; transition: background .15s; }
+  .chat-item:hover { background: rgba(255,255,255,0.06); }
+  .chat-item.active { background: rgba(59,130,246,0.15); }
+  .chat-item .chat-title { font-size: 13px; color: #e5e7eb; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chat-item .chat-time { font-size: 11px; color: #6b7280; margin-top: 2px; }
+  .sidebar-footer { padding: 12px 16px; border-top: 1px solid rgba(255,255,255,0.08); }
+  .mode-selector { display: flex; gap: 6px; }
+  .mode-btn { flex: 1; padding: 6px; border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; background: transparent; color: #aaa; font-size: 12px; cursor: pointer; transition: all .15s; }
+  .mode-btn.active { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+
+  /* 聊天区域 */
+  .chat-area { flex: 1; display: flex; flex-direction: column; background: #fff; }
+  .chat-header { padding: 12px 24px; border-bottom: 1px solid #e5e7eb; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+  .chat-header .title { font-size: 15px; font-weight: 600; color: #333; }
+  .chat-header .thread-id { font-size: 11px; color: #9ca3af; }
+  .status-badge { padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .status-idle { background: #e5e7eb; color: #6b7280; }
+  .status-thinking { background: #fef3c7; color: #92400e; }
+  .status-done { background: #d1fae5; color: #065f46; }
+  .status-error { background: #fee2e2; color: #991b1b; }
+
+  /* 消息列表 */
+  .messages { flex: 1; overflow-y: auto; padding: 24px; }
+  .message { display: flex; gap: 12px; margin-bottom: 20px; max-width: 900px; }
+  .message.user { flex-direction: row-reverse; }
+  .avatar { width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+  .avatar.ai { background: #3b82f6; color: #fff; }
+  .avatar.user { background: #e5e7eb; color: #6b7280; }
+  .msg-content { flex: 1; }
+  .msg-bubble { padding: 12px 16px; border-radius: 12px; font-size: 14px; line-height: 1.7; }
+  .message.user .msg-bubble { background: #3b82f6; color: #fff; }
+  .message.ai .msg-bubble { background: #f3f4f6; color: #333; }
+  .msg-bubble p { margin-bottom: 8px; }
+  .msg-bubble p:last-child { margin-bottom: 0; }
+  .msg-bubble code { background: rgba(0,0,0,0.06); padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+  .msg-bubble pre { background: #1e293b; color: #e2e8f0; padding: 12px; border-radius: 6px; overflow-x: auto; margin: 8px 0; }
+  .msg-bubble pre code { background: none; padding: 0; }
+
+  /* 思考过程 */
+  .thinking-panel { margin-bottom: 8px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+  .thinking-header { padding: 8px 12px; background: #f9fafb; font-size: 12px; color: #6b7280; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+  .thinking-header:hover { background: #f3f4f6; }
+  .thinking-body { padding: 8px 12px; font-size: 12px; color: #6b7280; line-height: 1.6; display: none; }
+  .thinking-body.open { display: block; }
+  .thinking-step { padding: 3px 0; }
+  .thinking-step .step-icon { display: inline-block; width: 16px; text-align: center; }
+  .thinking-step.planned { color: #3b82f6; }
+  .thinking-step.executed { color: #059669; }
+  .thinking-step.tool { color: #d97706; }
+
+  /* 打字动画 */
+  .typing-dots { display: inline-flex; gap: 4px; padding: 4px 0; }
+  .typing-dots span { width: 8px; height: 8px; background: #9ca3af; border-radius: 50%; animation: bounce 1.4s infinite ease-in-out; }
+  .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes bounce { 0%,80%,100% { transform: scale(0); } 40% { transform: scale(1); } }
+
+  /* 输入区域 */
+  .input-area { padding: 16px 24px; border-top: 1px solid #e5e7eb; flex-shrink: 0; }
+  .input-row { display: flex; gap: 10px; align-items: flex-end; max-width: 900px; }
+  .input-row textarea { flex: 1; padding: 12px 14px; border: 1px solid #d1d5db; border-radius: 10px; font-size: 14px; font-family: inherit; resize: none; max-height: 120px; min-height: 44px; transition: border-color .15s; }
+  .input-row textarea:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+  .btn-send { padding: 12px 20px; background: #3b82f6; color: #fff; border: none; border-radius: 10px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all .15s; }
+  .btn-send:hover { background: #2563eb; }
+  .btn-send:disabled { opacity: 0.5; cursor: not-allowed; }
+  .input-hint { font-size: 11px; color: #9ca3af; margin-top: 6px; text-align: center; }
+
+  /* 欢迎界面 */
+  .welcome { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px; }
+  .welcome .icon { font-size: 48px; margin-bottom: 16px; }
+  .welcome h2 { font-size: 22px; font-weight: 600; color: #333; margin-bottom: 8px; }
+  .welcome p { font-size: 14px; color: #6b7280; margin-bottom: 24px; text-align: center; max-width: 400px; }
+  .welcome .examples { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 460px; }
+  .example-card { padding: 14px 18px; border: 1px solid #e5e7eb; border-radius: 10px; cursor: pointer; font-size: 13px; color: #374151; transition: all .15s; background: #fff; }
+  .example-card:hover { border-color: #3b82f6; background: #eff6ff; }
+
+  /* Toast */
+  .toast { position: fixed; bottom: 30px; right: 30px; padding: 14px 24px; border-radius: 8px; color: #fff; font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index: 9999; transition: opacity .3s; }
+  .toast.error { background: #ef4444; }
+  .toast.info { background: #3b82f6; }
+
+  /* 空状态 */
+  .empty-state { text-align: center; padding: 60px 20px; color: #9ca3af; font-size: 14px; }
+</style>
+</head>
+<body>
+
+<div class="navbar">
+  <div class="logo">
+    <button class="btn-toggle-sidebar" onclick="toggleSidebar()" id="sidebar-toggle" title="收起/展开侧边栏">☰</button>
+    <div class="logo-icon">AI</div>
+    <h1>课程问答助手</h1>
+  </div>
+  <div class="nav-links">
+    <a class="nav-link" href="/kb">知识库管理</a>
+    <a class="nav-link" href="/docs">API文档</a>
+  </div>
+</div>
+
+<div class="main">
+  <!-- 侧边栏 -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <button class="btn-new-chat" onclick="newChat()">+ 新对话</button>
+    </div>
+    <div class="sidebar-list" id="chat-list">
+      <div class="empty-state" style="padding: 30px 10px; font-size: 12px;">暂无对话</div>
+    </div>
+    <div class="sidebar-footer">
+      <div style="font-size: 11px; color: #6b7280; margin-bottom: 6px;">推理模式</div>
+      <div class="mode-selector">
+        <button class="mode-btn active" onclick="setMode('plan', this)">Plan-Execute</button>
+        <button class="mode-btn" onclick="setMode('react', this)">ReAct</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 聊天区域 -->
+  <div class="chat-area">
+    <div class="chat-header">
+      <div>
+        <span class="title" id="chat-title">新对话</span>
+        <span class="thread-id" id="thread-id-display"></span>
+      </div>
+      <div class="status-badge status-idle" id="status-badge">就绪</div>
+    </div>
+    <div class="messages" id="messages">
+      <div class="welcome" id="welcome">
+        <div class="icon">AI</div>
+        <h2>你好！我是课程问答助手</h2>
+        <p>基于知识库回答操作系统课程问题，支持多轮对话和流式输出。</p>
+        <div class="examples">
+          <div class="example-card" onclick="useExample(this)">什么是进程调度？有哪些常见算法？</div>
+          <div class="example-card" onclick="useExample(this)">解释分页和分段的区别</div>
+          <div class="example-card" onclick="useExample(this)">虚拟内存的页面置换算法有哪些？</div>
+        </div>
+      </div>
+    </div>
+    <div class="input-area">
+      <div class="input-row">
+        <textarea id="input" placeholder="输入你的问题..." rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
+        <button class="btn-send" id="btn-send" onclick="sendMessage()">发送</button>
+      </div>
+      <div class="input-hint">Enter 发送 | Shift+Enter 换行</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_KEY = localStorage.getItem('api_key') || '';
+let authToken = API_KEY ? { 'X-API-Key': API_KEY } : {};
+let currentMode = 'plan';
+let currentThreadId = null;
+let isStreaming = false;
+let currentMsg = null;
+
+
+// 对话历史（localStorage 持久化）
+// chats: [{id, title, messages:[{role, content}], mode, createdAt}]
+let chats = JSON.parse(localStorage.getItem('chats') || '[]');
+let currentChatId = null;
+
+// ============================================================
+// 会话管理
+// ============================================================
+
+function saveChats() {
+  localStorage.setItem('chats', JSON.stringify(chats));
+}
+
+function getChat(id) {
+  return chats.find(c => c.id === id);
+}
+
+function renderChatList() {
+  const list = document.getElementById('chat-list');
+  if (chats.length === 0) {
+    list.innerHTML = '<div class="empty-state" style="padding: 30px 10px; font-size: 12px;">暂无对话</div>';
+    return;
+  }
+  list.innerHTML = chats.map(c => `
+    <div class="chat-item ${c.id === currentChatId ? 'active' : ''}" onclick="loadChat('${c.id}')">
+      <div class="chat-title">${escapeHtml(c.title)}</div>
+      <div class="chat-time">${formatTime(c.createdAt)}</div>
+    </div>
+  `).join('');
+}
+
+function formatTime(ts) {
+  const d = new Date(ts);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) {
+    return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+  }
+  return (d.getMonth()+1) + '/' + d.getDate();
+}
+
+function createNewChat() {
+  const id = 'chat_' + Date.now();
+  const chat = {
+    id,
+    title: '新对话',
+    messages: [],
+    mode: currentMode,
+    createdAt: Date.now(),
+  };
+  chats.unshift(chat);
+  saveChats();
+  renderChatList();
+  return chat;
+}
+
+function loadChat(id) {
+  const chat = getChat(id);
+  if (!chat) return;
+  currentChatId = id;
+  currentThreadId = null;  // 历史对话不续传，重新开 thread
+  currentMode = chat.mode || 'plan';
+  // 更新模式按钮
+  document.querySelectorAll('.mode-btn').forEach(b => {
+    b.classList.toggle('active', b.textContent.toLowerCase().includes(currentMode));
+  });
+  renderMessages(chat.messages);
+  document.getElementById('chat-title').textContent = chat.title;
+  document.getElementById('thread-id-display').textContent = '';
+  updateStatus('idle', '就绪');
+  renderChatList();
+  document.getElementById('input').focus();
+}
+
+function renderMessages(messages) {
+  const container = document.getElementById('messages');
+  if (!messages || messages.length === 0) {
+    container.innerHTML = `
+      <div class="welcome" id="welcome">
+        <div class="icon">AI</div>
+        <h2>你好！我是课程问答助手</h2>
+        <p>基于知识库回答操作系统课程问题，支持多轮对话和流式输出。</p>
+        <div class="examples">
+          <div class="example-card" onclick="useExample(this)">什么是进程调度？有哪些常见算法？</div>
+          <div class="example-card" onclick="useExample(this)">解释分页和分段的区别</div>
+          <div class="example-card" onclick="useExample(this)">虚拟内存的页面置换算法有哪些？</div>
+        </div>
+      </div>`;
+    return;
+  }
+  container.innerHTML = '';
+  messages.forEach(m => {
+    if (m.role === 'user') {
+      appendUserMessageDOM(m.content, container);
+    } else if (m.role === 'assistant') {
+      appendAIMessageDOM(m.content, container);
+    }
+  });
+  scrollToBottom();
+}
+
+function appendUserMessageDOM(text, container) {
+  const div = document.createElement('div');
+  div.className = 'message user';
+  div.innerHTML = `
+    <div class="avatar user">U</div>
+    <div class="msg-content"><div class="msg-bubble">${escapeHtml(text)}</div></div>`;
+  container.appendChild(div);
+}
+
+function appendAIMessageDOM(text, container) {
+  const div = document.createElement('div');
+  div.className = 'message ai';
+  div.innerHTML = `
+    <div class="avatar ai">AI</div>
+    <div class="msg-content">
+      <div class="msg-bubble">${renderMarkdown(text)}</div>
+    </div>`;
+  container.appendChild(div);
+}
+
+function toggleSidebar() {
+  const sidebar = document.querySelector('.sidebar');
+  const toggleBtn = document.getElementById('sidebar-toggle');
+  sidebar.classList.toggle('collapsed');
+  toggleBtn.textContent = sidebar.classList.contains('collapsed') ? '▶' : '☰';
+}
+
+function newChat() {
+  currentThreadId = null;
+  currentChatId = null;
+  document.getElementById('messages').innerHTML = `
+    <div class="welcome" id="welcome">
+      <div class="icon">AI</div>
+      <h2>你好！我是课程问答助手</h2>
+      <p>基于知识库回答操作系统课程问题，支持多轮对话和流式输出。</p>
+      <div class="examples">
+        <div class="example-card" onclick="useExample(this)">什么是进程调度？有哪些常见算法？</div>
+        <div class="example-card" onclick="useExample(this)">解释分页和分段的区别</div>
+        <div class="example-card" onclick="useExample(this)">虚拟内存的页面置换算法有哪些？</div>
+      </div>
+    </div>`;
+  document.getElementById('chat-title').textContent = '新对话';
+  document.getElementById('thread-id-display').textContent = '';
+  updateStatus('idle', '就绪');
+  renderChatList();
+  document.getElementById('input').focus();
+}
+
+function setMode(mode, el) {
+  currentMode = mode;
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+}
+
+
+function useExample(el) {
+  document.getElementById('input').value = el.textContent;
+  document.getElementById('input').focus();
+}
+
+// ============================================================
+// 消息渲染
+// ============================================================
+
+function appendUserMessage(text) {
+  const welcome = document.getElementById('welcome');
+  if (welcome) welcome.remove();
+
+  const messagesDiv = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'message user';
+  div.innerHTML = `
+    <div class="avatar user">U</div>
+    <div class="msg-content"><div class="msg-bubble">${escapeHtml(text)}</div></div>`;
+  messagesDiv.appendChild(div);
+  scrollToBottom();
+}
+
+function appendAIMessage() {
+  const messagesDiv = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'message ai';
+  div.innerHTML = `
+    <div class="avatar ai">AI</div>
+    <div class="msg-content">
+      <div class="thinking-panel" style="display:none;">
+        <div class="thinking-header" onclick="toggleThinking(this)">
+          <span>思维过程</span>
+          <span class="thinking-toggle-icon">▶</span>
+        </div>
+        <div class="thinking-body"></div>
+      </div>
+      <div class="msg-bubble msg-answer">
+        <div class="typing-dots"><span></span><span></span><span></span></div>
+      </div>
+    </div>`;
+  messagesDiv.appendChild(div);
+  scrollToBottom();
+  return {
+    el: div,
+    bubble: div.querySelector('.msg-answer'),
+    thinkingPanel: div.querySelector('.thinking-panel'),
+    thinkingBody: div.querySelector('.thinking-body'),
+    thinkingToggle: div.querySelector('.thinking-toggle-icon'),
+    rawText: '',
+  };
+}
+
+function addThinkingStep(type, text) {
+  if (!currentMsg) return;
+  const panel = currentMsg.thinkingPanel;
+  const body = currentMsg.thinkingBody;
+  panel.style.display = 'block';
+  const icons = { planned: '📋', executed: '⚡', tool: '🔧', done: '✅', error: '❌' };
+  const div = document.createElement('div');
+  div.className = `thinking-step ${type}`;
+  div.innerHTML = `<span class="step-icon">${icons[type] || '•'}</span> ${escapeHtml(text)}`;
+  body.appendChild(div);
+  body.classList.add('open');
+  currentMsg.thinkingToggle.textContent = '▼';
+  scrollToBottom();
+}
+
+function toggleThinking(headerEl) {
+  const body = headerEl.nextElementSibling;
+  const icon = headerEl.querySelector('.thinking-toggle-icon');
+  if (body.classList.contains('open')) {
+    body.classList.remove('open');
+    icon.textContent = '▶';
+  } else {
+    body.classList.add('open');
+    icon.textContent = '▼';
+  }
+}
+
+function updateBubble(text) {
+  if (!currentMsg) return;
+  const bubble = currentMsg.bubble;
+  if (text) {
+    bubble.innerHTML = renderMarkdown(text);
+    scrollToBottom();
+  }
+}
+
+function appendToBubble(token) {
+  if (!currentMsg) return;
+  const bubble = currentMsg.bubble;
+  const dots = bubble.querySelector('.typing-dots');
+  if (dots) dots.remove();
+  currentMsg.rawText += token;
+  bubble.innerHTML = renderMarkdown(currentMsg.rawText);
+  scrollToBottom();
+}
+
+function finalizeAIMessage(fullAnswer) {
+  if (!currentMsg) return;
+  const bubble = currentMsg.bubble;
+  if (bubble) {
+    currentMsg.rawText = fullAnswer;
+    bubble.innerHTML = renderMarkdown(fullAnswer);
+  }
+  // 清除引用，防止后续操作影响已完成的消息
+  currentMsg = null;
+  scrollToBottom();
+}
+
+// ============================================================
+// 发送消息（SSE 流式）
+// ============================================================
+
+async function sendMessage() {
+  const input = document.getElementById('input');
+  const text = input.value.trim();
+  if (!text || isStreaming) return;
+
+  input.value = '';
+  input.style.height = 'auto';
+  isStreaming = true;
+  document.getElementById('btn-send').disabled = true;
+
+  appendUserMessage(text);
+  currentMsg = appendAIMessage();
+  updateStatus('thinking', '思考中...');
+
+  // 第一条消息时创建对话
+  const isFirstMessage = !currentChatId;
+  if (isFirstMessage) {
+    const chat = createNewChat();
+    currentChatId = chat.id;
+    chat.messages.push({ role: 'user', content: text });
+    chat.title = text.length > 20 ? text.substring(0, 20) + '...' : text;
+    document.getElementById('chat-title').textContent = chat.title;
+    saveChats();
+    renderChatList();
+  } else {
+    const chat = getChat(currentChatId);
+    if (chat) chat.messages.push({ role: 'user', content: text });
+  }
+
+  const tid = currentThreadId;
+
+  try {
+    url = '/qa/stream';
+    body = { query: text, mode: currentMode };
+    if (currentThreadId) body.thread_id = currentThreadId;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authToken },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullAnswer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const jsonStr = line.slice(6).trim();
+        if (jsonStr === '[DONE]') continue;
+        try {
+          const evt = JSON.parse(jsonStr);
+          handleSSEEvent(evt, fullAnswer, (newText) => { fullAnswer = newText; });
+        } catch (e) { /* skip */ }
+      }
+    }
+
+    finalizeAIMessage(fullAnswer);
+    // 保存 AI 回答到对话历史
+    const chat = getChat(currentChatId);
+    if (chat) {
+      chat.messages.push({ role: 'assistant', content: fullAnswer });
+      chat.mode = currentMode;
+      saveChats();
+      renderChatList();
+    }
+    updateStatus('done', '完成');
+  } catch (e) {
+    if (currentMsg && currentMsg.bubble) {
+      currentMsg.bubble.innerHTML = `<span style="color:#ef4444;">请求失败: ${escapeHtml(e.message)}</span>`;
+    }
+    updateStatus('error', '错误');
+    showToast(`请求失败: ${e.message}`, 'error');
+    currentMsg = null;
+  } finally {
+    isStreaming = false;
+    document.getElementById('btn-send').disabled = false;
+  }
+}
+
+function handleSSEEvent(evt, currentAnswer, setAnswer) {
+  switch (evt.type) {
+    case 'start':
+      currentThreadId = evt.thread_id;
+      document.getElementById('thread-id-display').textContent = ` #${evt.thread_id.substring(0, 8)}`;
+      break;
+    case 'node':
+      if (evt.node === 'planner' && evt.plan) {
+        const steps = Array.isArray(evt.plan) ? evt.plan : [];
+        addThinkingStep('planned', `📋 规划完成，${steps.length} 个步骤`);
+        if (steps.length > 0) {
+          steps.forEach((p, i) => {
+            const query = typeof p === 'string' ? p : (p.query || p.tool || '');
+            const tool = p.tool ? `[${p.tool}] ` : '';
+            addThinkingStep('planned', `   ${i + 1}. ${tool}${query}`);
+          });
+        } else {
+          addThinkingStep('planned', '   （无需工具调用，直接回答）');
+        }
+      } else if (evt.node === 'executor_step') {
+        addThinkingStep('tool', `🔧 步骤 ${evt.step}/${evt.total}: ${evt.tool}`);
+        addThinkingStep('tool', `     ${evt.summary}`);
+      } else if (evt.node === 'executor') {
+        addThinkingStep('executed', `⚡ 执行完成，${evt.tool_count} 个工具调用`);
+      } else if (evt.node === 'tool_step') {
+        addThinkingStep('tool', `🔧 工具 ${evt.step}/${evt.total}: ${evt.tool}`);
+        addThinkingStep('tool', `     ${evt.summary}`);
+      } else if (evt.node === 'tools') {
+        addThinkingStep('executed', `⚡ 工具执行完成，${evt.tool_count} 个结果`);
+      } else if (evt.node === 'synthesizer') {
+        addThinkingStep('done', '✅ 回答生成完毕');
+      } else if (evt.node === 'llm') {
+        addThinkingStep('executed', '⚡ LLM 思考中');
+      } else if (evt.node === 'force_search') {
+        addThinkingStep('tool', '🔍 强制检索知识库');
+      } else {
+        addThinkingStep('executed', `⚡ ${evt.message || evt.node}`);
+      }
+      break;
+    case 'token':
+      appendToBubble(evt.content);
+      setAnswer(currentAnswer + evt.content);
+      break;
+    case 'content':
+      appendToBubble(evt.content);
+      setAnswer(currentAnswer + evt.content);
+      break;
+    case 'done':
+      if (evt.answer) setAnswer(evt.answer);
+      if (evt.thread_id) {
+        currentThreadId = evt.thread_id;
+        document.getElementById('thread-id-display').textContent = ` #${evt.thread_id.substring(0, 8)}`;
+      }
+      break;
+    case 'error':
+      addThinkingStep('error', evt.msg || evt.content || '未知错误');
+      break;
+  }
+}
+
+// ============================================================
+// 工具函数
+// ============================================================
+
+function updateStatus(type, text) {
+  const badge = document.getElementById('status-badge');
+  badge.className = `status-badge status-${type}`;
+  badge.textContent = text;
+}
+
+function scrollToBottom() {
+  const messages = document.getElementById('messages');
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function showToast(msg, type = 'info') {
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 3000);
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function renderMarkdown(text) {
+  if (!text) return '<div class="typing-dots"><span></span><span></span><span></span></div>';
+  let html = escapeHtml(text);
+  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (m, lang, code) => {
+    return `<pre><code>${code.trim()}</code></pre>`;
+  });
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/^## (.+)$/gm, '<p style="font-weight:600;font-size:15px;margin-top:8px;">$1</p>');
+  html = html.replace(/^# (.+)$/gm, '<p style="font-weight:700;font-size:16px;margin-top:8px;">$1</p>');
+  html = html.replace(/^\d+\.\s(.+)$/gm, '<p style="margin-left:20px;">$1</p>');
+  html = html.replace(/^[-•]\s(.+)$/gm, '<p style="margin-left:20px;">• $1</p>');
+  const paragraphs = html.split(/\n\n+/);
+  return paragraphs.map(p => p.startsWith('<') ? p : `<p>${p}</p>`).join('');
+}
+
+// 输入框自适应高度
+document.getElementById('input').addEventListener('input', function() {
+  this.style.height = 'auto';
+  this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+
+// 初始化：渲染对话列表
+renderChatList();
+document.getElementById('input').focus();
+</script>
+
+</body>
+</html>

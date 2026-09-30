@@ -36,12 +36,51 @@ DATA_DIR = Path("data")
 QUESTION_BANK_DIR = DATA_DIR / "question_bank"
 IMAGE_DIR = QUESTION_BANK_DIR / "images"
 
-# 页眉页脚 y 坐标范围（跳过）
 PAGE_HEADER_Y = 60
 PAGE_FOOTER_Y = 780
-
-# 矢量绘图数量超过此阈值才做 VLM
 VECTOR_DRAW_THRESHOLD = 3
+
+COURSE_DIRS = {
+    "操作系统": DATA_DIR / "操作系统" / "往年题",
+    "计算机网络": DATA_DIR / "计算机网络" / "往年题",
+}
+
+COURSE_PROMPTS = {
+    "操作系统": (
+        "你是操作系统课程教师。下面是一道操作系统考试题的文字内容。\n"
+        "请生成参考答案并分类。输出 JSON 对象，包含以下字段:\n\n"
+        '1. "type": 题型 "选择题" / "简答题" / "综合题" / "分析题"\n'
+        '2. "answer": 标准答案。\n'
+        "   - 选择题：只填选项字母，如 \"A\"、\"B\"、\"C\"、\"D\"。不要填文字内容\n"
+        "   - 综合题/简答题：填 null（答案统一放 sub_questions 里）\n"
+        '3. "reference_points": 参考答案要点数组，每条是一句完整的话\n'
+        '4. "topic": 知识点分类\n'
+        '5. "sub_questions": \n'
+        "   - 综合题/大题：必须拆成 [{\"label\": \"(1)\", \"answer\": \"完整答案\"}]，即使只有1个小问也要拆\n"
+        "   - 选择题：填 null\n\n"
+        "注意:\n"
+        "- 只输出 JSON，不要加 markdown 代码块\n"
+        "- 如果文字不完整或有乱码，根据已有信息尽力作答\n"
+        "- 综合题的 answer 字段必须为 null，答案内容全部放在 sub_questions 里"
+    ),
+    "计算机网络": (
+        "你是计算机网络课程教师。下面是一道计算机网络考试题的文字内容。\n"
+        "请生成参考答案并分类。输出 JSON 对象，包含以下字段:\n\n"
+        '1. "type": 题型 "选择题" / "简答题" / "综合题" / "分析题"\n'
+        '2. "answer": 标准答案。\n'
+        "   - 选择题：只填选项字母，如 \"A\"、\"B\"、\"C\"、\"D\"。不要填文字内容\n"
+        "   - 综合题/简答题：填 null（答案统一放 sub_questions 里）\n"
+        '3. "reference_points": 参考答案要点数组，每条是一句完整的话\n'
+        '4. "topic": 知识点分类\n'
+        '5. "sub_questions": \n'
+        "   - 综合题/大题：必须拆成 [{\"label\": \"(1)\", \"answer\": \"完整答案\"}]，即使只有1个小问也要拆\n"
+        "   - 选择题：填 null\n\n"
+        "注意:\n"
+        "- 只输出 JSON，不要加 markdown 代码块\n"
+        "- 如果文字不完整或有乱码，根据已有信息尽力作答\n"
+        "- 综合题的 answer 字段必须为 null，答案内容全部放在 sub_questions 里"
+    ),
+}
 
 
 # ============================================================
@@ -283,23 +322,12 @@ def has_visual_content(q: dict, doc) -> bool:
 # 4. VLM + LLM 生成答案
 # ============================================================
 
-ANSWER_PROMPT = (
-    "你是操作系统课程教师。下面是一道操作系统考试题的文字内容。\n"
-    "请生成参考答案并分类。输出 JSON 对象，包含以下字段:\n\n"
-    '1. "type": 题型 "选择题" / "简答题" / "综合题" / "分析题"\n'
-    '2. "answer": 标准答案。\n'
-    "   - 选择题：只填选项字母，如 \"A\"、\"B\"、\"C\"、\"D\"。不要填文字内容\n"
-    "   - 综合题/简答题：填 null（答案统一放 sub_questions 里）\n"
-    '3. "reference_points": 参考答案要点数组，每条是一句完整的话\n'
-    '4. "topic": 知识点分类\n'
-    '5. "sub_questions": \n'
-    "   - 综合题/大题：必须拆成 [{\"label\": \"(1)\", \"answer\": \"完整答案\"}]，即使只有1个小问也要拆\n"
-    "   - 选择题：填 null\n\n"
-    "注意:\n"
-    "- 只输出 JSON，不要加 markdown 代码块\n"
-    "- 如果文字不完整或有乱码，根据已有信息尽力作答\n"
-    "- 综合题的 answer 字段必须为 null，答案内容全部放在 sub_questions 里"
-)
+def _detect_course(pdf_path: Path) -> str:
+    """从文件路径推断课程名称"""
+    for course, dir_path in COURSE_DIRS.items():
+        if course in str(pdf_path):
+            return course
+    return "操作系统"
 
 
 def _image_to_base64(img: Image.Image, max_size: int = 800) -> str:
@@ -346,17 +374,18 @@ def _vlm_describe_question(img: Image.Image, text: str) -> str:
     return ""
 
 
-def _llm_generate_answer(text: str, vlm_desc: str = "") -> dict:
+def _llm_generate_answer(text: str, vlm_desc: str = "", course: str = "操作系统") -> dict:
     headers = {"Authorization": f"Bearer {ZHIPU_API_KEY}", "Content-Type": "application/json"}
     user_content = f"以下是题目文字:\n{text}"
     if vlm_desc:
         user_content += f"\n\n[VLM 图片描述]\n{vlm_desc}"
     user_content += "\n\n请生成参考答案并分类。"
 
+    prompt = COURSE_PROMPTS.get(course, COURSE_PROMPTS["操作系统"])
     payload = {
         "model": LLM_MODEL,
         "messages": [
-            {"role": "system", "content": ANSWER_PROMPT},
+            {"role": "system", "content": prompt},
             {"role": "user", "content": user_content},
         ],
         "temperature": 0.2,
@@ -412,6 +441,146 @@ def _check_answer_quality(qd: dict, answer_data: dict) -> tuple[bool, str]:
 # ============================================================
 # 5. 生成对比报告
 # ============================================================
+
+def _vlm_extract_page(img: Image.Image) -> str:
+    """用VLM从纯图片页面提取文字内容"""
+    b64 = _image_to_base64(img, max_size=1200)
+    headers = {"Authorization": f"Bearer {ZHIPU_API_KEY}", "Content-Type": "application/json"}
+    prompt = (
+        "这是考试试卷的一页截图。请提取页面中的所有文字内容，"
+        "包括题号、题目、选项、表格内容等。"
+        "保持原始格式和编号。如果有表格，转换为文本格式。"
+        "直接输出提取的文字内容，不要解释。"
+    )
+    payload = {
+        "model": VLM_MODEL,
+        "messages": [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            ]},
+        ],
+        "temperature": 0.1,
+        "max_tokens": 1024,
+    }
+    for attempt in range(3):
+        try:
+            resp = requests.post(ZHIPU_CHAT_URL, headers=headers, json=payload, timeout=60)
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            if "429" in str(e) and attempt < 2:
+                time.sleep(3 * (attempt + 1))
+                continue
+            return ""
+    return ""
+
+
+def _llm_split_questions(page_text: str, course: str) -> list[dict]:
+    """用LLM把整页文字拆成独立题目"""
+    headers = {"Authorization": f"Bearer {ZHIPU_API_KEY}", "Content-Type": "application/json"}
+    prompt = (
+        "你是试卷题目拆分器。下面是从试卷一页提取的文字。"
+        "请把文字拆分成独立题目，每道题包含题号和完整内容。"
+        '输出 JSON 数组，每个元素: {"q_num": 题号数字, "text": "题目完整文字", "is_comprehensive": true/false}\n'
+        "判断标准：选择题/填空题 is_comprehensive=false，大题/综合题/计算题 is_comprehensive=true\n"
+        "只输出 JSON 数组，不要解释。"
+    )
+    payload = {
+        "model": LLM_MODEL,
+        "messages": [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": page_text[:3000]},
+        ],
+        "temperature": 0.1,
+        "max_tokens": 2000,
+    }
+    for attempt in range(3):
+        try:
+            resp = requests.post(ZHIPU_CHAT_URL, headers=headers, json=payload, timeout=60)
+            resp.raise_for_status()
+            result = resp.json()["choices"][0]["message"]["content"].strip()
+            result = re.sub(r"^```(?:json)?\s*", "", result)
+            result = re.sub(r"\s*```$", "", result)
+            arr_match = re.search(r"\[.*\]", result, re.DOTALL)
+            if arr_match:
+                return json.loads(arr_match.group())
+            return json.loads(result)
+        except (json.JSONDecodeError, Exception):
+            if attempt < 2:
+                time.sleep(2)
+                continue
+            return [{"q_num": 1, "text": page_text, "is_comprehensive": True}]
+    return [{"q_num": 1, "text": page_text, "is_comprehensive": True}]
+
+
+def _process_image_only_pdf(doc, pdf_name: str, image_dir: Path, course: str) -> tuple[list[dict], list[dict]]:
+    """处理纯图片PDF：逐页VLM提取文字 → LLM拆题 → 截图
+
+    Returns:
+        questions: [{"q_num", "page", "is_comprehensive", "section", "display_num"}]
+        q_data: [{"qid", "q_num", "image_path", "text", "page", "is_comprehensive", "section"}]
+    """
+    questions = []
+    q_data = []
+    q_counter = 0
+    comp_counter = 0
+
+    for pg in range(doc.page_count):
+        page = doc[pg]
+        page_rect = page.rect
+        # 整页截图
+        zoom = 2.0
+        mat = pymupdf.Matrix(zoom, zoom)
+        pix = page.get_pixmap(matrix=mat)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        img = trim_whitespace(img)
+
+        print(f"  第{pg+1}页: VLM提取...", end=" ")
+        page_text = _vlm_extract_page(img)
+        print(f"{len(page_text)}字")
+
+        if not page_text.strip():
+            continue
+
+        # LLM拆题
+        split_qs = _llm_split_questions(page_text, course)
+
+        for sq in split_qs:
+            q_counter += 1
+            is_comp = sq.get("is_comprehensive", True)
+            if is_comp:
+                comp_counter += 1
+                display_num = comp_counter
+                qid = f"S{display_num}"
+            else:
+                display_num = q_counter
+                qid = f"Q{display_num}"
+
+            # 保存整页截图作为题目图片
+            img_path = image_dir / f"{pdf_name}_{qid}_p{pg+1}.png"
+            img.save(str(img_path), optimize=True)
+
+            questions.append({
+                "q_num": sq.get("q_num", q_counter),
+                "page": pg,
+                "is_comprehensive": is_comp,
+                "section": "综合" if is_comp else "选择",
+                "display_num": display_num,
+            })
+            q_data.append({
+                "qid": qid,
+                "q_num": sq.get("q_num", q_counter),
+                "display_num": display_num,
+                "is_comprehensive": is_comp,
+                "image_path": str(img_path),
+                "text": sq.get("text", page_text),
+                "page": pg + 1,
+                "section": "综合" if is_comp else "选择",
+            })
+
+    return questions, q_data
+
 
 def generate_report(questions: list[dict], output_dir: Path, image_dir: Path, pdf_name: str):
     """生成 HTML 对比报告"""
@@ -548,6 +717,7 @@ def build_question_bank(pdf_path: str, output_dir: Path = None) -> list[dict]:
     """
     pdf_path = Path(pdf_path)
     pdf_name = pdf_path.stem
+    course = _detect_course(pdf_path)
 
     if output_dir is None:
         output_dir = QUESTION_BANK_DIR
@@ -555,7 +725,7 @@ def build_question_bank(pdf_path: str, output_dir: Path = None) -> list[dict]:
     output_dir.mkdir(parents=True, exist_ok=True)
     image_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"提取: {pdf_name}")
+    print(f"提取: {pdf_name} (课程: {course})")
     print("=" * 60)
 
     doc = pymupdf.open(str(pdf_path))
@@ -565,10 +735,63 @@ def build_question_bank(pdf_path: str, output_dir: Path = None) -> list[dict]:
     questions, sections = locate_questions(doc)
     print(f"  大题段落: {len(sections)}")
     for s in sections:
-        print(f"    第{s['page']+1}页: {s['title']}")
+        try:
+            print(f"    第{s['page']+1}页: {s['title']}".encode('utf-8', errors='replace').decode('utf-8'))
+        except:
+            print(f"    第{s['page']+1}页: [编码问题]")
     choice_qs = [q for q in questions if not q["is_comprehensive"]]
     comp_qs = [q for q in questions if q["is_comprehensive"]]
     print(f"  选择题: {len(choice_qs)} 道, 综合题: {len(comp_qs)} 道")
+
+    # 纯图片PDF回退：无文字层时用VLM逐页提取
+    if not questions:
+        total_text = sum(len(doc[pg].get_text().strip()) for pg in range(doc.page_count))
+        if total_text == 0:
+            print("  [!] 检测到纯图片PDF，切换到VLM逐页提取模式")
+            questions, q_data = _process_image_only_pdf(doc, pdf_name, image_dir, course)
+            visual_questions = list(qd["qid"] for qd in q_data)
+            print(f"  VLM提取: {len(questions)} 道题")
+            # 跳到答案生成步骤
+            print("\n[4] 生成参考答案...")
+            results = []
+            for qd in q_data:
+                qid = qd["qid"]
+                text = qd["text"]
+                print(f"  {qid}: LLM生成...", end=" ")
+                answer_data = _llm_generate_answer(text, "", course)
+                ans = str(answer_data.get("answer", ""))[:40].replace("\n", " ") if answer_data else "失败"
+                print(f"答案={ans}")
+                needs_review, review_reason = _check_answer_quality(qd, answer_data)
+                if needs_review:
+                    print(f"    [!] 需人工审查: {review_reason}")
+                results.append({
+                    "qid": qid,
+                    "q_num": qd["q_num"],
+                    "display_num": qd.get("display_num", qd["q_num"]),
+                    "type": "综合题" if qd["is_comprehensive"] else "选择题",
+                    "course": course,
+                    "page": qd["page"],
+                    "image": Path(qd["image_path"]).name,
+                    "text": qd["text"],
+                    "answer": answer_data.get("answer"),
+                    "reference_points": answer_data.get("reference_points", []),
+                    "topic": answer_data.get("topic", ""),
+                    "sub_questions": answer_data.get("sub_questions"),
+                    "section": qd.get("section", ""),
+                    "source": pdf_name,
+                    "source_file": pdf_path.name,
+                    "needs_review": needs_review,
+                    "review_reason": review_reason,
+                })
+            # 生成报告并保存
+            generate_report(results, output_dir, image_dir, pdf_name)
+            json_path = output_dir / f"questions_{pdf_name}.json"
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(results, f, ensure_ascii=False, indent=2)
+            print(f"\n完成! 共 {len(results)} 道题")
+            print(f"保存到: {json_path}")
+            print(f"对比报告: {output_dir / f'report_{pdf_name}.html'}")
+            return results
 
     # 2. 截图
     print("\n[2] 截取题目图片...")
@@ -600,10 +823,10 @@ def build_question_bank(pdf_path: str, output_dir: Path = None) -> list[dict]:
             print(f"  {qid}: VLM描述...", end=" ")
             vlm_desc = _vlm_describe_question(img, text)
             print(f"({len(vlm_desc)}字) LLM生成...", end=" ")
-            answer_data = _llm_generate_answer(text, vlm_desc)
+            answer_data = _llm_generate_answer(text, vlm_desc, course)
         else:
             print(f"  {qid}: 纯文字...", end=" ")
-            answer_data = _llm_generate_answer(text)
+            answer_data = _llm_generate_answer(text, course=course)
 
         ans = str(answer_data.get("answer", ""))[:40].replace("\n", " ") if answer_data else "失败"
         print(f"答案={ans}")
@@ -617,6 +840,7 @@ def build_question_bank(pdf_path: str, output_dir: Path = None) -> list[dict]:
             "q_num": qd["q_num"],
             "display_num": qd.get("display_num", qd["q_num"]),
             "type": "综合题" if qd["is_comprehensive"] else "选择题",
+            "course": course,
             "page": qd["page"],
             "image": Path(qd["image_path"]).name,
             "text": qd["text"],
@@ -649,25 +873,25 @@ def build_question_bank(pdf_path: str, output_dir: Path = None) -> list[dict]:
 
 
 def build_all(output_dir: Path = None):
-    """批量处理所有往年题"""
+    """批量处理所有课程的往年题"""
     if output_dir is None:
         output_dir = QUESTION_BANK_DIR
-
-    exam_dir = DATA_DIR / "操作系统" / "往年题"
-    if not exam_dir.exists():
-        print(f"往年题目录不存在: {exam_dir}")
-        return
-
-    pdf_files = list(exam_dir.glob("*.pdf"))
-    print(f"找到 {len(pdf_files)} 份试卷")
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     all_questions = []
-    for pdf in sorted(pdf_files):
-        print(f"\n{'='*60}")
-        questions = build_question_bank(str(pdf), output_dir)
-        all_questions.extend(questions)
+    for course, exam_dir in COURSE_DIRS.items():
+        if not exam_dir.exists():
+            print(f"跳过（目录不存在）: {exam_dir}")
+            continue
 
-    # 合并保存
+        pdf_files = sorted(exam_dir.glob("*.pdf"))
+        print(f"\n[{course}] 找到 {len(pdf_files)} 份试卷")
+
+        for pdf in pdf_files:
+            print(f"\n{'='*60}")
+            questions = build_question_bank(str(pdf), output_dir)
+            all_questions.extend(questions)
+
     combined_file = output_dir / "question_bank.json"
     with open(combined_file, "w", encoding="utf-8") as f:
         json.dump(all_questions, f, ensure_ascii=False, indent=2)
