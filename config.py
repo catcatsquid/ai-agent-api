@@ -64,7 +64,10 @@ LOG_FILE = _optional("LOG_FILE", "")
 API_KEY = _optional("API_KEY", "")
 
 # JWT 配置（JWT_SECRET 为空则不开启 JWT 认证）
-JWT_SECRET = _optional("JWT_SECRET", "")
+# 注意: /auth/login 会签发 token, 若 JWT_SECRET 为空则自动生成进程级随机密钥,
+#       重启后旧 token 失效。生产环境务必在 .env 中配置固定强密钥。
+import secrets as _secrets
+JWT_SECRET = _optional("JWT_SECRET", "") or _secrets.token_hex(32)
 JWT_ALGORITHM = _optional("JWT_ALGORITHM", "HS256")
 JWT_EXPIRE_MINUTES = int(_optional("JWT_EXPIRE_MINUTES", "60"))
 
