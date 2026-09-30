@@ -140,10 +140,25 @@
       <div class="empty-state" style="padding: 30px 10px; font-size: 12px;">暂无对话</div>
     </div>
     <div class="sidebar-footer">
-      <div style="font-size: 11px; color: #6b7280; margin-bottom: 6px;">推理模式</div>
-      <div class="mode-selector">
-        <button class="mode-btn active" onclick="setMode('plan', this)">Plan-Execute</button>
-        <button class="mode-btn" onclick="setMode('react', this)">ReAct</button>
+      <div style="font-size: 11px; color: #6b7280; margin-bottom: 6px;">模式</div>
+      <div class="mode-selector" style="margin-bottom: 6px;">
+        <button class="mode-btn active" onclick="setAppMode('qa', this)">问答</button>
+        <button class="mode-btn" onclick="setAppMode('learn', this)">学习</button>
+        <button class="mode-btn" onclick="setAppMode('review', this)">复习</button>
+      </div>
+      <div id="qa-options">
+        <div style="font-size: 11px; color: #6b7280; margin-bottom: 4px;">推理模式</div>
+        <div class="mode-selector">
+          <button class="mode-btn active" onclick="setReasoningMode('plan', this)">Plan</button>
+          <button class="mode-btn" onclick="setReasoningMode('react', this)">ReAct</button>
+        </div>
+      </div>
+      <div id="review-options" style="display:none;">
+        <div style="font-size: 11px; color: #6b7280; margin-bottom: 4px;">复习类型</div>
+        <div class="mode-selector">
+          <button class="mode-btn active" onclick="setReviewType('knowledge', this)">知识点速览</button>
+          <button class="mode-btn" onclick="setReviewType('quiz', this)">刷题训练</button>
+        </div>
       </div>
     </div>
   </div>
@@ -182,8 +197,12 @@
 <script>
 const API_KEY = localStorage.getItem('api_key') || '';
 let authToken = API_KEY ? { 'X-API-Key': API_KEY } : {};
-let currentMode = 'plan';
+let currentAppMode = 'qa';
+let currentReasoningMode = 'plan';
+let currentReviewType = 'knowledge';
 let currentThreadId = null;
+let currentLearnSessionId = null;
+let currentReviewSessionId = null;
 let isStreaming = false;
 let currentMsg = null;
 
@@ -235,7 +254,7 @@ function createNewChat() {
     id,
     title: '新对话',
     messages: [],
-    mode: currentMode,
+    appMode: currentAppMode,
     createdAt: Date.now(),
   };
   chats.unshift(chat);
@@ -248,12 +267,9 @@ function loadChat(id) {
   const chat = getChat(id);
   if (!chat) return;
   currentChatId = id;
-  currentThreadId = null;  // 历史对话不续传，重新开 thread
-  currentMode = chat.mode || 'plan';
-  // 更新模式按钮
-  document.querySelectorAll('.mode-btn').forEach(b => {
-    b.classList.toggle('active', b.textContent.toLowerCase().includes(currentMode));
-  });
+  currentThreadId = null;
+  currentLearnSessionId = null;
+  currentReviewSessionId = null;
   renderMessages(chat.messages);
   document.getElementById('chat-title').textContent = chat.title;
   document.getElementById('thread-id-display').textContent = '';
@@ -318,6 +334,8 @@ function toggleSidebar() {
 
 function newChat() {
   currentThreadId = null;
+  currentLearnSessionId = null;
+  currentReviewSessionId = null;
   currentChatId = null;
   document.getElementById('messages').innerHTML = `
     <div class="welcome" id="welcome">
@@ -337,9 +355,30 @@ function newChat() {
   document.getElementById('input').focus();
 }
 
-function setMode(mode, el) {
-  currentMode = mode;
-  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+function setAppMode(mode, el) {
+  currentAppMode = mode;
+  el.parentElement.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('qa-options').style.display = mode === 'qa' ? 'block' : 'none';
+  document.getElementById('review-options').style.display = mode === 'review' ? 'block' : 'none';
+  currentThreadId = null;
+  currentLearnSessionId = null;
+  currentReviewSessionId = null;
+  const input = document.getElementById('input');
+  if (mode === 'qa') input.placeholder = '输入你的问题...';
+  else if (mode === 'learn') input.placeholder = '输入要学习的课程和章节，如"学操作系统的进程与线程"...';
+  else input.placeholder = '输入要复习的章节，或"开始刷题"...';
+}
+
+function setReasoningMode(mode, el) {
+  currentReasoningMode = mode;
+  el.parentElement.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+}
+
+function setReviewType(type, el) {
+  currentReviewType = type;
+  el.parentElement.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
   el.classList.add('active');
 }
 
@@ -491,9 +530,20 @@ async function sendMessage() {
   const tid = currentThreadId;
 
   try {
-    url = '/qa/stream';
-    body = { query: text, mode: currentMode };
-    if (currentThreadId) body.thread_id = currentThreadId;
+    let url, body;
+    if (currentAppMode === 'qa') {
+      url = '/qa/stream';
+      body = { query: text, mode: currentReasoningMode };
+      if (currentThreadId) body.thread_id = currentThreadId;
+    } else if (currentAppMode === 'learn') {
+      url = '/learn/stream';
+      body = { query: text };
+      if (currentLearnSessionId) body.session_id = currentLearnSessionId;
+    } else {
+      url = '/review/stream';
+      body = { query: text, review_type: currentReviewType };
+      if (currentReviewSessionId) body.session_id = currentReviewSessionId;
+    }
 
     const response = await fetch(url, {
       method: 'POST',
@@ -532,7 +582,7 @@ async function sendMessage() {
     const chat = getChat(currentChatId);
     if (chat) {
       chat.messages.push({ role: 'assistant', content: fullAnswer });
-      chat.mode = currentMode;
+      chat.appMode = currentAppMode;
       saveChats();
       renderChatList();
     }
@@ -553,8 +603,14 @@ async function sendMessage() {
 function handleSSEEvent(evt, currentAnswer, setAnswer) {
   switch (evt.type) {
     case 'start':
-      currentThreadId = evt.thread_id;
-      document.getElementById('thread-id-display').textContent = ` #${evt.thread_id.substring(0, 8)}`;
+      if (evt.thread_id) {
+        currentThreadId = evt.thread_id;
+        document.getElementById('thread-id-display').textContent = ` #${evt.thread_id.substring(0, 8)}`;
+      }
+      if (evt.session_id) {
+        if (currentAppMode === 'learn') currentLearnSessionId = evt.session_id;
+        else if (currentAppMode === 'review') currentReviewSessionId = evt.session_id;
+      }
       break;
     case 'node':
       if (evt.node === 'planner' && evt.plan) {
@@ -589,6 +645,11 @@ function handleSSEEvent(evt, currentAnswer, setAnswer) {
         addThinkingStep('executed', `⚡ ${evt.message || evt.node}`);
       }
       break;
+    case 'phase':
+      if (evt.message) {
+        addThinkingStep('planned', evt.message);
+      }
+      break;
     case 'token':
       appendToBubble(evt.content);
       setAnswer(currentAnswer + evt.content);
@@ -602,6 +663,10 @@ function handleSSEEvent(evt, currentAnswer, setAnswer) {
       if (evt.thread_id) {
         currentThreadId = evt.thread_id;
         document.getElementById('thread-id-display').textContent = ` #${evt.thread_id.substring(0, 8)}`;
+      }
+      if (evt.session_id) {
+        if (currentAppMode === 'learn') currentLearnSessionId = evt.session_id;
+        else if (currentAppMode === 'review') currentReviewSessionId = evt.session_id;
       }
       break;
     case 'error':
@@ -644,6 +709,9 @@ function renderMarkdown(text) {
   let html = escapeHtml(text);
   html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (m, lang, code) => {
     return `<pre><code>${code.trim()}</code></pre>`;
+  });
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, url) => {
+    return `<img src="${url}" alt="${alt}" style="max-width:100%; border-radius:6px; margin:8px 0;" onerror="this.style.display='none'">`;
   });
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');

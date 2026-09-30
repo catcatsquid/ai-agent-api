@@ -27,6 +27,7 @@ from course_agent.graph import graph, react_graph
 from course_agent.auth import any_auth, create_jwt, api_key_auth
 from course_agent.logger import logger
 from course_agent.middleware import setup_middlewares
+from course_agent import learn, review
 from rag_tool import get_knowledge_base, KnowledgeBase, ChunkConfig
 
 app = FastAPI(title="Course QA Agent API", version="3.0")
@@ -59,6 +60,17 @@ class QueryResponse(BaseModel):
     plan: list = []
     thread_id: str = None
     turn_count: int = 0
+
+
+class LearnRequest(BaseModel):
+    query: str
+    session_id: str = None
+
+
+class ReviewRequest(BaseModel):
+    query: str
+    review_type: str = "knowledge"
+    session_id: str = None
 
 
 class LoginRequest(BaseModel):
@@ -421,6 +433,55 @@ async def chat_stream_frontend(req: QueryRequest, auth: dict = Depends(any_auth)
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
         },
+    )
+
+
+# ============================================================
+# 学习模式 + 复习模式（SSE 流式）
+# ============================================================
+
+@app.post("/learn/stream")
+def learn_stream(req: LearnRequest):
+    """学习模式 SSE 流式接口
+
+    流程: 解析课程章节 → 生成大纲 → 逐节教学+小测 → 批改 → 章节总复习
+    """
+    def event_stream():
+        try:
+            for event in learn.process_message(req.session_id, req.query):
+                yield _sse(event)
+        except Exception as e:
+            yield _sse({"type": "error", "msg": str(e)[:200]})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
+@app.post("/review/stream")
+def review_stream(req: ReviewRequest):
+    """复习模式 SSE 流式接口
+
+    review_type="knowledge": 知识点速览
+    review_type="quiz": 刷题训练
+    """
+    def event_stream():
+        try:
+            if req.review_type == "quiz":
+                for event in review.process_quiz(req.session_id, req.query):
+                    yield _sse(event)
+            else:
+                for event in review.process_knowledge_review(req.session_id, req.query):
+                    yield _sse(event)
+        except Exception as e:
+            yield _sse({"type": "error", "msg": str(e)[:200]})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
 
 
