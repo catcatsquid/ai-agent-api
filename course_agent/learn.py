@@ -7,12 +7,14 @@
   done: 本章学习完成
 """
 
-import json
 import re
 import uuid
 
-from config import ZHIPU_API_KEY, ZHIPU_CHAT_URL, ZHIPU_MODEL
 from course_agent.llm import stream_chat, chat
+from course_agent.chapter_utils import (
+    get_chapters, match_chapter_with_fallback, format_chapter_list,
+    get_chapter_content,
+)
 from rag_tool import get_knowledge_base
 from course_agent.logger import logger
 
@@ -28,6 +30,8 @@ TEACHING_PROMPT = """你是一位经验丰富的大学教师，正在给学生�
 4. 适当使用例子
 5. 控制篇幅，重点突出
 6. 用 Markdown 格式输出
+7. 只讲解知识点，不要介绍讲师、联系方式、课程大纲等元信息
+8. 不要照读知识库原文，要用自己的话讲解
 """
 
 OUTLINE_PROMPT = """请根据以下知识库内容，为《{chapter}》这一章生成分节教学大纲。
@@ -36,6 +40,7 @@ OUTLINE_PROMPT = """请根据以下知识库内容，为《{chapter}》这一章
 1. 分成 3-5 个小节，按教学顺序排列
 2. 每个小节标题简洁明了
 3. 覆盖本章核心知识点
+4. 忽略讲师介绍、联系方式、课程大纲等非知识内容
 
 知识库内容:
 {context}
@@ -52,6 +57,8 @@ QUIZ_PROMPT = """请基于以下教学内容，出3道小测题（2道选择题 
 1. 题目覆盖本节核心知识点
 2. 选择题提供4个选项(A/B/C/D)
 3. 难度适中
+4. 绝对不要在题目中泄露答案
+5. 不要在题目后附带答案或解析
 
 格式:
 ## 本节小测
@@ -74,7 +81,7 @@ D. ...
 [题目内容]
 
 ---
-请作答后发送答案，格式如: 1.A 2.C 3.你的回答
+请作答后发送答案，选择题格式如 1.A 2.B，简答题直接写出你的回答。
 """
 
 GRADING_PROMPT = """请批改以下小测题:
@@ -130,88 +137,19 @@ REVIEW_PROMPT = """请为《{chapter}》这一章做总复习。
 """
 
 
-def _get_chapters():
-    """获取知识库中所有章节"""
-    try:
-        kb = get_knowledge_base()
-        stats = kb.get_stats()
-        return list(stats.get("by_chapter", {}).keys())
-    except Exception as e:
-        logger.error("获取章节列表失败: %s", e)
-        return []
-
-
-def _match_chapter(user_input, chapters):
-    """从用户输入中匹配知识库章节"""
-    for ch in chapters:
-        if ch in user_input:
-            return ch
-    for ch in chapters:
-        keywords = re.split(r"[\s与和及]", ch)
-        matched = sum(1 for kw in keywords if len(kw) > 1 and kw in user_input)
-        if matched > 0 and matched >= len(keywords) * 0.5:
-            return ch
-    synonyms = {
-        "进程": "进程与线程", "线程": "进程与线程",
-        "调度": "OS调度", "CPU调度": "OS调度",
-        "并发": "并发与同步", "同步": "并发与同步", "互斥": "并发与同步",
-        "死锁": "死锁",
-        "内存": "内存管理与虚拟内存", "虚拟内存": "内存管理与虚拟内存",
-        "分页": "内存管理与虚拟内存", "分段": "内存管理与虚拟内存",
-    }
-    for keyword, chapter in synonyms.items():
-        if keyword in user_input and chapter in chapters:
-            return chapter
-    return None
-
-
-def _llm_match_chapter(user_input, chapters):
-    """用 LLM 匹配章节"""
-    prompt = (
-        f"用户想学习: {user_input}\n"
-        f"可选章节:\n{chr(10).join(chapters)}\n"
-        "只输出匹配的章节名称，无匹配则输出'无'。"
-    )
-    try:
-        result = chat([
-            {"role": "system", "content": "你是章节匹配器。"},
-            {"role": "user", "content": prompt},
-        ], temperature=0.1)
-        result = result.strip().strip("《》\"'")
-        if result in chapters:
-            return result
-    except Exception as e:
-        logger.warning("LLM 章节匹配失败: %s", e)
-    return None
-
-
-def _get_chapter_content(chapter):
-    """检索某章节的知识库内容"""
-    try:
-        kb = get_knowledge_base()
-        collection = kb._get_collection()
-        results = collection.get(where={"chapter": chapter})
-        chunks = []
-        for i, doc in enumerate(results["documents"]):
-            meta = results["metadatas"][i]
-            chunks.append({
-                "text": doc,
-                "source": meta.get("source", ""),
-                "doc_type": meta.get("doc_type", ""),
-            })
-        return chunks
-    except Exception as e:
-        logger.error("检索章节内容失败: %s", e)
-        return []
-
-
 def process_message(session_id, user_input):
     """处理学习模式消息，yield SSE dict 事件"""
 
     if not session_id or session_id not in _sessions:
-        session_id = _start_session(user_input)
+        session_id, fail_msg = _start_session(user_input)
         if not session_id:
-            yield {"type": "error", "msg": "无法识别课程章节。请说明课程和章节，如'学操作系统的进程与线程'"}
+            chapters = get_chapters()
+            if chapters:
+                chapter_list = format_chapter_list(chapters)
+                msg = f"{fail_msg}\n\n📖 可选章节:\n{chapter_list}\n\n请直接说出章节名称，如：学进程与线程"
+            else:
+                msg = "知识库为空，请先导入课程文档"
+            yield {"type": "error", "msg": msg}
             return
         yield from _teach_and_quiz(session_id)
         return
@@ -242,19 +180,17 @@ def process_message(session_id, user_input):
 
 
 def _start_session(user_input):
-    """开始新学习会话"""
-    chapters = _get_chapters()
+    """开始新学习会话，返回 (session_id, fail_msg)"""
+    chapters = get_chapters()
     if not chapters:
         logger.error("知识库为空")
-        return None
+        return None, "知识库为空，请先导入课程文档"
 
-    chapter = _match_chapter(user_input, chapters)
+    chapter, fail_msg = match_chapter_with_fallback(user_input, chapters)
     if not chapter:
-        chapter = _llm_match_chapter(user_input, chapters)
-    if not chapter:
-        return None
+        return None, fail_msg
 
-    chunks = _get_chapter_content(chapter)
+    chunks = get_chapter_content(chapter)
     if not chunks:
         try:
             results = get_knowledge_base().search(chapter, top_k=15)
@@ -262,7 +198,7 @@ def _start_session(user_input):
         except Exception:
             pass
     if not chunks:
-        return None
+        return None, f"章节《{chapter}》在知识库中没有内容"
 
     context = "\n\n".join(c["text"] for c in chunks[:20])
 
@@ -273,7 +209,7 @@ def _start_session(user_input):
         ], temperature=0.3)
     except Exception as e:
         logger.error("生成大纲失败: %s", e)
-        return None
+        return None, "大纲生成失败，请重试"
 
     sections = [s.strip() for s in outline.strip().split("\n") if s.strip()]
     sections = [re.sub(r"^[\d.、\-\*]+", "", s).strip() for s in sections]
@@ -294,7 +230,7 @@ def _start_session(user_input):
     }
 
     logger.info("学习会话创建: chapter=%s, sections=%s", chapter, sections)
-    return session_id
+    return session_id, ""
 
 
 def _teach_and_quiz(session_id):
@@ -431,6 +367,8 @@ def _chapter_review(session_id):
 def _is_quiz_answer(text):
     """判断用户输入是否是测验答案"""
     text = text.strip()
+    if "不会" in text or "不知道" in text:
+        return True
     if re.match(r"^[A-Da-d\s.、,]+$", text) and len(text) <= 20:
         return True
     if re.search(r"\d+\s*[.．、]?\s*[A-Da-d]", text):

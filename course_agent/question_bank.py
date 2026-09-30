@@ -52,6 +52,8 @@ COURSE_PROMPTS = {
         '1. "type": 题型 "选择题" / "简答题" / "综合题" / "分析题"\n'
         '2. "answer": 标准答案。\n'
         "   - 选择题：只填选项字母，如 \"A\"、\"B\"、\"C\"、\"D\"。不要填文字内容\n"
+        "   - 判断题：只填 \"对\" 或 \"错\"（或 \"正确\" / \"错误\"），不要填 A/B/C/D 字母\n"
+        "   - 填空题：填具体答案内容（数字或词语，不要填字母）\n"
         "   - 综合题/简答题：填 null（答案统一放 sub_questions 里）\n"
         '3. "reference_points": 参考答案要点数组，每条是一句完整的话\n'
         '4. "topic": 知识点分类\n'
@@ -69,6 +71,8 @@ COURSE_PROMPTS = {
         '1. "type": 题型 "选择题" / "简答题" / "综合题" / "分析题"\n'
         '2. "answer": 标准答案。\n'
         "   - 选择题：只填选项字母，如 \"A\"、\"B\"、\"C\"、\"D\"。不要填文字内容\n"
+        "   - 判断题：只填 \"对\" 或 \"错\"（或 \"正确\" / \"错误\"），不要填 A/B/C/D 字母\n"
+        "   - 填空题：填具体答案内容（数字或词语，不要填字母）\n"
         "   - 综合题/简答题：填 null（答案统一放 sub_questions 里）\n"
         '3. "reference_points": 参考答案要点数组，每条是一句完整的话\n'
         '4. "topic": 知识点分类\n'
@@ -87,16 +91,148 @@ COURSE_PROMPTS = {
 # 1. 定位题目边界
 # ============================================================
 
+# 题型分类 -> 输出 type 名称
+CATEGORY_TYPE = {"S": "综合题", "F": "填空题", "P": "判断题", "Q": "选择题"}
+
+
+def _filter_code_line_numbers(questions):
+    """过滤掉代码行号（密集的连续数字行）。
+
+    规则：同一页内，连续 5+ 个候选题的平均纵向间距 < 25px → 判定为代码行号，全部移除。
+    """
+    if len(questions) < 5:
+        return questions
+
+    # 按页分组
+    by_page = {}
+    for q in questions:
+        by_page.setdefault(q["page"], []).append(q)
+
+    result = []
+    for pg, pq_list in sorted(by_page.items()):
+        pq_list.sort(key=lambda x: x["y_start"])
+        to_remove = set()
+
+        # 滑动窗口找密集簇
+        i = 0
+        while i < len(pq_list):
+            j = i + 1
+            while j < len(pq_list) and pq_list[j]["y_start"] - pq_list[j - 1]["y_start"] < 25:
+                j += 1
+            cluster_size = j - i
+            if cluster_size >= 5:
+                for k in range(i, j):
+                    to_remove.add(id(pq_list[k]))
+            i = j if j > i + 1 else i + 1
+
+        for q in pq_list:
+            if id(q) not in to_remove:
+                result.append(q)
+
+    return result
+
+
+def _add_section_level_questions(sections, questions, all_lines):
+    """为没有小题的综合大题段落生成一道综合题（整段作为一题）。
+
+    适用场景：大题下面是 (1)(2)(3) 小问或整段论述，没有用 1. 2. 3. 编号。
+    """
+    # 统计每个 section 下的小题数
+    section_q_count = {}
+    for q in questions:
+        sec = q["section"]
+        section_q_count[sec] = section_q_count.get(sec, 0) + 1
+
+    section_questions = []
+    for idx, sec in enumerate(sections):
+        sec_title = sec["title"]
+        count = section_q_count.get(sec_title, 0)
+
+        # 如果该 section 下没有小题，且 section 不是选择/填空/判断题型 → 生成一道综合题
+        is_choice_section = any(k in sec_title for k in ["选择", "填空", "判断", "单项", "多项"])
+        if count == 0 and not is_choice_section:
+            # 计算这道大题的结束位置（下一个 section 开头）
+            end_y = PAGE_FOOTER_Y
+            end_page = sec["page"]
+            y_end_next_page = None
+
+            if idx + 1 < len(sections):
+                next_sec = sections[idx + 1]
+                if next_sec["page"] == sec["page"]:
+                    end_y = next_sec["y"] - 3
+                    end_page = sec["page"]
+                else:
+                    end_page = next_sec["page"]
+                    y_end_next_page = next_sec["y"] - 3
+
+            section_questions.append({
+                "q_num": idx + 1,
+                "text": sec_title[:80],
+                "page": sec["page"],
+                "y_start": sec["y"],
+                "y_end": end_y,
+                "end_page": end_page,
+                "y_end_next_page": y_end_next_page,
+                "section": sec_title,
+                "category": "S",
+                "is_comprehensive": True,
+                "_is_section_level": True,
+            })
+
+    return section_questions
+
+
 def locate_questions(doc) -> tuple[list[dict], list[dict]]:
     """扫描所有页，定位每道题的位置
 
     Returns:
-        questions: [{"q_num", "page", "y_start", "y_end", "section", "is_comprehensive", "display_num"}]
+        questions: [{"q_num", "page", "y_start", "y_end", "section", "is_comprehensive", "display_num", "category"}]
         sections: [{"title", "page", "y"}]
     """
-    section_pattern = re.compile(r"^[一二三四五六七八九十]+、")
+    # 大题段落标题：中文数字 + 、（兼容康熙部首 U+2F00-U+2F0F 的 ⼀⼆三四五六七八九十）
+    section_pattern = re.compile(r"^[⼀⼆三四五六七八九十一二三四五六七八九十]+、")
     # 题号：1. 2. 10. 等，排除 "1.0" "0.4" 等小数格式
     q_pattern = re.compile(r"^(\d+)[.．、](?!\d)")
+
+    def classify_category(q, region_text=""):
+        """按大题 section 优先、文本特征补充的策略判定题型。
+
+        优先级：
+        1. section 明确标注（综合/判断/填空/选择）→ 直接用
+        2. 文本特征只用来修正"选择"大区里混入的异类
+        3. 都识别不出 → 回退选择题（最常见）
+        """
+        sec = q["section"]
+
+        # ---- 第1层：section 明确标注 ----
+        if "综合" in sec or "应用" in sec or "大题" in sec or "计算" in sec:
+            return "S"
+        if "判断" in sec:
+            return "P"
+        if "填空" in sec:
+            return "F"
+        if "选择" in sec or "单项" in sec or "多项" in sec:
+            return _refine_by_text(region_text, default="Q")
+
+        # ---- 第2层：section 不明确，用文本特征猜 ----
+        return _refine_by_text(region_text, default="Q")
+
+    def _refine_by_text(text, default="Q"):
+        """用题目区域文本特征辅助判定。只处理明显特征，不做激进猜测。"""
+        if not text:
+            return default
+        # 有 A/B/C/D 选项 → 选择
+        if re.search(r"[A-D][.．、）)]\s", text):
+            return "Q"
+        # 有填空下划线/空括号 → 填空
+        if re.search(r"＿{2,}|_{3,}|____", text):
+            return "F"
+        if re.search(r"[（(]\s{2,}[）)]", text):
+            return "F"
+        # 有 【对/错】/【√/×】 标记 → 判断
+        if re.search(r"[【\[]\s*(对|错|正确|错误|√|×|T|F)\s*[】\]]", text):
+            return "P"
+        return default
 
     all_lines = []
 
@@ -171,6 +307,16 @@ def locate_questions(doc) -> tuple[list[dict], list[dict]]:
             deduped.append(q)
     questions = deduped
 
+    # 过滤代码行号：连续 5+ 道"题"纵向间距 < 25px，判定为代码行号
+    questions = _filter_code_line_numbers(questions)
+
+    # 没有检测到小题的综合大题段落 → 整段作为一道综合题
+    section_questions = _add_section_level_questions(sections, questions, all_lines)
+    if section_questions:
+        questions.extend(section_questions)
+        # 重新按位置排序
+        questions.sort(key=lambda q: (q["page"], q["y_start"]))
+
     # 计算每题结束位置
     all_items = []
     for s in sections:
@@ -183,6 +329,9 @@ def locate_questions(doc) -> tuple[list[dict], list[dict]]:
         if item["type"] != "question":
             continue
         q = item["q"]
+        # section-level 题目已经预设好边界，跳过
+        if q.get("_is_section_level"):
+            continue
         q["y_end"] = PAGE_FOOTER_Y
         q["end_page"] = q["page"]
 
@@ -198,16 +347,40 @@ def locate_questions(doc) -> tuple[list[dict], list[dict]]:
                 else:
                     q["end_page"] = q["page"]
 
-    # 区分选择题和综合题
+    # 为每道题构建区域完整文本（题号行到下一题之间），用于题型判定
+    for i, q in enumerate(questions):
+        region = []
+        next_start = None
+        for j in range(i + 1, len(questions)):
+            if questions[j]["page"] == q["page"] and questions[j]["y_start"] >= q["y_start"]:
+                next_start = questions[j]["y_start"]
+                break
+        limit_y = next_start if next_start else q["y_end"]
+        for ln in all_lines:
+            if ln["page"] == q["page"] and q["y_start"] <= ln["y"] < limit_y:
+                region.append(ln["text"])
+        q["region_text"] = " ".join(region)
+
+    # 按题型分类，qid 保持 Q{n} / S{n} 两级（向后兼容）
+    # category 存细分类（S/F/P/Q），qid 只用 Q/S 前缀
+    # section-level 题已预先设好题型，跳过
+    q_counter = 0
     comp_counter = 0
     for q in questions:
-        if "综合" in q["section"]:
+        if q.get("_is_section_level"):
             comp_counter += 1
-            q["is_comprehensive"] = True
             q["display_num"] = comp_counter
+            continue
+        cat = classify_category(q, q.get("region_text", ""))
+        q["category"] = cat
+        if cat == "S":
+            comp_counter += 1
+            q["display_num"] = comp_counter
+            q["is_comprehensive"] = True
         else:
+            q_counter += 1
+            q["display_num"] = q_counter
             q["is_comprehensive"] = False
-            q["display_num"] = q["q_num"]
 
     return questions, sections
 
@@ -288,6 +461,7 @@ def crop_question(doc, q: dict, pdf_name: str, image_dir: Path) -> dict:
         "qid": qid,
         "q_num": q["q_num"],
         "is_comprehensive": q["is_comprehensive"],
+        "category": q.get("category", "S" if q["is_comprehensive"] else "Q"),
         "image_path": str(img_path),
         "page": q["page"] + 1,
         "end_page": q.get("end_page", q["page"]) + 1,
@@ -420,22 +594,42 @@ def _llm_generate_answer(text: str, vlm_desc: str = "", course: str = "操作系
 
 
 def _check_answer_quality(qd: dict, answer_data: dict) -> tuple[bool, str]:
-    """检查答案格式是否合规，返回 (needs_review, reason)"""
+    """按题型检查答案格式是否合规，返回 (needs_review, reason)。
+    修复：原逻辑对非综合题一律要求单字母A-D，导致填空/判断/多选被误标。"""
     if not answer_data:
         return True, "答案生成失败"
 
-    if qd["is_comprehensive"]:
+    cat = qd.get("category", "S" if qd["is_comprehensive"] else "Q")
+
+    if cat == "S":
         reason = ""
         if answer_data.get("answer") is not None:
             reason = "综合题 answer 不为 null"
         if not answer_data.get("sub_questions"):
             reason = (reason + "; " if reason else "") + "综合题缺少 sub_questions"
         return (bool(reason), reason) if reason else (False, "")
-    else:
-        ans_val = str(answer_data.get("answer", "")).strip()
-        if not re.match(r"^[A-D]$", ans_val):
-            return True, f"选择题答案不是单字母A-D: '{ans_val[:20]}'"
+
+    ans_val = str(answer_data.get("answer", "")).strip()
+
+    if cat == "Q":
+        # 选择题：兼容单字母、多选（如"ABD"）、以及选项文本
+        if not re.match(r"^[A-D]+$", ans_val):
+            return True, f"选择题答案格式异常: '{ans_val[:20]}'"
         return (False, "")
+
+    if cat == "P":
+        # 判断题：对/错/正确/错误/√/×/T/F
+        if not re.match(r"^(对|错|正确|错误|√|×|✓|✗|T|F|true|false)$", ans_val, re.I):
+            return True, f"判断题答案格式异常: '{ans_val[:20]}'"
+        return (False, "")
+
+    if cat == "F":
+        # 填空题：非空即可
+        if not ans_val or ans_val in ("None", "null", "无"):
+            return True, "填空题答案为空"
+        return (False, "")
+
+    return True, f"未知题型: {cat}"
 
 
 # ============================================================
@@ -514,8 +708,61 @@ def _llm_split_questions(page_text: str, course: str) -> list[dict]:
     return [{"q_num": 1, "text": page_text, "is_comprehensive": True}]
 
 
+def _llm_generate_page_answers(page_text: str, course: str) -> list[dict]:
+    """为纯图片PDF的整页题目生成答案。
+
+    一页可能包含选择、填空、判断、综合等多种题型。
+    返回: [{"q_num": 题号, "type": 题型, "answer": 答案, "topic": 知识点}]
+    """
+    headers = {"Authorization": f"Bearer {ZHIPU_API_KEY}", "Content-Type": "application/json"}
+    prompt = (
+        f"你是{course}课程教师。下面是试卷一页中的若干道题目（由OCR提取，可能有错别字）。\n"
+        "请逐题给出参考答案。输出 JSON 数组，每个元素对应一道题，字段如下:\n\n"
+        '  - "q_num": 题号数字（如 1, 2, 3...）\n'
+        '  - "type": 题型 "选择题" / "填空题" / "判断题" / "综合题"\n'
+        '  - "answer": 标准答案\n'
+        '      选择题：选项字母，如 "A"、"B"、多选如 "ABD"\n'
+        '      判断题："对" 或 "错"\n'
+        '      填空题：答案内容\n'
+        '      综合题：完整解答过程和答案\n'
+        '  - "topic": 知识点分类\n\n'
+        "注意:\n"
+        "- 只输出 JSON 数组，不要加 markdown 代码块\n"
+        "- 有几道题就输出几个元素，不要漏题也不要加题\n"
+        "- 选择题只填字母，不要填文字"
+    )
+    payload = {
+        "model": LLM_MODEL,
+        "messages": [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": page_text[:3000]},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 3000,
+    }
+    for attempt in range(3):
+        try:
+            resp = requests.post(ZHIPU_CHAT_URL, headers=headers, json=payload, timeout=180)
+            resp.raise_for_status()
+            result = resp.json()["choices"][0]["message"]["content"].strip()
+            result = re.sub(r"^```(?:json)?\s*", "", result)
+            result = re.sub(r"\s*```$", "", result)
+            arr_match = re.search(r"\[.*\]", result, re.DOTALL)
+            if arr_match:
+                return json.loads(arr_match.group())
+            return json.loads(result)
+        except (json.JSONDecodeError, Exception):
+            if attempt < 2:
+                time.sleep(2)
+                continue
+            return []
+    return []
+
+
 def _process_image_only_pdf(doc, pdf_name: str, image_dir: Path, course: str) -> tuple[list[dict], list[dict]]:
-    """处理纯图片PDF：逐页VLM提取文字 → LLM拆题 → 截图
+    """处理纯图片PDF：逐页截图，每页作为一道综合题。
+
+    不拆分成小题（纯图片拆题误差太大），一页一张图 + 一页所有题的答案汇总。
 
     Returns:
         questions: [{"q_num", "page", "is_comprehensive", "section", "display_num"}]
@@ -523,12 +770,10 @@ def _process_image_only_pdf(doc, pdf_name: str, image_dir: Path, course: str) ->
     """
     questions = []
     q_data = []
-    q_counter = 0
     comp_counter = 0
 
     for pg in range(doc.page_count):
         page = doc[pg]
-        page_rect = page.rect
         # 整页截图
         zoom = 2.0
         mat = pymupdf.Matrix(zoom, zoom)
@@ -536,48 +781,38 @@ def _process_image_only_pdf(doc, pdf_name: str, image_dir: Path, course: str) ->
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         img = trim_whitespace(img)
 
-        print(f"  第{pg+1}页: VLM提取...", end=" ")
+        print(f"  第{pg+1}页: VLM提取文字...", end=" ")
         page_text = _vlm_extract_page(img)
         print(f"{len(page_text)}字")
 
         if not page_text.strip():
             continue
 
-        # LLM拆题
-        split_qs = _llm_split_questions(page_text, course)
+        comp_counter += 1
+        display_num = comp_counter
+        qid = f"S{display_num}"
 
-        for sq in split_qs:
-            q_counter += 1
-            is_comp = sq.get("is_comprehensive", True)
-            if is_comp:
-                comp_counter += 1
-                display_num = comp_counter
-                qid = f"S{display_num}"
-            else:
-                display_num = q_counter
-                qid = f"Q{display_num}"
+        img_path = image_dir / f"{pdf_name}_{qid}_p{pg+1}.png"
+        img.save(str(img_path), optimize=True)
 
-            # 保存整页截图作为题目图片
-            img_path = image_dir / f"{pdf_name}_{qid}_p{pg+1}.png"
-            img.save(str(img_path), optimize=True)
-
-            questions.append({
-                "q_num": sq.get("q_num", q_counter),
-                "page": pg,
-                "is_comprehensive": is_comp,
-                "section": "综合" if is_comp else "选择",
-                "display_num": display_num,
-            })
-            q_data.append({
-                "qid": qid,
-                "q_num": sq.get("q_num", q_counter),
-                "display_num": display_num,
-                "is_comprehensive": is_comp,
-                "image_path": str(img_path),
-                "text": sq.get("text", page_text),
-                "page": pg + 1,
-                "section": "综合" if is_comp else "选择",
-            })
+        questions.append({
+            "q_num": pg + 1,
+            "page": pg,
+            "is_comprehensive": True,
+            "section": "整页综合",
+            "display_num": display_num,
+        })
+        q_data.append({
+            "qid": qid,
+            "q_num": pg + 1,
+            "display_num": display_num,
+            "is_comprehensive": True,
+            "category": "S",
+            "image_path": str(img_path),
+            "text": page_text,
+            "page": pg + 1,
+            "section": "整页综合",
+        })
 
     return questions, q_data
 
@@ -613,6 +848,8 @@ def generate_report(questions: list[dict], output_dir: Path, image_dir: Path, pd
   .q-badge {{ font-size: 11px; padding: 2px 10px; border-radius: 10px; font-weight: bold; }}
   .q-badge.选择题 {{ background: #dbeafe; color: #1e40af; }}
   .q-badge.综合题 {{ background: #f3e8ff; color: #6b21a8; }}
+  .q-badge.填空题 {{ background: #dcfce7; color: #166534; }}
+  .q-badge.判断题 {{ background: #fef3c7; color: #92400e; }}
   .q-badge.review {{ background: #fee2e2; color: #991b1b; }}
   .q-body {{ padding: 15px 20px; }}
   .q-image {{ width: 100%; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 10px; }}
@@ -757,26 +994,42 @@ def build_question_bank(pdf_path: str, output_dir: Path = None) -> list[dict]:
             for qd in q_data:
                 qid = qd["qid"]
                 text = qd["text"]
-                print(f"  {qid}: LLM生成...", end=" ")
-                answer_data = _llm_generate_answer(text, "", course)
-                ans = str(answer_data.get("answer", ""))[:40].replace("\n", " ") if answer_data else "失败"
-                print(f"答案={ans}")
-                needs_review, review_reason = _check_answer_quality(qd, answer_data)
-                if needs_review:
-                    print(f"    [!] 需人工审查: {review_reason}")
+                page_num = qd["page"]
+                print(f"  {qid} (第{page_num}页): LLM生成...", end=" ")
+                page_answers = _llm_generate_page_answers(text, course)
+                count = len(page_answers)
+                print(f"{count} 道小题")
+
+                # 把整页的多道小题放到 sub_questions 里
+                sub_qs = []
+                topics = []
+                for pa in page_answers:
+                    label = f"第{pa.get('q_num','?')}题({pa.get('type','')})"
+                    sub_qs.append({
+                        "label": label,
+                        "answer": pa.get("answer", ""),
+                        "q_num": pa.get("q_num"),
+                        "type": pa.get("type"),
+                    })
+                    if pa.get("topic"):
+                        topics.append(pa["topic"])
+
+                needs_review = count == 0
+                review_reason = "" if count > 0 else "未识别出任何题目"
+
                 results.append({
                     "qid": qid,
                     "q_num": qd["q_num"],
                     "display_num": qd.get("display_num", qd["q_num"]),
-                    "type": "综合题" if qd["is_comprehensive"] else "选择题",
+                    "type": "整页综合",
                     "course": course,
-                    "page": qd["page"],
+                    "page": page_num,
                     "image": Path(qd["image_path"]).name,
                     "text": qd["text"],
-                    "answer": answer_data.get("answer"),
-                    "reference_points": answer_data.get("reference_points", []),
-                    "topic": answer_data.get("topic", ""),
-                    "sub_questions": answer_data.get("sub_questions"),
+                    "answer": None,
+                    "reference_points": [],
+                    "topic": "、".join(topics[:3]) if topics else "整页题目",
+                    "sub_questions": sub_qs if sub_qs else None,
                     "section": qd.get("section", ""),
                     "source": pdf_name,
                     "source_file": pdf_path.name,
@@ -839,7 +1092,7 @@ def build_question_bank(pdf_path: str, output_dir: Path = None) -> list[dict]:
             "qid": qid,
             "q_num": qd["q_num"],
             "display_num": qd.get("display_num", qd["q_num"]),
-            "type": "综合题" if qd["is_comprehensive"] else "选择题",
+            "type": CATEGORY_TYPE.get(qd.get("category", "S" if qd["is_comprehensive"] else "Q"), "选择题"),
             "course": course,
             "page": qd["page"],
             "image": Path(qd["image_path"]).name,

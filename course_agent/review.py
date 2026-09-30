@@ -12,11 +12,15 @@ from pathlib import Path
 from collections import defaultdict
 
 from course_agent.llm import stream_chat, chat
+from course_agent.chapter_utils import (
+    get_chapters, match_chapter_with_fallback, format_chapter_list,
+)
 from rag_tool import get_knowledge_base
 from course_agent.logger import logger
 
 _sessions = {}
 _QB_PATH = Path("data") / "question_bank" / "question_bank.json"
+_STATS_PATH = Path("data") / "question_bank" / "practice_stats.json"
 
 KNOWLEDGE_REVIEW_PROMPT = """请为《{chapter}》生成重点知识速查卡。
 
@@ -61,37 +65,6 @@ QUIZ_GRADE_PROMPT = """请批改以下{q_type}:
 """
 
 
-def _get_chapters():
-    """获取知识库中所有章节"""
-    try:
-        kb = get_knowledge_base()
-        stats = kb.get_stats()
-        return list(stats.get("by_chapter", {}).keys())
-    except Exception:
-        return []
-
-
-def _match_chapter(user_input, chapters):
-    """匹配章节"""
-    for ch in chapters:
-        if ch in user_input:
-            return ch
-    for ch in chapters:
-        keywords = re.split(r"[\s与和及]", ch)
-        matched = sum(1 for kw in keywords if len(kw) > 1 and kw in user_input)
-        if matched > 0 and matched >= len(keywords) * 0.5:
-            return ch
-    synonyms = {
-        "进程": "进程与线程", "线程": "进程与线程",
-        "调度": "OS调度", "并发": "并发与同步", "同步": "并发与同步",
-        "死锁": "死锁", "内存": "内存管理与虚拟内存", "虚拟内存": "内存管理与虚拟内存",
-    }
-    for keyword, chapter in synonyms.items():
-        if keyword in user_input and chapter in chapters:
-            return chapter
-    return None
-
-
 def _load_question_bank():
     """加载习题库"""
     if not _QB_PATH.exists():
@@ -104,18 +77,69 @@ def _load_question_bank():
         return []
 
 
+def _load_stats():
+    """加载练习统计 {source: count}"""
+    if not _STATS_PATH.exists():
+        return {}
+    try:
+        with open(_STATS_PATH, "r", encoding="utf-8-sig") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_stats(stats):
+    """保存练习统计"""
+    try:
+        _STATS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_STATS_PATH, "w", encoding="utf-8") as f:
+            json.dump(stats, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error("保存练习统计失败: %s", e)
+
+
+def _get_paper_list():
+    """获取所有试卷列表（按课程分组）"""
+    all_questions = _load_question_bank()
+    if not all_questions:
+        return {}
+
+    papers = defaultdict(list)
+    for q in all_questions:
+        papers[q.get("source", "unknown")].append(q)
+
+    stats = _load_stats()
+    result = {}
+    for source, qs in papers.items():
+        course = ""
+        if qs:
+            course = qs[0].get("course", "")
+        choice_count = sum(1 for q in qs if q.get("type") == "选择题")
+        complex_count = sum(1 for q in qs if q.get("type") == "综合题")
+        result[source] = {
+            "course": course,
+            "total": len(qs),
+            "choice": choice_count,
+            "complex": complex_count,
+            "practice_count": stats.get(source, 0),
+        }
+    return result
+
+
 def _get_image_url(q):
     """获取题目的图片 URL"""
     images = q.get("images") or []
     if images:
         path = images[0].get("path", "")
         if path:
+            # JSON 中存的路径前缀是 static/qb_images/，实际挂载在 /qb_images/
+            path = path.replace("static/qb_images/", "", 1).replace("static\\qb_images\\", "", 1)
             if not path.startswith("/"):
                 path = "/" + path
-            return path
+            return f"/qb_images{path}"
     image = q.get("image", "")
     if image:
-        return f"/static/qb_images/{image}"
+        return f"/qb_images/{image}"
     return None
 
 
@@ -125,11 +149,16 @@ def _get_image_url(q):
 
 def process_knowledge_review(session_id, user_input):
     """处理知识点速览消息"""
-    chapters = _get_chapters()
-    chapter = _match_chapter(user_input, chapters)
+    chapters = get_chapters()
+    chapter, fail_msg = match_chapter_with_fallback(user_input, chapters)
 
     if not chapter:
-        yield {"type": "error", "msg": f"无法识别章节。可用章节: {', '.join(chapters[:10])}"}
+        if chapters:
+            chapter_list = format_chapter_list(chapters)
+            msg = f"{fail_msg}\n\n📖 可选章节:\n{chapter_list}\n\n请直接说出章节名称，如：复习进程与线程"
+        else:
+            msg = "知识库为空，请先导入课程文档"
+        yield {"type": "error", "msg": msg}
         return
 
     try:
@@ -177,87 +206,165 @@ def process_knowledge_review(session_id, user_input):
 # 刷题训练
 # ============================================================
 
+def _is_answer_like(text):
+    """判断是否是答案输入"""
+    text = text.strip()
+    if "不会" in text or "不知道" in text:
+        return True
+    if re.match(r"^[A-Da-d\s.、,]+$", text) and len(text) <= 30:
+        return True
+    if re.search(r"\d+\s*[.．、]?\s*[A-Da-d]", text):
+        return True
+    if re.search(r"答案\s*[是为]?\s*[A-Da-d]", text):
+        return True
+    return False
+
+
+def _is_command(text):
+    """判断是否是指令（换卷子、退出等）"""
+    text = text.strip()
+    commands = ["换", "重选", "返回", "退出", "结束", "其他", "别的", "重新", "不做了"]
+    return any(c in text for c in commands)
+
+
 def process_quiz(session_id, user_input):
     """处理刷题消息"""
 
     if not session_id or session_id not in _sessions:
-        session_id = _start_quiz_session(user_input)
-        if not session_id:
-            yield {"type": "error", "msg": "习题库为空或无法加载"}
-            return
-        yield from _present_batch(session_id)
+        sid = str(uuid.uuid4())
+        _sessions[sid] = {"phase": "selecting_paper"}
+        yield {"type": "start", "session_id": sid}
+        yield from _list_papers(sid)
         return
 
     session = _sessions[session_id]
 
-    if session["phase"] == "answering":
-        yield from _grade_batch(session_id, user_input)
+    if session["phase"] == "selecting_paper":
+        yield from _select_paper(session_id, user_input)
+    elif session["phase"] == "answering":
+        if _is_command(user_input):
+            yield from _switch_paper(session_id)
+        elif _is_answer_like(user_input):
+            yield from _grade_batch(session_id, user_input)
+        else:
+            yield from _answer_quiz_question(session_id, user_input)
     elif session["phase"] == "graded":
-        yield from _present_batch(session_id)
+        if _is_command(user_input):
+            yield from _switch_paper(session_id)
+        else:
+            yield from _present_batch(session_id)
     elif session["phase"] == "done":
-        yield {"type": "start", "session_id": session_id}
-        msg = "所有题目已完成！可以输入「开始刷题」重新开始，或切换模式。"
-        yield {"type": "content", "content": msg}
-        yield {"type": "done", "answer": msg, "session_id": session_id}
+        if _is_command(user_input):
+            yield from _switch_paper(session_id)
+        else:
+            yield {"type": "start", "session_id": session_id}
+            msg = "所有题目已完成！可以输入「换」重新选卷，或切换模式。"
+            yield {"type": "content", "content": msg}
+            yield {"type": "done", "answer": msg, "session_id": session_id}
 
 
-def _start_quiz_session(user_input):
-    """开始刷题会话"""
+def _switch_paper(session_id):
+    """回到试卷选择"""
+    _sessions[session_id] = {"phase": "selecting_paper"}
+    yield {"type": "start", "session_id": session_id}
+    yield from _list_papers(session_id)
+
+
+def _answer_quiz_question(session_id, user_input):
+    """在刷题中回答用户提问"""
+    yield {"type": "start", "session_id": session_id}
+    yield {"type": "phase", "phase": "answering", "message": "💬 回答问题"}
+
+    messages = [
+        {"role": "system", "content": "你是课程教师，正在给学生刷题。学生有问题要问，请简洁回答。"},
+        {"role": "user", "content": user_input},
+    ]
+
+    full_text = ""
+    for chunk in stream_chat(messages, temperature=0.5):
+        full_text += chunk
+        yield {"type": "content", "content": chunk}
+
+    reminder = "\n\n---\n回答完上方问题，请继续作答当前题目。"
+    yield {"type": "content", "content": reminder}
+    full_text += reminder
+
+    yield {"type": "done", "answer": full_text, "session_id": session_id}
+
+
+def _list_papers(session_id):
+    """列出所有试卷供用户选择"""
+    papers = _get_paper_list()
+    if not papers:
+        yield {"type": "error", "msg": "习题库为空或无法加载"}
+        return
+
+    yield {"type": "phase", "phase": "selecting_paper", "message": "📝 请选择试卷"}
+
+    lines = ["## 选择试卷\n"]
+    for i, (source, info) in enumerate(papers.items(), 1):
+        course = info["course"] or "未知"
+        count_label = f"{info['choice']}选择+{info['complex']}综合"
+        practice = info["practice_count"]
+        practice_label = f"（已练习{practice}次）" if practice > 0 else ""
+        lines.append(f"**{i}.** {source} [{course}] {count_label}{practice_label}\n\n")
+
+    lines.append("\n输入编号或试卷名称开始刷题。")
+    text = "".join(lines)
+    yield {"type": "content", "content": text}
+    yield {"type": "done", "answer": text, "session_id": session_id}
+
+    _sessions[session_id]["paper_list"] = list(papers.keys())
+
+
+def _select_paper(session_id, user_input):
+    """用户选择试卷后初始化刷题"""
+    session = _sessions[session_id]
+    paper_list = session.get("paper_list", [])
+
+    selected = None
+
+    # 尝试数字编号匹配
+    num = re.search(r"\d+", user_input.strip())
+    if num:
+        idx = int(num.group()) - 1
+        if 0 <= idx < len(paper_list):
+            selected = paper_list[idx]
+
+    # 尝试名称匹配
+    if not selected:
+        for src in paper_list:
+            if src in user_input or user_input.strip() in src:
+                selected = src
+                break
+
+    if not selected:
+        yield {"type": "error", "msg": f"未匹配到试卷，请输入编号(1-{len(paper_list)})或试卷名称"}
+        return
+
+    # 初始化刷题
     all_questions = _load_question_bank()
-    if not all_questions:
-        return None
-
-    course = None
-    if "操作系统" in user_input:
-        course = "操作系统"
-    elif "计算机网络" in user_input or "计网" in user_input:
-        course = "计算机网络"
-
-    if course:
-        filtered = [q for q in all_questions if q.get("course") == course]
-        if filtered:
-            all_questions = filtered
-
-    papers = defaultdict(list)
-    for q in all_questions:
-        papers[q.get("source", "unknown")].append(q)
-
-    paper_sources = list(papers.keys())
-    if not paper_sources:
-        return None
-
-    selected_source = None
-    for src in paper_sources:
-        if src in user_input:
-            selected_source = src
-            break
-    if not selected_source:
-        selected_source = random.choice(paper_sources)
-
-    questions = papers[selected_source]
+    questions = [q for q in all_questions if q.get("source") == selected]
 
     choice_qs = [q for q in questions if q.get("type") == "选择题"]
     complex_qs = [q for q in questions if q.get("type") == "综合题"]
     other_qs = [q for q in questions if q.get("type") not in ("选择题", "综合题")]
     complex_qs.extend(other_qs)
 
-    session_id = str(uuid.uuid4())
-    _sessions[session_id] = {
-        "source": selected_source,
-        "choice_questions": choice_qs,
-        "complex_questions": complex_qs,
-        "current_type": "选择题",
-        "choice_idx": 0,
-        "complex_idx": 0,
-        "phase": "presenting",
-        "wrong_questions": {},
-        "batch_num": 0,
-        "current_batch": [],
-    }
+    session["source"] = selected
+    session["choice_questions"] = choice_qs
+    session["complex_questions"] = complex_qs
+    session["current_type"] = "选择题"
+    session["choice_idx"] = 0
+    session["complex_idx"] = 0
+    session["phase"] = "presenting"
+    session["wrong_questions"] = {}
+    session["batch_num"] = 0
+    session["current_batch"] = []
 
     logger.info("刷题会话创建: source=%s, choice=%d, complex=%d",
-                selected_source, len(choice_qs), len(complex_qs))
-    return session_id
+                selected, len(choice_qs), len(complex_qs))
+    yield from _present_batch(session_id)
 
 
 def _get_next_batch(session):
@@ -316,23 +423,20 @@ def _present_batch(session_id):
 
     for i, q in enumerate(batch):
         img_url = _get_image_url(q)
-        if img_url:
-            img_md = f"![{q.get('qid', f'题{i+1}')}]({img_url})\n\n"
-            yield {"type": "content", "content": img_md}
-            full_text += img_md
-
         qid = q.get("qid", f"Q{i+1}")
         topic = q.get("topic", "")
-        text = q.get("text", "")
 
         q_header = f"**{qid}**"
         if topic:
             q_header += f" [{topic}]"
         q_header += "\n\n"
+        yield {"type": "content", "content": q_header}
+        full_text += q_header
 
-        q_text = f"{q_header}{text}\n\n"
-        yield {"type": "content", "content": q_text}
-        full_text += q_text
+        if img_url:
+            img_md = f"![{qid}]({img_url})\n\n"
+            yield {"type": "content", "content": img_md}
+            full_text += img_md
 
     if q_type == "选择题":
         hint = "---\n请依次输入答案（如: A B C D E），不会的题目请输入「不会」\n"
@@ -477,15 +581,24 @@ def _generate_summary(session):
     complex_done = min(session["complex_idx"], total_complex)
     wrong_count = len([1 for c in session["wrong_questions"].values() if c > 0])
 
+    # 记录练习次数
+    stats = _load_stats()
+    source = session["source"]
+    stats[source] = stats.get(source, 0) + 1
+    _save_stats(stats)
+    practice_count = stats[source]
+
     summary = f"""## 刷题总结
 
-**试卷**: {session['source']}
+**试卷**: {source}
 
 **完成情况**:
 - 选择题: {choice_done}/{total_choice}
 - 综合题: {complex_done}/{total_complex}
 
 **错题数**: {wrong_count}
+
+**本套试卷累计练习**: {practice_count}次
 
 """
     if session["wrong_questions"]:

@@ -40,10 +40,10 @@ _static_dir = FilePath(__file__).parent / "static"
 if _static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
-# 题库图片服务
+# 题库图片服务（独立路径，避免被 /static 挂载覆盖）
 _qb_image_dir = FilePath("data") / "question_bank" / "images"
 if _qb_image_dir.exists():
-    app.mount("/static/qb_images", StaticFiles(directory=str(_qb_image_dir)), name="qb_images")
+    app.mount("/qb_images", StaticFiles(directory=str(_qb_image_dir)), name="qb_images")
 
 
 class QueryRequest(BaseModel):
@@ -178,7 +178,7 @@ def _sse(data: dict) -> str:
 
 
 @app.post("/qa/stream")
-def qa_stream(req: QueryRequest, auth: dict = Depends(any_auth)):
+def qa_stream(req: QueryRequest):
     """SSE 流式问答接口
 
     返回 text/event-stream，逐步推送：
@@ -326,7 +326,7 @@ def qa_stream(req: QueryRequest, auth: dict = Depends(any_auth)):
 # ============================================================
 
 @app.post("/chat/stream")
-async def chat_stream_frontend(req: QueryRequest, auth: dict = Depends(any_auth)):
+async def chat_stream_frontend(req: QueryRequest):
     """兼容前端聊天接口的SSE流式响应"""
     tid = req.thread_id or str(uuid.uuid4())
     config = {"configurable": {"thread_id": tid}}
@@ -517,21 +517,21 @@ class SearchTestRequest(BaseModel):
 
 
 @app.get("/kb/stats")
-def kb_stats(auth: dict = Depends(any_auth)):
+def kb_stats():
     """知识库统计信息"""
     kb = get_knowledge_base()
     return {"code": 0, "msg": "ok", "data": kb.get_stats()}
 
 
 @app.get("/kb/documents")
-def kb_documents(auth: dict = Depends(any_auth)):
+def kb_documents():
     """知识库文档列表"""
     kb = get_knowledge_base()
     return {"code": 0, "msg": "ok", "data": kb.list_documents()}
 
 
 @app.post("/kb/search")
-def kb_search(req: SearchTestRequest, auth: dict = Depends(any_auth)):
+def kb_search(req: SearchTestRequest):
     """检索测试 — 返回 chunk + score，方便调参"""
     kb = get_knowledge_base()
     results = kb.search(

@@ -626,7 +626,7 @@ async function qbSearch() {
       const subQuestions = q.sub_questions || [];
       const needsReview = q.needs_review;
       const reviewReason = q.review_reason || '';
-      const image = q.image ? `/static/qb_images/${q.image}` : null;
+      const image = q.image ? `/qb_images/${q.image}` : null;
 
       let html = '<div class="qb-card">';
       html += `<div class="qb-header">
