@@ -147,7 +147,7 @@
       <div class="stat-card"><div class="num" id="stat-docs">-</div><div class="label">文档数</div></div>
       <div class="stat-card"><div class="num" id="stat-chunks">-</div><div class="label">分块数</div></div>
       <div class="stat-card"><div class="num" id="stat-types">-</div><div class="label">文档类型</div></div>
-      <div class="stat-card"><div class="num" id="stat-chapters">-</div><div class="label">章节数</div></div>
+      <div class="stat-card"><div class="num" id="stat-chapters">-</div><div class="label">章节标签</div></div>
     </div>
     <div class="distribution">
       <div class="dist-panel">
@@ -155,7 +155,7 @@
         <div id="dist-type"></div>
       </div>
       <div class="dist-panel">
-        <h3>按章节分布</h3>
+        <h3>按章节标签分布</h3>
         <div id="dist-chapter"></div>
       </div>
     </div>
@@ -271,8 +271,170 @@
 </div>
 
 <script>
-const API_KEY = localStorage.getItem('api_key') || '';
-let authToken = API_KEY ? { 'X-API-Key': API_KEY } : {};
+// ============================================================
+// 认证：JWT 登录 + 统一注入请求头
+//
+// 服务端是"默认拒绝"（除页面/health/文档外都要凭据）。这里包一层 fetch：
+// 自动带凭据；遇到 401 就弹一次登录框换 JWT 再重试。
+//
+// 注意：**不能用 window.prompt / alert / confirm** —— 它们在很多内嵌浏览器
+// 与沙箱 iframe 里被禁用（实测本环境直接抛 "prompt() is not supported"，
+// 结果页面完全没法发消息）。所以登录框用 DOM 自绘，提示用页面内浮层。
+// ============================================================
+const AUTH_TOKEN_KEY = 'auth_token';
+
+// sessionStorage 在沙箱里也可能不可用，退化成内存存储
+const _authMem = {};
+function authTokenGet() {
+  try { return sessionStorage.getItem(AUTH_TOKEN_KEY) || _authMem.t || ''; }
+  catch (e) { return _authMem.t || ''; }
+}
+function authTokenSet(v) {
+  _authMem.t = v;
+  try { sessionStorage.setItem(AUTH_TOKEN_KEY, v); } catch (e) { /* 忽略 */ }
+}
+function authHeaders() {
+  const h = {};
+  const t = authTokenGet();
+  if (t) h['Authorization'] = 'Bearer ' + t;
+  let k = '';
+  try { k = localStorage.getItem('api_key') || ''; } catch (e) { k = ''; }
+  if (k) h['X-API-Key'] = k;
+  return h;
+}
+
+// 页面内浮层提示（替代 alert）
+function authToast(msg, isError) {
+  const el = document.createElement('div');
+  el.textContent = msg;
+  el.style.cssText = 'position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:100000;'
+    + 'padding:10px 16px;border-radius:10px;font:13px/1.5 system-ui,sans-serif;max-width:80vw;'
+    + 'box-shadow:0 6px 24px rgba(0,0,0,.18);'
+    + (isError ? 'background:#fee2e2;color:#991b1b;border:1px solid #fecaca;'
+               : 'background:#e0f2fe;color:#075985;border:1px solid #bae6fd;');
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+// DOM 自绘的密码框（返回 Promise<string|null>）
+function askPassword() {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;'
+      + 'display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#fff;border-radius:12px;padding:20px 22px;width:300px;'
+      + 'box-shadow:0 12px 40px rgba(0,0,0,.28);';
+
+    const title = document.createElement('div');
+    title.textContent = '需要登录';
+    title.style.cssText = 'font-size:15px;font-weight:600;margin-bottom:6px;color:#111;';
+    const hint = document.createElement('div');
+    hint.textContent = '请输入管理密码（.env 中的 ADMIN_PASSWORD）';
+    hint.style.cssText = 'font-size:12px;color:#6b7280;margin-bottom:12px;';
+
+    const input = document.createElement('input');
+    input.type = 'password';
+    input.placeholder = '管理密码';
+    input.style.cssText = 'width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #d1d5db;'
+      + 'border-radius:8px;font-size:14px;outline:none;';
+
+    const err = document.createElement('div');
+    err.style.cssText = 'color:#dc2626;font-size:12px;min-height:16px;margin:6px 0 2px;';
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:6px;';
+    const cancel = document.createElement('button');
+    cancel.textContent = '取消';
+    cancel.style.cssText = 'padding:8px 14px;border:1px solid #d1d5db;background:#fff;border-radius:8px;'
+      + 'cursor:pointer;font-size:13px;color:#374151;';
+    const submit = document.createElement('button');
+    submit.textContent = '登录';
+    submit.style.cssText = 'padding:8px 16px;border:none;background:#2563eb;color:#fff;border-radius:8px;'
+      + 'cursor:pointer;font-size:13px;';
+    row.appendChild(cancel);
+    row.appendChild(submit);
+
+    box.appendChild(title);
+    box.appendChild(hint);
+    box.appendChild(input);
+    box.appendChild(err);
+    box.appendChild(row);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    input.focus();
+
+    let settled = false;
+    const finish = (val) => {
+      if (settled) return;
+      settled = true;
+      overlay.remove();
+      resolve(val);
+    };
+    cancel.onclick = () => finish(null);
+    overlay.onclick = (e) => { if (e.target === overlay) finish(null); };
+    submit.onclick = () => {
+      const v = input.value;
+      if (!v) { err.textContent = '请输入密码'; input.focus(); return; }
+      finish(v);
+    };
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); submit.click(); }
+      if (e.key === 'Escape') { e.preventDefault(); finish(null); }
+    };
+  });
+}
+
+const _nativeFetch = window.fetch.bind(window);
+let _loginPromise = null;
+
+async function doLogin() {
+  const pwd = await askPassword();
+  if (!pwd) { authToast('已取消登录：没有凭据就无法使用', true); return false; }
+  let res;
+  try {
+    res = await _nativeFetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: pwd }),
+    });
+  } catch (e) {
+    authToast('连不上服务：' + e.message, true);
+    return false;
+  }
+  const data = await res.json().catch(() => ({}));
+  if (data && data.code === 0 && data.token) {
+    authTokenSet(data.token);
+    authToast('登录成功', false);
+    return true;
+  }
+  authToast('登录失败：' + ((data && data.msg) || ('HTTP ' + res.status)), true);
+  return false;
+}
+
+function ensureLogin() {
+  if (!_loginPromise) _loginPromise = doLogin().finally(() => { _loginPromise = null; });
+  return _loginPromise;
+}
+
+window.fetch = async function (input, init) {
+  init = init || {};
+  init.headers = Object.assign({}, authHeaders(), init.headers || {});
+  const url = typeof input === 'string' ? input : ((input && input.url) || '');
+  let res = await _nativeFetch(input, init);
+  if (res.status === 401 && url.indexOf('/auth/login') === -1) {
+    if (await ensureLogin()) {
+      init.headers = Object.assign({}, authHeaders(), init.headers || {});
+      res = await _nativeFetch(input, init);
+    } else {
+      // 登录没成功就不要再把裸 401 抛给调用方，否则页面只显示"HTTP 401"
+      throw new Error('未登录（需要管理密码才能使用）');
+    }
+  }
+  return res;
+};
+const API_KEY = (function () { try { return localStorage.getItem('api_key') || ''; } catch (e) { return ''; } })();
+let authToken = authHeaders();
 
 function showToast(msg, type = 'info') {
   const t = document.createElement('div');
@@ -284,9 +446,13 @@ function showToast(msg, type = 'info') {
 
 async function api(path, options = {}) {
   const url = path.startsWith('http') ? path : path;
-  const sep = path.includes('?') ? '&' : '?';
   const res = await fetch(url, { ...options, headers: { ...authToken, ...(options.headers || {}) } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    // 把服务端的 msg 展示出来：原来只显示 "HTTP 401"，用户完全不知道要登录
+    let detail = '';
+    try { const j = await res.clone().json(); detail = j.msg || j.detail || ''; } catch (e) { /* ignore */ }
+    throw new Error(detail || `HTTP ${res.status}`);
+  }
   return res.json();
 }
 
@@ -328,15 +494,22 @@ async function loadStats() {
     const sortedChapters = Object.entries(s.by_chapter).sort((a, b) => b[1] - a[1]);
     const maxChapter = Math.max(...Object.values(s.by_chapter), 1);
     let chapterHtml = '';
+    // 说明：chapter 元数据目前是"来源内的章节标签" —— 课件是文件名里抽出来的
+    // （如「02-1-进程与线程之进程.pdf」→「进程与线程」），课本那部分是**空的**。
+    // 所以这里显示的是"标签分布"，**不是真正按书的章节组织**；
+    // 真正的按章检索需要在入库时保留页/章结构（当前流水线会把它们 join 掉）。
+    chapterHtml += `<div class="empty" style="margin-bottom:8px">`
+      + `章节标签来自文件名/流水线抽取，课本为空；不等于真正的书籍章节</div>`;
     for (const [k, v] of sortedChapters) {
       const pct = (v / maxChapter * 100).toFixed(1);
+      const label = (k === 'None' || k === '' || k === 'undefined') ? '（未标注）' : k;
       chapterHtml += `<div class="bar-row">
-        <div class="bar-label" title="${k}">${k}</div>
+        <div class="bar-label" title="${label}">${label}</div>
         <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:#6366f1"></div></div>
         <div class="bar-count">${v}块</div>
       </div>`;
     }
-    document.getElementById('dist-chapter').innerHTML = chapterHtml || '<div class="empty">无数据</div>';
+    document.getElementById('dist-chapter').innerHTML = chapterHtml;
   } catch (e) {
     showToast(`加载统计失败: ${e.message}`, 'error');
   }

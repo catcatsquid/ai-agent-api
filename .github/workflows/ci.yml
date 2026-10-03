@@ -1,0 +1,57 @@
+name: CI
+
+# 之前这个项目**没有 CI** —— 404 项测试全靠手动跑。
+# 加它的同时暴露了一个更根本的问题：仓库里的 data/ 只有题库 JSON 是可跟踪的，
+# 图片/课本/向量库（300 MB）刻意 gitignore，所以"新克隆 + 跑测试"必然缺数据。
+# 处理方式见 tests/conftest.py：缺数据的用例**跳过**（而不是报红），
+# 并在测试开头的报告里声明哪些数据集可用。
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      # config.py 在**导入期**就校验 ZHIPU_API_KEY，缺了连 collect 都过不去。
+      # CI 里给一个假值即可 —— 测试全程 mock 掉真实 API 调用。
+      # （这也是"config 导入期硬校验"那条架构债的具体代价。）
+      ZHIPU_API_KEY: dummy-key-for-ci
+      AUTH_ENFORCE: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 安装依赖（requirements.txt 已锁定版本）
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 跑 Python 测试
+        run: python -m pytest tests/ -q
+
+      - name: 跑前端认证块测试（读真实页面，52 项断言）
+        run: node tests/js/auth_block_test.mjs
+
+      - name: 服务能起来 + 探活
+        run: |
+          python -m uvicorn course_agent.server:app --host 127.0.0.1 --port 8003 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8003/health; then echo " 探活通过"; exit 0; fi
+            sleep 1
+          done
+          echo "服务没起来"; exit 1

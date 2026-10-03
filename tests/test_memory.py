@@ -12,10 +12,239 @@ from course_agent.memory import (
     estimate_tokens,
     count_messages_tokens,
     trim_messages,
+    summarize_old_messages,
+    compress_history,
     count_turns,
     get_last_human_message,
     _format_conversation,
+    SUMMARY_MARK,
 )
+
+
+class _FakeLLM:
+    """只实现 invoke 的假 LLM（摘要用）"""
+
+    def __init__(self, content="用户问了死锁和进程调度。", raise_exc=None):
+        self.content = content
+        self.raise_exc = raise_exc
+        self.calls = 0
+
+    def invoke(self, messages, config=None):
+        self.calls += 1
+        if self.raise_exc:
+            raise self.raise_exc
+
+        class R:
+            pass
+
+        r = R()
+        r.content = self.content
+        return r
+
+
+class TestCompressHistory:
+    """摘要压缩（原来整套是死代码，现在 synthesizer 真的在用）"""
+
+    @pytest.fixture(autouse=True)
+    def _clear_summary_cache(self):
+        """摘要缓存是模块级的，必须逐用例清理，否则用例之间会互相污染"""
+        from course_agent import memory as mem
+
+        mem._SUMMARY_CACHE.clear()
+        yield
+        mem._SUMMARY_CACHE.clear()
+
+    def _msgs(self, n_turns, tag="c"):
+        """构造带 id 的消息（LangGraph 的 add_messages 在真实链路里会分配 id）"""
+        out = [SystemMessage(content="系统提示")]
+        out.append(HumanMessage(content=f"问题0-{tag}", id=f"{tag}-h0"))
+        out.append(AIMessage(content=f"回答0-{tag}", id=f"{tag}-a0"))
+        for i in range(1, n_turns):
+            out.append(HumanMessage(content=f"问题{i}-{tag}", id=f"{tag}-h{i}"))
+            out.append(AIMessage(content=f"回答{i}-{tag}", id=f"{tag}-a{i}"))
+        return out
+
+    def test_below_threshold_falls_back_to_window(self):
+        """没超阈值也必须有窗口保护
+
+        原实现是"没超阈值就原样返回"，等于阈值以下完全没有裁剪 ——
+        25 条消息会全量塞给模型。
+        """
+        msgs = self._msgs(20)  # 41 条消息，超过 MAX_MESSAGES=20
+        summary, recent = compress_history(msgs, _FakeLLM(), threshold=999)
+        assert summary == ""
+        assert len(recent) <= 20, f"未走滑动窗口，仍返回 {len(recent)} 条"
+
+    def test_above_threshold_produces_summary(self):
+        llm = _FakeLLM("用户问了死锁的四个必要条件。")
+        msgs = self._msgs(25)  # 51 条消息
+        summary, recent = compress_history(msgs, llm, threshold=10, keep_last_n=6)
+        assert summary == "用户问了死锁的四个必要条件。"
+        assert len(recent) == 6
+        assert llm.calls == 1
+
+    def test_no_llm_means_window_only(self):
+        msgs = self._msgs(25)
+        summary, recent = compress_history(msgs, None, threshold=10)
+        assert summary == ""
+        assert len(recent) <= 20
+
+    def test_llm_failure_degrades_to_window(self):
+        llm = _FakeLLM(raise_exc=RuntimeError("429"))
+        msgs = self._msgs(25)
+        summary, recent = compress_history(msgs, llm, threshold=10, keep_last_n=6)
+        assert summary == "", "摘要失败应降级，不能让异常冒出去"
+        assert recent, "降级后仍要返回可用的消息列表"
+
+    def test_empty_summary_degrades(self):
+        llm = _FakeLLM("   ")
+        summary, recent = compress_history(self._msgs(25), llm, threshold=10)
+        assert summary == ""
+        assert recent
+
+    def test_summarize_old_messages_keeps_system_and_marks_summary(self):
+        llm = _FakeLLM("历史摘要内容")
+        msgs = self._msgs(25)
+        result = summarize_old_messages(msgs, llm, threshold=10, keep_last_n=6)
+        assert isinstance(result[0], SystemMessage)
+        assert "系统提示" in result[0].content
+        summary_msgs = [m for m in result if isinstance(m, SystemMessage)
+                        and SUMMARY_MARK in m.content]
+        assert len(summary_msgs) == 1
+        assert "历史摘要内容" in summary_msgs[0].content
+
+    def test_summary_is_reused_within_amortization_window(self):
+        """读时压缩会导致每轮都重算摘要，这里验证摊还缓存确实生效
+
+        摘要请求要把几十条老消息全发一遍，比正常请求还贵，
+        所以同一段对话每新增 _RESUMMARY_STEP 条才真正重算一次。
+        """
+        from course_agent import memory as mem
+
+        llm = _FakeLLM("摘要内容")
+        msgs = self._msgs(25)
+        mem.compress_history(msgs, llm, threshold=10, keep_last_n=6)
+        assert llm.calls == 1
+
+        # 只多 2 条老消息（< _RESUMMARY_STEP）→ 复用
+        msgs2 = self._msgs(25)
+        msgs2.append(HumanMessage(content="追加", id="c-hx"))
+        msgs2.append(AIMessage(content="追加回答", id="c-ax"))
+        summary, _ = mem.compress_history(msgs2, llm, threshold=10, keep_last_n=6)
+        assert llm.calls == 1, "窗口内不该重算摘要"
+        assert summary == "摘要内容"
+
+        # 多出足够多 → 重算
+        msgs3 = self._msgs(25)
+        for i in range(mem._RESUMMARY_STEP):
+            msgs3.append(HumanMessage(content=f"继续{i}", id=f"c-hc{i}"))
+            msgs3.append(AIMessage(content=f"继续答{i}", id=f"c-ac{i}"))
+        mem.compress_history(msgs3, llm, threshold=10, keep_last_n=6)
+        assert llm.calls == 2, "超过摊还窗口应重算"
+
+    def test_messages_without_id_are_not_cached(self):
+        """没有 id 时不做缓存
+
+        曾用"首条消息内容的哈希"当缓存键，结果两段开头相同的对话会共用摘要
+        （测试里立刻暴露）。宁可不缓存也不串摘要。
+        """
+        from course_agent import memory as mem
+
+        no_id = [HumanMessage(content=f"问题{i}") for i in range(30)]
+        llm = _FakeLLM("摘要")
+        mem.compress_history(no_id, llm, threshold=5, keep_last_n=4)
+        assert mem._SUMMARY_CACHE == {}, "无 id 不应写入缓存"
+        mem.compress_history(no_id, llm, threshold=5, keep_last_n=4)
+        assert llm.calls == 2, "无 id 时每次都重算（安全优先）"
+
+    def test_summary_cache_keys_by_conversation(self):
+        """不同会话不能互相串用摘要"""
+        from course_agent import memory as mem
+
+        llm_a = _FakeLLM("会话A摘要")
+        mem.compress_history(self._msgs(25, tag="A"), llm_a, threshold=5, keep_last_n=4)
+
+        llm_b = _FakeLLM("会话B摘要")
+        summary_b, _ = mem.compress_history(self._msgs(25, tag="B"), llm_b,
+                                            threshold=5, keep_last_n=4)
+        assert summary_b == "会话B摘要"
+        assert llm_b.calls == 1
+
+    def test_summary_cache_is_bounded(self):
+        from course_agent import memory as mem
+
+        for i in range(mem._MAX_SUMMARY_CACHE + 20):
+            mem._cache_summary(f"k{i}", i, "s")
+        assert len(mem._SUMMARY_CACHE) <= mem._MAX_SUMMARY_CACHE
+
+    def test_synthesizer_node_uses_the_summary(self, monkeypatch):
+        """synthesizer 必须把摘要拼进 system prompt（否则等于没接）"""
+        from course_agent import nodes
+
+        captured = {}
+
+        def fake_invoke(llm_, messages, context=""):
+            captured["messages"] = messages
+
+            class R:
+                content = "回答"
+
+            return R()
+
+        monkeypatch.setattr(nodes, "safe_llm_invoke", fake_invoke)
+        monkeypatch.setattr(nodes, "compress_history",
+                            lambda msgs, llm=None: ("这是历史摘要", [HumanMessage(content="最近")]))
+
+        nodes.synthesizer_node({
+            "messages": [HumanMessage(content="你好")],
+            "plan": [],
+        })
+        system_prompt = captured["messages"][0].content
+        assert "这是历史摘要" in system_prompt
+        assert SUMMARY_MARK in system_prompt
+
+    def test_planner_node_also_sees_the_summary(self, monkeypatch):
+        """planner 也要拿到摘要
+
+        否则"我最开始问的是什么"这种指代型追问，规划阶段就丢了上下文，
+        只会拿上一轮的话题去检索，答案自然跑偏。
+        """
+        from course_agent import nodes
+
+        captured = {}
+
+        def fake_invoke(llm_, messages, context=""):
+            captured["messages"] = messages
+            captured["context"] = context
+
+            class R:
+                content = '{"steps": []}'
+
+            return R()
+
+        monkeypatch.setattr(nodes, "safe_llm_invoke", fake_invoke)
+        monkeypatch.setattr(nodes, "compress_history",
+                            lambda msgs, llm=None: ("更早聊过进程与线程", [HumanMessage(content="最近")]))
+
+        nodes.planner_node({
+            "messages": [HumanMessage(content="我最开始问的是什么")],
+            "plan": [],
+        })
+        system_prompt = captured["messages"][0].content
+        assert "更早聊过进程与线程" in system_prompt
+
+    def test_planner_and_synthesizer_use_the_same_history_scope(self):
+        """两个节点的历史口径要一致，摘要缓存才能命中（否则一轮调两次摘要 LLM）"""
+        import inspect
+
+        from course_agent import nodes
+
+        planner_src = inspect.getsource(nodes.planner_node)
+        synth_src = inspect.getsource(nodes.synthesizer_node)
+        for src in (planner_src, synth_src):
+            assert "not isinstance(m, SystemMessage)" in src
+            assert "not isinstance(m, ToolMessage)" in src
+            assert "compress_history(" in src
 
 
 # ============================================================

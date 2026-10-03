@@ -18,12 +18,27 @@ from config import ZHIPU_API_KEY, ZHIPU_CHAT_URL
 # 智谱视觉模型
 VLM_MODEL = "glm-4v-flash"
 
+# detail="low" 时的最长边像素数。detail 的语义是"更省 token / 更便宜"，
+# 智谱的图片接口没有 OpenAI 那种 detail 字段，所以这里通过**缩放图片**来实现，
+# 而不是往 payload 里塞一个没人认的字段。
+VLM_LOW_DETAIL_MAX_SIDE = 1120
+
 
 def image_to_base64(img: Image.Image, format: str = "PNG") -> str:
     """PIL Image 转 base64"""
     buf = io.BytesIO()
     img.save(buf, format=format)
     return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+def _shrink_for_low_detail(img: Image.Image) -> Image.Image:
+    """按 detail="low" 的要求等比缩小图片（超过阈值才缩）"""
+    longest = max(img.width, img.height)
+    if longest <= VLM_LOW_DETAIL_MAX_SIDE:
+        return img
+    ratio = VLM_LOW_DETAIL_MAX_SIDE / float(longest)
+    new_size = (max(1, int(img.width * ratio)), max(1, int(img.height * ratio)))
+    return img.resize(new_size, Image.LANCZOS)
 
 
 def describe_image_vlm(
@@ -37,12 +52,16 @@ def describe_image_vlm(
     Args:
         img: PIL Image 对象
         context: 上下文提示（如"这是一页关于TCP状态转换的PPT"）
-        detail: 图片质量 "low" | "high"，low 更快更便宜
+        detail: 图片质量 "low" | "high"。"low" 会把最长边缩到
+                VLM_LOW_DETAIL_MAX_SIDE 以内再上传，更快更省 token
         max_retries: 最大重试次数
 
     Returns:
         图片内容的文字描述
     """
+    if detail == "low":
+        img = _shrink_for_low_detail(img)
+
     b64 = image_to_base64(img)
 
     system_prompt = """你是一个课件图片理解助手。请用简洁的中文描述这张图片的内容，重点提取:
@@ -96,36 +115,26 @@ def describe_image_vlm(
     return ""
 
 
-def extract_images_from_page(page) -> list[Image.Image]:
-    """从 PyMuPDF 页面对象中提取所有图片
+def is_worth_processing(
+    img: Image.Image,
+    min_size: int = 150,
+    max_bytes: int = 2 * 1024 * 1024,
+) -> bool:
+    """判断图片是否值得花一次 VLM API 调用去理解
 
-    Args:
-        page: fitz.Page 对象
+    太小（图标/装饰）或太大（上传慢、容易超时/超限）的图都跳过。
 
-    Returns:
-        PIL Image 对象列表
+    注意原来这里写的是 `img.width * img.height * 3 > max_bytes * 10`，
+    两个问题：① 比文档写的 2MB 宽松 10 倍；② `w*h*3` 是**未压缩**的像素字节数，
+    和 PNG 实际大小差一个数量级（PPT 页面渲染图压缩后通常只有几百 KB）。
+    现在直接按真实编码后的大小判断。
     """
-    images = []
-    for img_info in page.get_images(full=True):
-        xref = img_info[0]
-        try:
-            pix = page.parent.extract_image(xref)
-            img_data = pix["image"]
-            img = Image.open(io.BytesIO(img_data))
-            # 过滤掉太小的图片（可能是图标/装饰）
-            if img.width >= 100 and img.height >= 100:
-                images.append(img)
-        except Exception:
-            continue
-    return images
-
-
-# 图片质量过滤：太小/太大的图跳过
-def is_worth_processing(img: Image.Image, min_size: int = 150, max_bytes: int = 2 * 1024 * 1024) -> bool:
-    """判断图片是否值得花 API 调用去理解"""
     if img.width < min_size or img.height < min_size:
         return False
-    # 预估大小（粗略）
-    if img.width * img.height * 3 > max_bytes * 10:
+    try:
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.tell() <= max_bytes
+    except Exception:
+        # 编码失败就别浪费 API 调用了
         return False
-    return True

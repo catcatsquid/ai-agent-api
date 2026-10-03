@@ -21,7 +21,8 @@
 from pathlib import Path
 from typing import Optional
 
-from rag_tool import load_document, clean_text, _classify_doc
+from doc_utils import load_document, clean_text, _classify_doc, _extract_chapter
+from course_agent.logger import logger
 
 
 def process_document(
@@ -52,6 +53,10 @@ def process_document(
 
     source = fp.name
     suffix = fp.suffix.lower()
+    # chapter 必须带上：rag_tool 入库时读 doc["chapter"]，
+    # 原来 pipeline 分支不返回这个字段，导致 --pipeline 建库后所有分块
+    # chapter 为空，章节过滤和章节列表全部失真
+    chapter = _extract_chapter(fp, bp)
 
     # --- PPT 处理 ---
     if doc_type == "ppt" and suffix == ".pdf":
@@ -61,7 +66,8 @@ def process_document(
             use_vlm=ppt_use_vlm,
         )
         text = slides_to_text(slides, merge_pages=1)
-        return {"source": source, "text": text, "doc_type": "ppt"}
+        return {"source": source, "text": text, "doc_type": "ppt",
+                "chapter": chapter, "file_path": str(fp)}
 
     # --- 课本处理 ---
     if doc_type == "textbook" and suffix == ".pdf":
@@ -72,12 +78,14 @@ def process_document(
             max_chapters=textbook_max_chapters,
         )
         text = "\n\n---\n\n".join(notes) if notes else ""
-        return {"source": source, "text": text, "doc_type": "textbook"}
+        return {"source": source, "text": text, "doc_type": "textbook",
+                "chapter": chapter, "file_path": str(fp)}
 
     # --- 笔记/文档：直接加载清洗 ---
     text = load_document(str(fp))
     text = clean_text(text)
-    return {"source": source, "text": text, "doc_type": doc_type}
+    return {"source": source, "text": text, "doc_type": doc_type,
+            "chapter": chapter, "file_path": str(fp)}
 
 
 def process_directory(
@@ -98,6 +106,7 @@ def process_directory(
         [{"source": ..., "text": ..., "doc_type": ...}, ...]
     """
     results = []
+    failed = []
     p = Path(dir_path)
     if not p.exists():
         print(f"[警告] 目录不存在: {dir_path}")
@@ -129,6 +138,15 @@ def process_directory(
             else:
                 print(f"  跳过: 无内容")
         except Exception as e:
-            print(f"  [错误] {e}")
+            # 不要只 print 就算了：原来课本处理器必然抛 TypeError 就是被这里吞掉的，
+            # 建库仍旧报"成功"，课本知识静默缺失，排查成本极高
+            failed.append({"file": str(f), "error": f"{type(e).__name__}: {e}"})
+            logger.exception("处理失败: %s", f.name)
+            print(f"  [错误] {type(e).__name__}: {e}")
+
+    if failed:
+        print(f"\n[警告] {len(failed)}/{len(failed) + len(results)} 个文件处理失败:")
+        for item in failed[:10]:
+            print(f"  - {Path(item['file']).name}: {item['error']}")
 
     return results

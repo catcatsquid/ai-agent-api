@@ -19,7 +19,12 @@ from course_agent.middleware import (
 
 # 用一个最小的 App 来测试中间件
 @pytest.fixture
-def app():
+def app(monkeypatch):
+    # 这一组测试关心的是日志 / 限流 / CORS / 全局异常处理，不是鉴权。
+    # 新增的"默认拒绝"守卫会把这里的临时路由（/ok、/error）先 401 掉，
+    # 所以显式关掉强制鉴权（等价于 AUTH_ENFORCE=false）。
+    monkeypatch.setattr("course_agent.middleware.AUTH_ENFORCE", False)
+
     app = FastAPI()
     setup_middlewares(app)
 

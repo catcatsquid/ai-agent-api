@@ -4,8 +4,65 @@ import pytest
 
 from rag_tool import (
     ChunkConfig, chunk_text, _chunk_fixed, _chunk_by_paragraph,
-    clean_text, _expand_query,
+    clean_text, _expand_query, distance_to_similarity,
 )
+
+
+class TestDistanceToSimilarity:
+    """距离 → 余弦相似度换算
+
+    原来写的是 `score = 1 - distance`，但 collection 是默认的 L2 空间。
+    对归一化向量有严格关系 cos = 1 - d²/2。域内/域外各 12 条查询实测：
+        score = 1 - d     : 域内最低 0.181，域外最高 0.024，域内只有 7/12 过得了 0.3
+        cos   = 1 - d²/2  : 域内最低 0.665，域外最高 0.524，完全分开
+    """
+
+    def test_identical_vector(self):
+        assert distance_to_similarity(0.0, "l2") == 1.0
+        assert distance_to_similarity(0.0, "cosine") == 1.0
+
+    def test_l2_uses_squared_relation(self):
+        # ||a-b||² = 2 - 2cos  =>  cos = 1 - d²/2
+        assert distance_to_similarity(1.0, "l2") == pytest.approx(0.5)
+        assert distance_to_similarity(2 ** 0.5, "l2") == pytest.approx(0.0, abs=1e-9)
+
+    def test_off_domain_query_stays_positive(self):
+        """域外查询 L2 距离会 >1，旧算法算出负分，进而把融合分数的分母钳到 0.001"""
+        sim = distance_to_similarity(1.2496, "l2")
+        assert sim > 0
+        assert sim == pytest.approx(0.2192, abs=1e-4)
+
+    def test_cosine_space_uses_linear_relation(self):
+        assert distance_to_similarity(0.3, "cosine") == pytest.approx(0.7)
+        assert distance_to_similarity(0.3, "ip") == pytest.approx(0.7)
+
+    def test_clamped_to_cosine_range(self):
+        """余弦相似度的合法范围是 [-1, 1]，超出部分截断"""
+        assert distance_to_similarity(10.0, "l2") == -1.0
+        assert distance_to_similarity(-1.0, "cosine") == 1.0
+
+    def test_negative_similarity_is_preserved(self):
+        """语义相反的查询会算出负分，这是有效信息，不做归零
+
+        （下游 _hybrid_search 会把整体平移到非负区间再做融合归一化，
+          所以负分不会再把归一化分母钳到 0.001。）
+        """
+        assert distance_to_similarity(1.6, "l2") < 0
+        assert distance_to_similarity(1.6, "l2") > -1.0
+
+    def test_none_distance(self):
+        assert distance_to_similarity(None, "l2") == 1.0
+
+    def test_threshold_separates_in_and_out_of_domain(self):
+        """阈值 0.55 应把实测样本完全分开"""
+        from rag_tool import RELEVANCE_THRESHOLD
+
+        in_domain = [0.6014, 0.6728, 0.5723, 0.6235, 0.8188, 0.7632, 0.5003, 0.7642]
+        out_domain = [1.2496, 1.2235, 1.0938, 1.2619, 0.9760, 1.4040, 1.1208, 1.0950]
+        assert all(distance_to_similarity(d, "l2") >= RELEVANCE_THRESHOLD for d in in_domain)
+        # "Python的GIL是什么" 属于跨学科边缘样本（0.524），是唯一贴近阈值的
+        assert sum(1 for d in out_domain
+                   if distance_to_similarity(d, "l2") < RELEVANCE_THRESHOLD) >= 7
 
 
 class TestChunkConfig:

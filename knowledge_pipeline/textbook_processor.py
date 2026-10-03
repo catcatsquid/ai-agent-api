@@ -109,7 +109,10 @@ def _extract_chapters_from_toc(doc: pymupdf.Document) -> list[Chapter]:
         return chapters
 
     # 只取一级章节（level=1）
-    level1 = [(t[1], t[2]) for t in toc if t[1] >= 1 and t[0] == 1]
+    # 注意 PyMuPDF 的 TOC 条目是 [level, title, page]：
+    # 原来写成 `t[1] >= 1`（拿标题字符串和 1 比较）必然 TypeError，
+    # 导致整条课本处理分支 100% 失败。这里比较的是页码 t[2]。
+    level1 = [(t[1], t[2]) for t in toc if len(t) >= 3 and t[0] == 1 and t[2] >= 1]
 
     for i, (title, page) in enumerate(level1):
         end_page = level1[i + 1][1] - 1 if i + 1 < len(level1) else doc.page_count
@@ -188,51 +191,50 @@ def process_textbook_pdf(
     Returns:
         list[str]: 每章的知识点笔记 Markdown 文本列表
     """
-    doc = pymupdf.open(pdf_path)
-    book_name = Path(pdf_path).stem
+    with pymupdf.open(pdf_path) as doc:
+        book_name = Path(pdf_path).stem
 
-    print(f"  处理课本: {book_name} ({doc.page_count} 页)")
+        print(f"  处理课本: {book_name} ({doc.page_count} 页)")
 
-    # 1. 提取章节结构
-    chapters = _extract_chapters_from_toc(doc)
-    if not chapters:
-        print("    未找到目录，按页数粗略拆分")
-        chapters = _extract_chapters_by_heading(doc)
+        # 1. 提取章节结构
+        chapters = _extract_chapters_from_toc(doc)
+        if not chapters:
+            print("    未找到目录，按页数粗略拆分")
+            chapters = _extract_chapters_by_heading(doc)
 
-    print(f"    识别到 {len(chapters)} 个章节")
+        print(f"    识别到 {len(chapters)} 个章节")
 
-    if max_chapters:
-        chapters = chapters[:max_chapters]
-        print(f"    测试模式：只处理前 {max_chapters} 章")
+        if max_chapters:
+            chapters = chapters[:max_chapters]
+            print(f"    测试模式：只处理前 {max_chapters} 章")
 
-    notes = []
+        notes = []
 
-    for i, ch in enumerate(chapters):
-        # 提取章节文本
-        ch_text_parts = []
-        for p in range(ch.start_page - 1, ch.end_page):
-            if p < len(doc):
-                ch_text_parts.append(doc[p].get_text())
-        ch.text = _clean_textbook_text("\n".join(ch_text_parts))
+        for i, ch in enumerate(chapters):
+            # 提取章节文本
+            ch_text_parts = []
+            for p in range(ch.start_page - 1, ch.end_page):
+                if p < len(doc):
+                    ch_text_parts.append(doc[p].get_text())
+            ch.text = _clean_textbook_text("\n".join(ch_text_parts))
 
-        print(f"    [{i+1}/{len(chapters)}] {ch.title} "
-              f"({ch.end_page - ch.start_page + 1}页, {ch.char_count}字)")
+            print(f"    [{i+1}/{len(chapters)}] {ch.title} "
+                  f"({ch.end_page - ch.start_page + 1}页, {ch.char_count}字)")
 
-        if ch.char_count < 200:
-            print(f"      内容太少，跳过")
-            continue
+            if ch.char_count < 200:
+                print(f"      内容太少，跳过")
+                continue
 
-        # LLM 生成笔记
-        note = _llm_generate_note(ch.text, ch.title)
-        if note:
-            notes.append(f"# {ch.title}\n\n{note}\n")
-            print(f"      笔记: {len(note)} 字")
-        else:
-            print(f"      生成失败")
+            # LLM 生成笔记
+            note = _llm_generate_note(ch.text, ch.title)
+            if note:
+                notes.append(f"# {ch.title}\n\n{note}\n")
+                print(f"      笔记: {len(note)} 字")
+            else:
+                print(f"      生成失败")
 
-        time.sleep(llm_interval)
+            time.sleep(llm_interval)
 
-    doc.close()
 
     # 保存笔记
     if output_dir and notes:
