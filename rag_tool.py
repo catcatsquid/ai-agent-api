@@ -802,7 +802,13 @@ class KnowledgeBase:
             if f.suffix.lower() not in (".pdf", ".docx", ".md", ".txt", ".markdown"):
                 continue
 
-            doc_type = _classify_doc(f, p)
+            # 基准目录必须固定为 data/ —— 和 /kb/add 那条路径保持一致。
+            #
+            # 原来这里传的是**被导入的那个目录**（p），于是"目录自己的名字"不参与判定：
+            # 导入 `data/课本/` 时，文件相对该目录的路径里看不到"课本"，
+            # 同一个文件走 /kb/add 判成 textbook、走 /kb/add-directory 却判成 notes。
+            # 实测确认过这个不一致（doc_type 会影响检索优先级，textbook 是兜底档）。
+            doc_type = _classify_doc(f, Path("data"))
             if doc_type is None:
                 continue
             if skip_textbook and doc_type == "textbook":
