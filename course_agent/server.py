@@ -264,6 +264,25 @@ def _sse(data: dict) -> str:
     """把字典格式化成一条 SSE 事件"""
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
+def _tool_result_messages(msgs: list) -> list:
+    """只挑出**工具结果**消息（渲染步骤用）
+
+    executor / tools 节点的输出里除了 ToolMessage，还有一条带 `tool_calls` 的
+    AIMessage —— 它没有 `name` 属性，渲染时会兜底成「工具1」，于是前端多出一个
+    **不存在的步骤**，`total` 也多算 1。实测 trace：
+
+        步骤 1/3: 工具1   （调用了工具：list_papers、get_paper_questions）
+        步骤 2/3: list_papers
+        步骤 3/3: get_paper_questions
+
+    工具其实只有 2 个。所以这里按"有没有 tool_call_id / 是不是 ToolMessage"过滤。
+    """
+    out = []
+    for m in msgs or []:
+        if getattr(m, "tool_call_id", None) or type(m).__name__ == "ToolMessage":
+            out.append(m)
+    return out
+
 
 @app.post("/qa/stream")
 def qa_stream(req: QueryRequest):
@@ -304,7 +323,7 @@ def qa_stream(req: QueryRequest):
                         yield _sse(event)
 
                     elif node_name == "executor":
-                        msgs = node_output.get("messages", [])
+                        msgs = _tool_result_messages(node_output.get("messages", []))
                         for i, msg in enumerate(msgs):
                             content = msg.content if hasattr(msg, "content") else str(msg)
                             summary = content[:120].replace("\n", " ")
@@ -337,7 +356,7 @@ def qa_stream(req: QueryRequest):
                         yield _sse(event)
 
                     elif node_name == "tools":
-                        msgs = node_output.get("messages", [])
+                        msgs = _tool_result_messages(node_output.get("messages", []))
                         for i, msg in enumerate(msgs):
                             content = msg.content if hasattr(msg, "content") else str(msg)
                             summary = content[:120].replace("\n", " ")
@@ -421,7 +440,7 @@ async def chat_stream_frontend(req: QueryRequest):
                             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
                         elif node_name == "executor":
-                            msgs = node_output.get("messages", [])
+                            msgs = _tool_result_messages(node_output.get("messages", []))
                             for i, msg in enumerate(msgs):
                                 content = msg.content if hasattr(msg, "content") else str(msg)
                                 summary = content[:120].replace("\n", " ")
@@ -448,7 +467,7 @@ async def chat_stream_frontend(req: QueryRequest):
                             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
                         elif node_name == "tools":
-                            msgs = node_output.get("messages", [])
+                            msgs = _tool_result_messages(node_output.get("messages", []))
                             for i, msg in enumerate(msgs):
                                 content = msg.content if hasattr(msg, "content") else str(msg)
                                 summary = content[:120].replace("\n", " ")

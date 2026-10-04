@@ -565,6 +565,12 @@ def _tool_grade_answers(args, session):
             ),
         }
 
+    # 结构性纠偏：模型会把 qids 列表填进 paper_source（实测），
+    # 这里认出 qids、并用它反查卷子，而不是拿 "2025OS_Q1,…" 当卷名去解析。
+    raw_name, fixed_qids = quiz_service.normalize_grade_args(
+        raw_name, args.get("qids"), session.get("current_paper") or "")
+    if fixed_qids != (args.get("qids") or []):
+        args = {**args, "qids": fixed_qids}
     paper, candidates = qbank.resolve_paper(raw_name, session.get("current_course"))
     if paper is None:
         if candidates:

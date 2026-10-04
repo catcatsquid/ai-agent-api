@@ -97,7 +97,12 @@ class TestPlannerSeesCursor:
         p = captured["prompt"]
         assert "2019秋本部计算机网络模拟题" in p
         assert "group_index=2" in p
-        assert "A,B" in p
+        # qids 要出现在提示里，且必须**标明它是数组**、并给出可直接照抄的调用：
+        # 实测只说「用上面的 qids 调 grade_answers」时，planner 把那串 qid
+        # 填进了 paper_source（`没能确定试卷: 2025OS_Q1,…`），批改直接失败。
+        assert '"A"' in p and '"B"' in p, "qids 没传给 planner"
+        assert "qids" in p and "paper_source" in p, "没写清该填哪个参数"
+        assert "不要把它填进 paper_source" in p
 
     def test_prompt_has_no_cursor_block_without_session(self, monkeypatch):
         """没有游标时不要凭空加一段进度块"""

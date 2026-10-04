@@ -94,9 +94,13 @@ def _save_cursor(thread_id: str, session: dict) -> None:
 #     请稍等，我马上为你获取题目。get_paper_questions {"paper_source": "..."}
 # 根因是 Plan 图单向、synthesizer 无法再取数据（结构问题，正解是允许一次重规划）。
 # 这里先做兜底：把这种片段从回答里摘掉，别让学生看到内部协议。
-# 只匹配"已知工具名 + 空白 + JSON 对象"，误伤正常文本的概率极低。
+# 注意**不要**用"已知工具名白名单"来匹配 —— 实测模型会**编造不存在的工具名**
+# （学生答 ACDBA 时它输出了 `get_paper_answers {...}`，而白名单里没有这个名字，
+#  于是整段泄漏给了学生）。改成通用的"标识符 + JSON 对象"：
+# 蛇形命名的标识符紧跟一个 JSON 对象，正常中文回复里不会长这样。
 _TOOL_CALL_TEXT_RE = re.compile(
-    r"(?:" + "|".join(re.escape(t) for t in tools_by_name) + r")\s*\{[^{}]*\}")
+    r"(?:\b[a-z][a-z0-9]*(?:_[a-z0-9]+){1,4}\s*\{[^{}]*\})"
+    r"|(?:\b[a-z][a-z0-9]*(?:_[a-z0-9]+){1,4}\(\s*\{[^{}]*\}\s*\))")
 
 
 def strip_tool_call_text(text: str) -> str:
@@ -380,6 +384,20 @@ REACT_PROMPT = """你是「知识寻回BOT」，一位耐心、专业的课程�
 # Planner Node
 # ============================================================
 
+def _grade_call_template(drill: dict) -> str:
+    """给 planner 一句**可直接照抄**的批改调用
+
+    为什么明写而不是描述规则：实测只说「用上面的 qids 调 grade_answers」时，
+    planner 把那串 qid **填进了 paper_source**，于是批改直接失败
+    （`没能确定试卷: 2025OS_Q1,2025OS_Q2,…`）。给可照抄的一句它才会照做 ——
+    这套「照抄」办法在 `read_section` 的「继续讲」上已经验证过。
+    """
+    paper = drill.get("paper", "")
+    qids = json.dumps(drill.get("qids") or [], ensure_ascii=False)
+    return (f'```\ngrade_answers(paper_source="{paper}", '
+            f'user_answer_text="<学生这段答案原文>", qids={qids})\n```\n')
+
+
 def planner_node(state: AgentState, config=None) -> dict:
     """规划器节点：分析用户需求，决定用哪些工具"""
     # 历史口径必须和 synthesizer 一致（都排除系统提示和工具结果），
@@ -428,11 +446,17 @@ def planner_node(state: AgentState, config=None) -> dict:
         elif drill.get("next_group_index"):
             prog.append(f"**下一组要传 group_index={drill['next_group_index']}**")
         if drill.get("qids"):
-            prog.append("刚出的题 qids：" + ",".join(drill["qids"]))
+            prog.append("刚出的题 qids（**这是数组，不是卷名**）："
+                        + json.dumps(drill["qids"], ensure_ascii=False))
         prompt += ("\n\n--- 当前刷题进度（来自上一轮，务必据此填参数）---\n"
                    + "\n".join(f"- {x}" for x in prog)
-                   + "\n学生说「继续/下一组」时，直接用上面的卷子和 group_index 调 "
-                     "get_paper_questions；学生提交答案时用上面的 qids 调 grade_answers。")
+                   + "\n学生说「继续/下一组」时，用 **group_index** 调 get_paper_questions。\n"
+                     "学生提交答案时，**原样照抄这一句**（不要改参数名）：\n"
+                     + _grade_call_template(drill)
+                   + "\n⚠️ 上面那串 `xxx_Q1` 是 **qids（数组）**，"
+                     "**绝对不要把它填进 paper_source** —— paper_source 要的是"
+                     "「试卷来源名称」这种中文卷名（见上一行）。"
+                     "实测填错会导致批改直接失败。")
 
     # 学习/复习书签（与刷题游标同一套机制，互不干扰）。
     # 有了它，学生说"下一节"时才知道该从哪继续；也顺带解决"两门课切换串味"。
@@ -886,6 +910,16 @@ def synthesizer_node(state: AgentState) -> dict:
     base_prompt += _session_block(state.get("session") or {})
     if summary_text:
         base_prompt = f"{base_prompt}\n\n{SUMMARY_MARK}\n{summary_text}"
+    # 工具报错时的行为约束（实测：批改失败后模型会"假装重试"、
+    # 编造一个不存在的工具名（get_paper_answers），或者让学生改格式重发）
+    if any(isinstance(m, str) and '"error"' in m for m in tool_results):
+        base_prompt += (
+            "\n\n--- 注意：这一步有工具返回了 error ---\n"
+            "· **不要**说「我将再次尝试」然后什么都不做；也**不要**编造工具名或调用方式"
+            "（例如凭空写 `get_paper_answers {…}`）—— 学生会看到内部协议。\n"
+            "· **不要**把工具的问题说成学生的格式问题（除非确实是他没给答案）。\n"
+            "· 该做的：用上面【当前试卷】/【当前学习位置】里的信息，能自己补就补一次；"
+            "补不了就**如实告诉学生卡在哪**，并问他一个具体的问题（如「是这一份卷子吗」）。")
 
     if tool_results:
         context = "\n\n---\n\n".join(tool_results[-5:])

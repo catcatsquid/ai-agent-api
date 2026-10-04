@@ -444,6 +444,7 @@ def grade_answers(paper_source: str, user_answer_text: str, qids: list[str] = No
         qids: 可选，要批改的题目 qid 列表（get_paper_questions 返回过）。
               传入可精确定位到刚出的那一组；不传则按题型分段解析整卷。
     """
+    paper_source, qids = quiz_service.normalize_grade_args(paper_source, qids)
     paper, candidates = quiz_service.resolve_paper(paper_source)
     if paper is None:
         if candidates:

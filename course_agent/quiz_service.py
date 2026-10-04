@@ -106,6 +106,62 @@ def resolve_paper(name: str, course_hint: str = None):
     return qbank.resolve_paper(name or "", course_hint)
 
 
+# qid 形如 2025OS_Q1 / 2019网模拟_F3 / 2025OS_S1（卷前缀_题型字母+序号）
+_QID_RE = re.compile(r"([A-Za-z0-9\u4e00-\u9fff]{1,24}_[QSPF]\d{1,3})")
+
+
+def qids_in_text(text) -> list:
+    """从一段文字里抽出所有 qid
+
+    为什么需要它：实测 planner 会把 qids 列表**填进 paper_source**
+    （我给它的提示只说「用上面的 qids 调 grade_answers」，没说填哪个参数），
+    于是 grade_answers 拿 "2025OS_Q1,2025OS_Q2,…" 当卷名去解析，直接失败。
+    """
+    seen, out = set(), []
+    for m in _QID_RE.finditer(str(text or "")):
+        q = m.group(1)
+        if q not in seen:
+            seen.add(q)
+            out.append(q)
+    return out
+
+
+def paper_of_qids(qids) -> dict:
+    """用 qid 反查它属于哪份卷子（qid 前缀就是卷子标识）
+
+    这样即使模型把 qids 填错了参数，也能**确定性地**把卷子找回来，
+    而不是让它回头去问学生「你要批改哪一份卷子」。
+    """
+    want = set(qids or [])
+    if not want:
+        return None
+    for q in (qbank.load_questions() or []):
+        if q.get("qid") in want:
+            return {"source": q.get("source", ""), "course": q.get("course", "")}
+    return None
+
+
+def normalize_grade_args(paper_source: str, qids=None, session_paper: str = ""):
+    """把模型填错的批改参数**就地纠正**，返回 (paper_source, qids)
+
+    这是「结构性纠偏」，不是提示词纠偏 —— 实测提示词写「不要填错参数」基本无效，
+    而在工具入口把 qids 认出来、把卷子找回来，是确定有效的。
+    """
+    qids = [q for q in (qids or []) if q]
+    found = qids_in_text(paper_source)
+    if found:
+        # paper_source 里装的是 qid 列表 → 它其实想传的是 qids
+        for q in found:
+            if q not in qids:
+                qids.append(q)
+        paper_source = ""
+    if not paper_source and not session_paper and qids:
+        hit = paper_of_qids(qids)
+        if hit:
+            paper_source = hit["source"]
+    return paper_source or session_paper, qids
+
+
 def paper_index(source: str):
     """取一份卷子的题、题型内序号、qid 索引
 
