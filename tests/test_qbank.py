@@ -9,6 +9,8 @@
 6. 出题接口把 text/answer 一起返回给模型（泄题）
 """
 
+import json
+
 import pytest
 
 from course_agent import qbank
@@ -29,10 +31,21 @@ def _group(source, qtype, idx=1):
 
 
 class TestLoading:
-    def test_loads_all_papers_not_just_combined_file(self):
-        """合并文件只含 125 题；必须把 questions_*.json 里多出来的两份也加载进来"""
-        qs = qbank.load_questions()
-        assert len(qs) == 191, f"应加载全部 191 题，实际 {len(qs)}"
+    def test_loads_every_per_paper_file(self):
+        """题库必须合并**全部** questions_*.json，不能只读某一个文件
+
+        原先的 bug 是只读 question_bank.json —— 那是个过期快照，漏了整整两份卷子，
+        题库只加载到 125/191。这里断言的是**语义不变量**：加载结果必须覆盖所有
+        单卷文件里的每一道题（按 source+qid 比对），不写死题数，
+        以后增删卷子都不用改这条测试。
+        """
+        expected = set()
+        for f in qbank.QUESTION_BANK_DIR.glob("questions_*.json"):
+            for q in json.loads(f.read_text(encoding="utf-8-sig")):
+                expected.add((q.get("source"), q.get("qid")))
+        got = {(q.get("source"), q.get("qid")) for q in qbank.load_questions()}
+        assert got == expected, \
+            f"漏了 {len(expected - got)} 题，多了 {len(got - expected)} 题"
 
     def test_no_duplicate_source_qid(self):
         qs = qbank.load_questions()
@@ -44,10 +57,14 @@ class TestLoading:
         assert "操作系统" in courses
         assert "计算机网络" in courses
 
-    def test_network_papers_include_final_exam(self, papers):
-        """原实现看不到这份 50 题的计网真题"""
-        assert "2019秋本部计算机网络期末考试回忆版" in papers
-        assert papers["2019秋本部计算机网络期末考试回忆版"]["total"] == 50
+    def test_every_per_paper_file_is_listed(self, papers):
+        """每份单卷文件都必须在 list_papers 里出现
+
+        原实现只看得见合并文件里的卷子（50 题那份计网真题就是这么丢的）。
+        """
+        for f in qbank.QUESTION_BANK_DIR.glob("questions_*.json"):
+            stem = f.stem.replace("questions_", "")
+            assert stem in papers, f"{stem} 没出现在试卷列表里"
 
 
 class TestNumbering:
@@ -69,7 +86,7 @@ class TestNumbering:
 
     def test_section_numbers_are_unique_per_paper(self):
         """整卷范围内 (题型, 题号) 唯一 —— 这正是不能用 display_num 的原因"""
-        for src in ["2019秋本部计算机网络模拟题", "2019秋本部计算机网络期末考试回忆版"]:
+        for src in ["2019秋本部计算机网络模拟题", "2024年秋操作系统期末考试试题（回忆版）"]:
             qs = qbank.paper_questions(src)
             nums = qbank.section_numbers(qs)
             keys = [(q["type"], nums[q["qid"]]) for q in qs]
@@ -213,14 +230,14 @@ class TestParsing:
         assert set(amap2) == {group2[0]["qid"], group2[1]["qid"]}
 
     def test_group_relative_numbering_for_judge_group(self):
-        """判断题第 1 组（1~5）与「组内第几题」一致；这里回归的是非选择题路径"""
-        paper = "2019秋本部计算机网络期末考试回忆版"
+        """判断题（非选择题路径）也要能用「组内第几题」作答；这里回归的是非选择题路径"""
+        paper = "2019秋本部计算机网络模拟题"
         all_qs = qbank.paper_questions(paper)
         numbers = qbank.section_numbers(all_qs)
-        judge = [q for q in all_qs if q["type"] == "判断题"][5:9]  # 第 2 组
-        if not judge:
-            pytest.skip("该卷判断题不足两组")
-        amap, _ = qbank.parse_submission("1.对 2.错", judge, numbers)
+        judge = [q for q in all_qs if q["type"] == "判断题"]
+        if len(judge) < 2:
+            pytest.skip("该卷判断题不足两题")
+        amap, _ = qbank.parse_submission("1.对 2.错", judge[:5], numbers)
         assert len(amap) == 2, "非选择题组也要能用组内序号作答"
 
     # ---- 用户实测反馈的格式（"写得太死了"）----
@@ -357,10 +374,11 @@ class TestParsing:
     def test_whole_paper_answers_land_on_the_right_type(self):
         """整卷批改时，一份选择题答案必须落到选择题上，不能落到综合题上
 
-        真实踩过：2019 那两份卷子里 display_num=1 同时属于选择题/填空题/判断题/综合题，
-        按 display_num 查表会把「1.D」判到综合题，并把综合题的参考答案整段泄给学生。
+        真实踩过：2019 那份计网模拟题里 display_num=1 同时属于
+        选择题/填空题/判断题/综合题四种题型，按 display_num 查表会把「1.D」
+        判到综合题，并把综合题的参考答案整段泄给学生。
         """
-        src = "2019秋本部计算机网络期末考试回忆版"
+        src = "2019秋本部计算机网络模拟题"
         qs = qbank.paper_questions(src)
         amap, _ = qbank.parse_against_paper("1.D 2.B 3.D 4.A 5.C", qs)
         types = {q["qid"]: q["type"] for q in qs}
@@ -442,7 +460,7 @@ class TestGrading:
         assert r.get("needs_llm") is True
 
     def test_every_question_in_bank_is_gradable(self):
-        """全部 191 题都至少要有一种批改依据"""
+        """每道题都至少要有一种批改依据"""
         bad = [q["qid"] for q in qbank.load_questions() if not qbank.grading_basis(q)["usable"]]
         assert bad == [], f"这些题缺批改依据: {bad[:10]}"
 
@@ -453,8 +471,8 @@ class TestPaperResolution:
         assert p and p["source"] == "2026春操作系统期末试题（回忆版）"
 
     def test_fuzzy_match_short_alias(self):
-        p, _ = qbank.resolve_paper("2019网期末")
-        assert p and "2019秋本部计算机网络期末考试回忆版" == p["source"]
+        p, _ = qbank.resolve_paper("2019网模拟")
+        assert p and "2019秋本部计算机网络模拟题" == p["source"]
 
     def test_fabricated_paper_name_is_rejected(self):
         """模型爱编卷名。编出来的年份对不上任何卷子时必须拒绝，

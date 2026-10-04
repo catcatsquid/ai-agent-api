@@ -169,8 +169,8 @@ def _norm_name(s: str) -> str:
 def _is_subsequence(needle: str, haystack: str) -> bool:
     """needle 是否是 haystack 的子序列（顺序保留、可不连续）
 
-    学生和模型更习惯写简称，如「2019网期末」对应
-    「2019秋本部计算机网络期末考试回忆版」—— 字符集重合度算不出来，
+    学生和模型更习惯写简称，如「2019网模拟」对应
+    「2019秋本部计算机网络模拟题」—— 字符集重合度算不出来，
     但"按顺序出现"能准确识别。
     """
     if not needle:
@@ -232,7 +232,7 @@ def resolve_paper(name: str, course: str | None = None) -> tuple[dict | None, li
         return None, [p["source"] for p in contains]
 
     # 4. 简称：把输入当作 source 的子序列（顺序保留）
-    #    「2019网期末」→「2019秋本部计算机网络期末考试回忆版」
+    #    「2019网模拟」→「2019秋本部计算机网络模拟题」
     #    年份不同的一律不算，避免把学生带到别的年份的卷子上
     pool = [p for p in papers if year_ok(p)]
     sub_hits = [p for p in pool

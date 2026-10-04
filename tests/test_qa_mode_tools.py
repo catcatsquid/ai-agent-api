@@ -115,7 +115,7 @@ class TestListPapers:
         out = list_papers.invoke({})
         assert "操作系统" in out
         assert "计算机网络" in out
-        assert "2019秋本部计算机网络期末考试回忆版" in out
+        assert "2019秋本部计算机网络模拟题" in out
 
     def test_course_filter(self):
         out = list_papers.invoke({"course": "计算机网络"})

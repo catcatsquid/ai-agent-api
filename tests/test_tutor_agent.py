@@ -352,21 +352,21 @@ class TestMissedQuestionsRecovery:
     def test_list_papers_ships_a_ready_to_paste_block(self):
         """工具要给出排好版的清单让模型照抄
 
-        只给嵌套结构时模型会漏段：实测"我想刷题"工具返回了 8 份卷子
-        （两门课都在），模型却只把操作系统那 5 份写进了回复。
+        只给嵌套结构时模型会漏段：实测"我想刷题"时工具返回了两门课的卷子，
+        模型却只把操作系统那几份写进了回复。
         """
         sess = tutor_agent._get_session("t7b")
         sess["last_user_message"] = "我想刷题"
         r = tutor_agent.TOOL_HANDLERS["list_papers"]({"course": "操作系统"}, sess)
         block = r["_render_example"]
         assert "**操作系统**" in block and "**计算机网络**" in block
-        assert "2019秋本部计算机网络期末考试回忆版" in block
+        assert "2019秋本部计算机网络模拟题" in block
         assert "2026春操作系统期末试题（回忆版）" in block
         # reply_text 是"直接发出去的话"，必须自带两门课和另出题提示
         reply = r["reply_text"]
         assert "操作系统" in reply and "计算机网络" in reply
         assert "另出题" in reply
-        assert "2019秋本部计算机网络期末考试回忆版" in reply
+        assert "2019秋本部计算机网络模拟题" in reply
 
     def test_identical_tool_result_is_reused_for_the_same_message(self, monkeypatch):
         """同一句话重复调 list_papers 结果应一致（不要靠模型随机性）"""

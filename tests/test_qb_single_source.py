@@ -1,8 +1,10 @@
 """两个"用户可见但一直没修"的问题的守卫
 
-① `/qb/search` 与 `/qb/topics` 的数据源不一致（实测差 66 题）
-   —— 知识点下拉来自 topics（191 题），结果来自 search（125 题），
-      于是有一批知识点点进去**永远 0 条结果**。
+① `/qb/search` 与 `/qb/topics` 的数据源曾经不一致
+   —— 知识点下拉来自完整题库，结果来自一个只装了 125 题的过期快照文件
+     （当时完整题库是 191 题，两者差 66 题），
+     于是有一批知识点点进去**永远 0 条结果**。
+     （该快照文件已删除；题数后来也做过一次人工筛选，现在两者恒等。）
 ② `/health` 不在限流豁免表里 —— 健康检查会被 429 判死，
    而我原来的测试恰好断言的是没意义的 "/"，所以测试是绿的。
 """
@@ -25,13 +27,18 @@ class TestQuestionBankSingleSource:
         assert len(questions) == len(qbank.load_questions())
 
     def test_search_total_matches_the_merged_layer(self):
-        """搜索接口的总数必须是真实总数（191）—— 修复前是 125，差 66 题"""
+        """搜索接口的总数必须等于题库真实总数
+
+        修复前这个接口读的是那个过期快照文件（只有 125 题），
+        而知识点来自 191 题的完整题库，于是有一批知识点点进去恒为 0 条结果。
+        这里断言的是**两个入口的一致性**，不写死题数 —— 题库增删卷子都不用改。
+        """
         search = client.post("/qb/search",
                              json={"filename": ALL_PAPERS_SENTINEL}).json()
-        assert search["count"] == len(qbank.load_questions()) == 191
+        assert search["count"] == len(qbank.load_questions())
 
     def test_search_sources_cover_every_paper(self):
-        """搜索结果必须覆盖全部 8 份卷子（合并文件只有 6 份）"""
+        """搜索结果必须覆盖全部卷子（修复前只覆盖过期快照里那几份）"""
         search = client.post("/qb/search",
                              json={"filename": ALL_PAPERS_SENTINEL}).json()
         found = {q.get("source") for q in search["data"]}
