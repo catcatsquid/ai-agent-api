@@ -44,6 +44,17 @@ debug/
 .npm-cache/
 node_modules/
 
+# 编辑器/重构留下的一次性备份（终版已入库，这些只是草稿）
+*.bak
+*.bak_*
+
+# 题库预览（生成物，341 KB；要随仓库分发就删掉下面这行）
+docs/题目库预览.html
+
+# 另一条工作线：微信读书笔记（与本项目无关，约 1 MB）。
+# 如果哪天想入库，删掉这一行即可。
+docs/微信读书*.md
+
 # 测试结果（JSON）
 debug/003-exam-qa-results*.json
 debug/005-qa-benchmark.json
