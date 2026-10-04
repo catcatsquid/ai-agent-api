@@ -130,11 +130,17 @@ body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #f0f2
 <div class="empty-state" style="padding: 30px 10px; font-size: 12px;">暂无对话</div>
 </div>
 <div class="sidebar-footer">
-<div style="font-size: 11px; color: #6b7280; margin-bottom: 6px;">模式</div>
-<div class="mode-selector" style="margin-bottom: 6px;">
-<button class="mode-btn active" onclick="setAppMode('qa', this)">知识寻回BOT</button>
-<button class="mode-btn" onclick="setAppMode('tutor', this)">LLM助教</button>
-</div>
+<!--
+  这里原来有一个「模式」切换：知识寻回BOT / LLM助教。
+  2026-10 撤掉了切换按钮，只保留 BOT 一条产品路径。
+  原因：两条实现在**同题对比里已经等价**（同一段学生脚本 5 个场景，16好/3坏 vs 18好/2坏），
+  留着两个入口只会让人不知道该用哪个；而每加一个新能力要维护两遍是真实成本。
+  手写助教**代码全部保留**（course_agent/tutor_agent.py、POST /tutor/stream、
+  tests/test_tutor_agent.py、tests/test_surface_parity.py），
+  只是不再从界面进入 —— 需要对照时直接调 /tutor/stream，或把下面两行恢复即可：
+    <button class="mode-btn active" onclick="setAppMode('qa', this)">知识寻回BOT</button>
+    <button class="mode-btn" onclick="setAppMode('tutor', this)">LLM助教</button>
+-->
 <div id="qa-options">
 <div style="font-size: 11px; color: #6b7280; margin-bottom: 4px;">推理模式</div>
 <div class="mode-selector">
@@ -738,6 +744,9 @@ try {
       body = { query: text, mode: currentReasoningMode };
       if (currentThreadId) body.thread_id = currentThreadId;
     } else if (currentAppMode === 'tutor') {
+      // 手写助教的入口：界面上已撤掉模式切换按钮，所以 currentAppMode 恒为 'qa'，
+      // 这个分支平时走不到。保留是因为 tutor_agent.py 与 /tutor/stream 仍在维护
+      // （对照实现），恢复模式按钮后这段立刻可用，不必重写。
       url = '/tutor/stream';
       body = { query: text };
       if (currentTutorSessionId) body.session_id = currentTutorSessionId;
