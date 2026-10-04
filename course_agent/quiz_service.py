@@ -552,7 +552,267 @@ def section_chunks(source: str, offset: int = 0, limit: int = 15) -> dict:
 
 
 # ============================================================
-# 7. 临时出题（不返回题目，返回出题素材）
+# 7. 学习 / 复习（两个运行面共用同一份实现）
+# ============================================================
+#
+# 为什么放在这里而不是 tools.py：两个运行面（LangGraph 图 / 手写助教）都要用，
+# 放进任一面的外壳里就必然分叉 —— 刷题那套已经踩过一次这个坑了。
+
+def as_int(v, default: int) -> int:
+    """容错取整数（模型常传字符串、负数、甚至「2节」这种）"""
+    if isinstance(v, bool):
+        return default
+    if isinstance(v, (int, float)):
+        return int(v)
+    m = re.search(r"-?\d+", str(v or ""))
+    return int(m.group(0)) if m else default
+
+
+def course_of(source: str) -> str:
+    """反查某份资料属于哪门课（知识库 metadata 里没有课程字段，只能按目录反查）"""
+    for c in ("操作系统", "计算机网络"):
+        try:
+            if source in set(course_sources(c)):
+                return c
+        except Exception:
+            continue
+    return ""
+
+
+def find_chapter(course: str, chapter: str):
+    """按章名找课件（学生说「死锁那一章」时用）
+
+    匹配优先级：章节名完全相等 → 互相包含 → 出现在文件名里。
+    """
+    want = (chapter or "").strip()
+    if not want:
+        return None
+    ppts = (section_index(course) or {}).get("ppt") or []
+    norm = lambda s: re.sub(r"[\s\-_·、,，。()（）]", "", str(s or "")).lower()
+    w = norm(want)
+    # 中文 ↔ 英文对照：计网的课件名是英文（Transport Layer），
+    # 而学生说的是中文（传输层）—— 实测说"复习传输层"时对不上，
+    # 结果模型自己挑课件，挑成了网络层，讲的内容跟学生要的不是一回事。
+    alias = {"传输层": "transportlayer", "网络层": "networklayer",
+             "应用层": "applicationlayer", "数据链路层": "datalinklayer",
+             "物理层": "physicallayer", "无线": "wireless", "课程简介": "introduction"}
+    w_alias = alias.get(want, "")
+    for p in ppts:
+        if norm(p["chapter"]) == w:
+            return p
+    if w_alias:
+        for p in ppts:
+            if w_alias in norm(p["source"]) or w_alias in norm(p["chapter"]):
+                return p
+    for p in ppts:
+        c = norm(p["chapter"])
+        if w and (w in c or c in w):
+            return p
+    for p in ppts:
+        if w and w in norm(p["source"]):
+            return p
+    return None
+
+
+def match_source(given: str, names: list):
+    """把模型给的文件名对到真实 source（允许省略后缀、写章节名）"""
+    g = (given or "").strip()
+    if not g:
+        return None
+    if g in names:
+        return g
+    gl = g.lower()
+    for n in names:
+        nl = n.lower()
+        if nl == gl or nl.startswith(gl) or gl in nl or nl in gl:
+            return n
+    stem = g.rsplit(".", 1)[0]
+    return match_source(stem, names) if stem != g else None
+
+
+# 学习与复习的**节奏差异**。
+#
+# 用户的原话：「复习」更偏向快速过 + 多测，「学习」更偏向细讲 + 少测。
+# 但同时也说过不要把粒度写死 —— 所以这里给的是**倾向与区间**，
+# 具体每节讲多少、出几道题仍然由模型按内容判断。
+STUDY_MODES = {
+    "复习": {
+        "pace": "**快速过**：按考点脉络走，略过细枝末节与推导，抓「考什么、怎么考」；"
+                "同一份课件可以一带而过地过完，不必逐块展开",
+        "quiz": "小测**多一些**（约 5~8 道），覆盖本节各个考点，多问「哪个对/哪个错」这类快问快答",
+        "quiz_n": "5~8",
+    },
+    "学习": {
+        "pace": "**细讲**：把机制讲透 —— 为什么这样设计、内部怎么运作、举个例子走一遍；"
+                "宁可慢一点、少讲一点，也不要囫囵吞枣",
+        "quiz": "小测**少一些**（约 2~3 道），但要问到「为什么」，确认真的理解了而不是记住了",
+        "quiz_n": "2~3",
+    },
+}
+
+
+def study_guide(mode: str = "学习") -> str:
+    """学习/复习的呈现契约（两个运行面共用）
+
+    这里是**细节的唯一出处**：两个 system prompt 只留指针（都要求提示词保持简短，
+    细节堆进 prompt 会让模型变没主见 —— 助教那条甚至有测试卡着 1200 字符）。
+    """
+    m = STUDY_MODES.get((mode or "学习").strip(), STUDY_MODES["学习"])
+    label = (mode or "学习").strip() if (mode or "").strip() in STUDY_MODES else "学习"
+    return (
+        f"【怎么用这一节｜模式：{label}】上面是这门课件的原文，按它自己的顺序排好了：\n"
+        "1. **以它为准讲解**，不要用你记忆里的通用教材内容替换它；\n"
+        f"2. 节奏按「{label}」来 —— {m['pace']}；\n"
+        "3. 一次只讲**一节**（节的划分由你按内容判断），讲完明确说「本节结束」，\n"
+        "   然后出覆盖本节核心考点的小测题，**不要**提前讲后面的内容；\n"
+        f"4. {m['quiz']}。题型混着来（选择/填空/简答/计算），"
+        "题量按内容定、不必凑固定数字；\n"
+        "5. 学生作答后**逐题批改**：每题给 ✓/✗ 和一句讲解，错的要说清"
+        "**错在哪、为什么错、正确答案是什么**，并把相关知识点**重讲一遍**；\n"
+        "6. 任何缩写/符号**第一次出现**都给全称与含义（如 TLB＝Translation "
+        "Look-aside Buffer，快表），别默认学生认识；\n"
+        "7. 确认学生真懂了再进下一节（本节卡住就停下来解决，不要硬推）；\n"
+        "8. 作业类请求：先教涉及的知识点 → 让学生自己写 → 批改 → 最后给完整答案；\n"
+        "9. **不串课**：切换课程/章节时明确说清现在在讲哪门课、哪一章、进到哪了，"
+        "两门课的内容不要混在一起；\n"
+        "10. 讲完这一节用 `record_study_position` 记下位置（带上 mode），"
+        "学生说「继续讲」时你才知道从哪接着读；\n"
+        "11. 原文若是 PPT 碎片、语句不通顺，可以**组织成通顺的讲解**，"
+        "但不要改变它的技术含义，也不要编造它没说的内容。\n"
+        "⚠️ **本节的测验题是你自己出的**，所以要**由你自己批改** —— "
+        "逐题在对话里给 ✓/✗ 与讲解就行。\n"
+        "   **不要**调 grade_answers / get_paper_questions 去题库找卷子来批："
+        "那是真题的批改通道，学生答的是你刚出的小测，题库里没有它。\n"
+        "   （真实踩过：学生交小测答案，助教反问「你想做哪份模拟卷」—— "
+        "把学习流程硬拽回了刷题流程。）"
+    )
+
+
+def study_read(course: str = "", chapter: str = "", section=0, source: str = "",
+               offset=0, limit=15, mode: str = "学习") -> dict:
+    """按课件原始顺序读一节 —— 两个运行面共用的实现
+
+    返回:
+        {"text": 给模型看的完整文本（含机器可读的 [study-state] 行）,
+         "study_state": 供上层写进会话状态的书签/位置,
+         "error": 可选}
+    """
+    from rag_tool import get_knowledge_base
+    kb_docs = {d["source"]: d for d in get_knowledge_base().list_documents()}
+    offset, limit, section = as_int(offset, 0), as_int(limit, 15), as_int(section, 0)
+    offset = max(0, offset)
+    note = ""
+    real = None
+
+    # 0) 按章名找 —— 学生最自然的说法就是「某一章」
+    if chapter and course:
+        hit = find_chapter(course, chapter)
+        if hit is None:
+            names = "、".join(f"《{p['chapter']}》"
+                              for p in (section_index(course) or {}).get("ppt") or [])
+            return {"error": f"「{course}」里没有叫「{chapter}」的章。这门课的章有：{names}",
+                    "text": ""}
+        real = hit["source"]
+        note = f"【按章定位】「{chapter}」→《{real}》（章节：{hit['chapter']}）\n\n"
+
+    # 1) 给了文件名
+    if real is None and source:
+        matched = match_source(source, list(kb_docs))
+        if matched is not None:
+            real = matched
+            dtype = (kb_docs.get(real) or {}).get("doc_type", "")
+            if dtype in ("textbook", "notes") and course:
+                ppts = (section_index(course) or {}).get("ppt") or []
+                if ppts:
+                    pick = ppts[max(0, min(section - 1, len(ppts) - 1))] if section else ppts[0]
+                    note = (f"【已自动换材料】你指定的是"
+                            f"{'课本' if dtype == 'textbook' else '补充笔记'}《{real}》，"
+                            f"讲课程内容应该用课件，已改为《{pick['source']}》。"
+                            f"（课本/笔记只在课件没覆盖某个点时作补充。）\n\n")
+                    real = pick["source"]
+        elif course:
+            ppts = (section_index(course) or {}).get("ppt") or []
+            if ppts:
+                pick = ppts[max(0, min(section - 1, len(ppts) - 1))] if section else ppts[0]
+                note = (f"【已自动选材料】没找到叫「{source}」的资料，"
+                        f"已改用「{course}」的课件《{pick['source']}》。"
+                        f"下次可以直接 read_section(course=\"{course}\", section=编号)。\n\n")
+                real = pick["source"]
+        if real is None:
+            names = "、".join(f"《{n}》" for n in list(kb_docs)[:8])
+            return {"error": f"没找到叫「{source}」的资料。请改用 "
+                             f"read_section(course=\"操作系统\", section=1) 这种写法；"
+                             f"现有资料如：{names}", "text": ""}
+
+    # 2) 只给了课程
+    if real is None and course:
+        ppts = (section_index(course) or {}).get("ppt") or []
+        if not ppts:
+            return {"error": f"「{course}」没有可用课件，先调 list_course_sections 确认",
+                    "text": ""}
+        # 计网的课件是 ChapterN- 命名的，而模型说"传输层"时会想成 Chapter5、
+        # 把 5 传进 section —— 按**位置**数第 5 份是 Chapter4（课件从 Chapter0 起，差一位），
+        # 于是它读了网络层、却凭记忆讲 TCP/UDP（实测）。
+        # 所以：这类课程里 section **优先按章号解释**。
+        chap_nums = {}
+        for p in ppts:
+            m = re.match(r"^Chapter(\d+)", p["source"], re.IGNORECASE)
+            if m:
+                chap_nums.setdefault(int(m.group(1)), p)
+        if chap_nums and len(chap_nums) >= len(ppts) - 1 and section in chap_nums:
+            pick = chap_nums[section]
+            idx = ppts.index(pick) + 1
+            real = pick["source"]
+            note = (f"【按章号定位】{course} · Chapter{section} → 《{real}》"
+                    f"（章节：{pick['chapter']}）\n\n")
+        else:
+            idx = section if 1 <= section <= len(ppts) else 1
+            pick = ppts[idx - 1]
+            real = pick["source"]
+            note = (f"【本课课件 {idx}/{len(ppts)}】{course} · 《{real}》"
+                    f"（章节：{pick['chapter']}）"
+                    + (f"\n下一份是第 {idx + 1} 份《{ppts[idx]['source']}》"
+                       if idx < len(ppts) else "\n这是最后一份课件。") + "\n\n")
+
+    if real is None:
+        return {"error": "要指定材料：read_section(course=\"操作系统\", chapter=\"死锁\") "
+                         "或 read_section(course=\"操作系统\", section=1)", "text": ""}
+
+    data = section_chunks(real, offset=offset, limit=limit)
+    if data.get("error"):
+        return {"error": data["error"], "text": ""}
+
+    head = (f"《{real}》｜章节：{data['chapter'] or '未标注'}｜"
+            f"共 {data['total']} 块｜本次第 {data['offset'] + 1}~"
+            f"{data['offset'] + data['returned']} 块"
+            + (f"（后面还有 {data['total'] - data['offset'] - data['returned']} 块，"
+               f"下次用 offset={data['next_offset']} 继续）"
+               if data["has_more"] else "（已到本章末尾）"))
+    body = "\n\n".join(f"[{c['index']}] {c['text']}" for c in data["chunks"])
+    # 机器可读的一行：上层靠它把「读到哪了」记进会话状态。
+    # 明写而不是让上层解析人话 —— 解析措辞太脆（我第一版就这么干，结果 study 里
+    # 没有 course，planner 的整块提示被静默跳过，模型照样不知道读到哪）。
+    state_line = (f"[study-state] course={course or course_of(real)} "
+                  f"chapter={data['chapter'] or ''} source={real} "
+                  f"read={data['offset'] + 1}-{data['offset'] + data['returned']} "
+                  f"total={data['total']} mode={mode or '学习'} "
+                  f"next_offset={data['next_offset'] if data['next_offset'] is not None else 'none'}")
+    text = f"{note}{head}\n\n{body}\n\n{state_line}\n\n----\n{study_guide(mode)}"
+    return {
+        "text": text,
+        "study_state": {
+            "course": course or course_of(real),
+            "chapter": data["chapter"] or "",
+            "last_source": real,
+            "last_read": f"第 {data['offset'] + 1}-{data['offset'] + data['returned']} 块",
+            "next_offset": data["next_offset"],
+            "mode": mode or "学习",
+        },
+    }
+
+
+# ============================================================
+# 8. 临时出题（不返回题目，返回出题素材）
 # ============================================================
 
 def prepare_custom_quiz(topic: str = "", course: str = "", qtype: str = "",

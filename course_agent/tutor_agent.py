@@ -47,7 +47,17 @@ SYSTEM_PROMPT = """你是「知识寻回BOT」，一位耐心、专业的大学�
   容易错在哪一步步讲清楚。只回一个答案、或者让他「再想想」，都等于没帮上忙。
 - 学生可能随时岔开话题（问知识点、抱怨、让你换卷子、让你额外出题），
   你就顺着他的意思走，不要硬把他拽回原来的流程。
-- 回答用 Markdown，语气自然，别把内部规则念出来。"""
+- 回答用 Markdown，语气自然，别把内部规则念出来。
+
+【系统讲课 / 复习】学生说「我要学/我要复习某门课（或某章）」时，是带你系统过一遍，
+不是甩一堆知识点。先 list_course_sections 拿资料地图，再用 read_section 取课件原文讲
+（**优先课件**，别用记忆里的通用教材替换）。
+**具体节奏照 read_section 返回里的契约走**（它会按 mode 给出：复习＝快速过＋多测、
+学习＝细讲＋少测；讲完说「本节结束」、出小测、逐题批改并重讲错的知识点、
+新符号先给全称、确认懂了再进下一节、不串课）。这里的"快慢多少"由你按内容判断，
+契约给的是原则不是死规矩。
+讲完一节用 record_study_position 记下位置（带上 mode），
+这样学生说「继续讲 / 下一节」时你知道从哪接着来。"""
 
 
 # ============================================================
@@ -69,6 +79,8 @@ TOOLS = [
                     "query": {"type": "string", "description": "检索关键词或问题"},
                     "course": {"type": "string", "enum": ["操作系统", "计算机网络"],
                                "description": "限定课程，避免跨课程串味"},
+                    "source": {"type": "string",
+                               "description": "限定到某一份课件（讲某一章时用，名字来自 list_course_sections）"},
                 },
                 "required": ["query"],
             },
@@ -205,6 +217,68 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_course_sections",
+            "description": "列出某门课**实际有哪些课件/课本/笔记**（带章节名与内容量）。"
+                           "学生说「我要复习/我要学 某门课或某章」时先调它拿到真实资料地图，"
+                           "再决定怎么分节 —— 不要凭记忆编章节。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "course": {"type": "string", "enum": ["操作系统", "计算机网络"],
+                               "description": "课程名；留空则两门课都给"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_section",
+            "description": "按**课件原始顺序**读某一节（可分页）。系统讲一节时优先用它 —— "
+                           "比 search_knowledge_base 更全、顺序不乱。不需要记文件名："
+                           "学生说「某一章」就用 chapter，说「第几节/接着讲」就用 section。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "course": {"type": "string", "enum": ["操作系统", "计算机网络"],
+                               "description": "课程名（必填）"},
+                    "chapter": {"type": "string",
+                                "description": "章名，如 死锁 / OS调度 / Transport Layer"},
+                    "section": {"type": "integer", "description": "第几份课件，从 1 开始"},
+                    "source": {"type": "string", "description": "课件名（一般不用）"},
+                    "offset": {"type": "integer", "description": "从第几块开始，默认 0"},
+                    "limit": {"type": "integer", "description": "读几块，默认 15"},
+                    "mode": {"type": "string", "enum": ["学习", "复习"],
+                             "description": "复习=快速过+多测；学习=细讲+少测"},
+                },
+                "required": ["course"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "record_study_position",
+            "description": "记下「学到哪一节了」的书签（**不是状态机**，只是记忆）。"
+                           "开始讲一节时记一次；本节讲完小测通过或学生卡住时用 status 更新。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "course": {"type": "string", "enum": ["操作系统", "计算机网络"]},
+                    "section": {"type": "string", "description": "这一节的标题（你自己起的）"},
+                    "mode": {"type": "string", "enum": ["学习", "复习"]},
+                    "chapter": {"type": "string"},
+                    "source": {"type": "string", "description": "本节依据哪份课件"},
+                    "status": {"type": "string",
+                               "description": "讲解中 / 已通过 / 待巩固"},
+                },
+                "required": ["course", "section"],
+            },
+        },
+    },
 ]
 
 
@@ -223,11 +297,21 @@ def _tool_search_knowledge_base(args, session):
         return {"error": "query 不能为空"}
 
     course = (args.get("course") or "").strip()
+    source = (args.get("source") or "").strip()
     kb = get_knowledge_base()
     top_k = int(args.get("top_k") or 5)
     chapter = args.get("chapter")
 
-    if course:
+    if source:
+        # 限定到某一份课件 —— 「讲某一章」时最准（课件名来自 list_course_sections）
+        real = quiz_service.match_source(
+            source, [d["source"] for d in kb.list_documents()])
+        if real is None:
+            return {"error": f"没找到叫「{source}」的资料",
+                    "_guide": "先用 list_course_sections 看这门课有哪些课件。"}
+        hits = kb.search(query, top_k=top_k, sources=[real])
+        note = f"（只在《{real}》里检索）"
+    elif course:
         hits, confirmed = quiz_service.search_with_course(kb, query, course,
                                                              top_k=top_k)
         note = "" if confirmed else f"（限定课程「{course}」没有真正相关的片段，下面是全库检索结果）"
@@ -238,6 +322,7 @@ def _tool_search_knowledge_base(args, session):
     return {
         "query": query,
         "course": course or "全部",
+        "scope": source or course or "全库",
         "note": note,
         "count": len(hits),
         "passages": [
@@ -247,6 +332,10 @@ def _tool_search_knowledge_base(args, session):
         ],
         "_guide": (
             "基于这些片段用自己的话讲解；引用到具体章节时可以点名，不要整段照抄。"
+            "**以这些片段为准**，不要用你记忆里的通用教材内容替换它；"
+            "片段里没覆盖的点，就直说「课程资料里这部分没找到」，"
+            "再用通用知识补充并标明那是补充。\n"
+            "任何缩写/符号第一次出现都要给全称和含义（如 LRU＝Least Recently Used）。\n"
             "如果学生要的是「针对某个知识点另外出几道题」，就用这些内容自己出题"
             "（题号 + 题干 + 选项/空格，可以另附答案折叠或等学生做完再给）。"
         ),
@@ -454,7 +543,28 @@ def _tool_get_paper_questions(args, session):
 
 
 def _tool_grade_answers(args, session):
+    study = session.get("study") or {}
     raw_name = args.get("paper_source", "") or session.get("current_paper") or ""
+
+    # 硬守卫：正在"讲课/复习"时，学生交的答案属于**本节自拟小测**，不是题库真题。
+    # 实测模型会习惯性地走这个工具，然后反问学生"你在做哪份卷子"，
+    # 把学习流程硬拽回刷题流程 —— 光在 system prompt 里写"不要用"它不跟，
+    # 所以在**工具入口**直接拦下来，并把正确做法写在返回里。
+    if study.get("course") and not raw_name:
+        return {
+            "error": "当前在讲课/复习，学生交的是本节小测的答案 —— 不走题库批改",
+            "study": study,
+            "_guide": (
+                "**你自己出的小测由你自己批**：直接逐题给 ✓/✗ 和一句讲解，"
+                "错的要说清**错在哪、为什么错、正确答案是什么**，并把相关知识点**重讲一遍**。\n"
+                "**不要**再问学生「是哪份卷子」，也不要调题库工具 —— "
+                "现在是在讲 "
+                f"{study['course']}"
+                + (f" · {study['chapter']}" if study.get("chapter") else "")
+                + f" 的《{study.get('section', '')}》这一节。"
+            ),
+        }
+
     paper, candidates = qbank.resolve_paper(raw_name, session.get("current_course"))
     if paper is None:
         if candidates:
@@ -601,8 +711,122 @@ def _tool_record_practice(args, session):
     return {"paper": source, "practice_count": quiz_service.record_practice(source)}
 
 
+def _tool_list_course_sections(args, session):
+    """课程的素材地图（与 LangGraph 那条路共用 quiz_service.section_index）"""
+    course = (args.get("course") or session.get("current_course") or "").strip()
+    data = quiz_service.section_index(course)
+    items = data.items() if not course else [(course, data)]
+    lines = []
+    for c, v in items:
+        lines.append(f"## {c}")
+        if v.get("note"):
+            lines.append(v["note"])
+        lines.append("### 课件（讲课时**优先用这些**，按课程顺序排好）")
+        for i, s in enumerate(v.get("ppt", []), 1):
+            lines.append(f"{i}. {s['source']}  ｜章节：{s['chapter']}｜约 {s['chunks']} 块")
+        if v.get("ppt"):
+            lines.append(f"→ 学生没说从哪章开始时，从第 1 份课件开始"
+                         f"（《{v['ppt'][0]['source']}》）。")
+        if v.get("others"):
+            lines.append("### 其它资料（**只在课件没覆盖时**才用；课本章节顺序"
+                         "不代表本课讲授顺序，不要拿它当「第一节」）")
+            for s in v["others"]:
+                lines.append(f"- {s['source']}  ｜{s['doc_type']}｜约 {s['chunks']} 块")
+        if v.get("not_ingested"):
+            lines.append("### 在磁盘上但**还没入库**（讲不了，需要先导入）")
+            for n in v["not_ingested"]:
+                lines.append(f"- {n}")
+        lines.append("")
+    # 注意：这里**故意不给 reply_text**。
+    # 原来给了一份"排好版的目录"当成品文本，而模型（被我教过"工具给了成品文本就
+    # 直接转发"）真的把它整段发给了学生 —— 学生说"我要复习"，收到的却是一张目录。
+    # 地图是**给你看的内部资料**，不是回复内容。
+    return {
+        "material_map": "\n".join(lines),
+        "sections": data,
+        "_guide": (
+            "上面是这门课的资料地图（**内部资料，不要把它作为回复内容发给学生**）。\n"
+            "**现在立刻调 read_section(course=…, section=1) 取第 1 份课件的原文并开讲** —— "
+            "最多用一句话告诉学生「这门课我按这几块带你过」，然后就开始讲第一节。\n"
+            "⚠️ 学生**按章名**提问时（「复习传输层」「学死锁那一章」），"
+            "必须用 `read_section(course=…, chapter=\"章名\")` —— "
+            "**不要自己数编号**去猜 section。实测数错过：说传输层却读了网络层那章。\n"
+            "**分节粒度由你判断**：地图只告诉你有哪些资料、各有多厚，"
+            "不规定一节包含几个知识点；一节控制在学生一节课能消化的量。\n"
+            "讲某一节时用 read_section 把课件原文取出来讲 —— "
+            "**不要凭记忆讲这门课的内容**。\n"
+            "一次只讲一节，讲完说「本节结束」，**不要**提前把后面的倒出来。\n"
+            "定了这一节讲什么之后，用 record_study_position 记下位置。"
+        ),
+    }
+
+
+def _tool_read_section(args, session):
+    """按课件原始顺序读一节（与 LangGraph 那条路共用 quiz_service.study_read）"""
+    mode = (args.get("mode") or session.get("study_mode") or "学习").strip()
+    res = quiz_service.study_read(
+        course=(args.get("course") or session.get("current_course") or "").strip(),
+        chapter=args.get("chapter") or "",
+        section=args.get("section") or 0,
+        source=args.get("source") or "",
+        offset=args.get("offset") or 0,
+        limit=args.get("limit") or 15,
+        mode=mode,
+    )
+    if res.get("error"):
+        return {"error": res["error"],
+                "_guide": "换个写法：read_section(course=\"操作系统\", chapter=\"死锁\") "
+                          "或 read_section(course=\"操作系统\", section=1)。"}
+    # 手写循环有 session 可以直接写，不必像 Plan 图那样从工具结果里"抽"
+    study = dict(session.get("study") or {})
+    study.update(res.get("study_state") or {})
+    session["study"] = study
+    session["study_mode"] = mode
+    return {"text": res["text"], "study": study,
+            "_guide": "按上面的原文讲解；讲完说「本节结束」，然后按模式出小测。"}
+
+
+def _tool_record_study_position(args, session):
+    """学习书签（只是记忆，不是状态机）"""
+    course = (args.get("course") or "").strip()
+    known = ("操作系统", "计算机网络")
+    chapter = (args.get("chapter") or "").strip()
+    if course and course not in known:
+        # 实测模型会把章名填进 course —— 自我纠正，别污染书签
+        for c in known:
+            if quiz_service.find_chapter(c, course):
+                chapter = chapter or course
+                course = c
+                break
+    pos = {
+        "mode": (args.get("mode") or session.get("study_mode") or "学习").strip(),
+        "course": course,
+        "chapter": chapter,
+        "section": str(args.get("section") or "").strip(),
+        "source": (args.get("source") or "").strip(),
+        "status": (args.get("status") or "讲解中").strip(),
+    }
+    study = dict(session.get("study") or {})
+    study.update({k: v for k, v in pos.items() if str(v or "").strip()})
+    session["study"] = study
+    if course:
+        session["current_course"] = course
+    session["study_mode"] = pos["mode"]
+    guide = quiz_service.study_guide(pos["mode"])
+    return {
+        "recorded": pos,
+        "_guide": (
+            f"已记下：{pos['course']} · {pos['chapter'] or '（未标章）'} · {pos['section']}"
+            f"（{pos['status']}）。\n" + guide
+        ),
+    }
+
+
 TOOL_HANDLERS = {
     "search_knowledge_base": _tool_search_knowledge_base,
+    "list_course_sections": _tool_list_course_sections,
+    "read_section": _tool_read_section,
+    "record_study_position": _tool_record_study_position,
     "list_papers": _tool_list_papers,
     "get_paper_questions": _tool_get_paper_questions,
     "prepare_custom_quiz": _tool_prepare_custom_quiz,
@@ -651,6 +875,25 @@ def _post_stream(payload: dict, timeout: int = 180):
                 continue
             raise
     raise last
+
+
+def _tools_for(session: dict) -> list:
+    """按会话状态决定**这一轮给模型看哪些工具**
+
+    这是最强的一种纠偏：**不给它，它就没法调错**。
+
+    起因（实测）：在讲课/复习中，学生交了自拟小测的答案，模型**习惯性**去调
+    `grade_answers`，然后反问"你在做哪份卷子" —— 把学习流程硬拽回刷题流程。
+    我先在 system prompt 里写了"不要用"，它不跟；又在工具入口加了硬守卫
+    （返回"这是小测，你自己批"），**它还是不跟，照样问学生卷名**。
+    所以在"讲课中且没有当前试卷"这种状态下，干脆不提供这些题库工具。
+    """
+    study = session.get("study") or {}
+    quiz_like = {"grade_answers", "explain_question", "get_paper_questions",
+                 "get_practice_stats", "record_practice"}
+    if study.get("course") and not session.get("current_paper"):
+        return [t for t in TOOLS if t["function"]["name"] not in quiz_like]
+    return TOOLS
 
 
 def _stream_round(messages, tools=None, temperature=0.7, max_tokens=2000):
@@ -727,6 +970,51 @@ _SESSIONS: dict[str, dict] = {}
 _SESSION_TTL = 3 * 3600          # 3 小时不活跃就回收，避免内存无限增长
 _MAX_HISTORY_MESSAGES = 40       # 超过就按"从某条 user 消息起"截断（保证 tool 配对完整）
 _COMPACT_KEEP_LAST_TOOL = 2      # 只保留最近 2 条工具结果全文，更早的压缩掉
+
+
+def _system_prompt_for(session: dict) -> str:
+    """基础 system prompt + **动态的当前状态**
+
+    为什么动态注入而不写进基础 prompt：
+      · 基础 prompt 有长度约束（有测试卡着 1200 字符），堆细节会让模型变没主见；
+      · 学习书签是**跨轮会话状态**，只有这里能按状态给出。
+
+    尤其是"本节小测由你自己批"这一条：它必须**在学生交答案那一轮**就可见 ——
+    而那轮学生不会去调 read_section，所以那个工具返回里的契约根本到不了模型手里。
+    （实测：学生交了自拟小测的答案，助教反问「你想做哪份模拟卷」，
+      把学习流程硬拽回了刷题流程。）
+    """
+    extra = []
+    study = session.get("study") or {}
+    if study.get("course"):
+        line = (f"【当前学习位置】{study.get('mode', '学习')} · {study['course']}"
+                + (f" · {study['chapter']}" if study.get("chapter") else "")
+                + f" · 上一节《{study.get('section', '')}》"
+                  f"({study.get('status', '讲解中')})")
+        if study.get("last_source"):
+            line += f" · 刚读到《{study['last_source']}》的 {study.get('last_read', '')}"
+            line += (f"，**继续讲要用 offset={study['next_offset']}**"
+                     if study.get("next_offset") is not None else "（这份已读完）")
+        extra.append(
+            line + "\n"
+            "· **本节的测验题是你自己出的，所以由你自己批**：逐题给 ✓/✗ 与讲解，"
+            "说清**错在哪、为什么错、正确答案是什么**，错的知识点要重讲一遍。\n"
+            "· **不要**调 grade_answers / get_paper_questions —— 那是题库真题的批改通道，"
+            "学生答的是你刚出的小测，题库里没有它。\n"
+            "· 学生说「继续讲」＝接着读**同一份**课件；说「下一节」＝进下一份。\n"
+            "· 学生**按章名**提问（「复习传输层」「学死锁那一章」）→ 用 "
+            "read_section(course=…, chapter=\"章名\")，**不要自己数编号**去猜 section"
+            "（实测数错过：说传输层却读了网络层那章）。\n"
+            "· 学生说「没听懂 / 换个讲法」→ **用 read_section 把那段原文再取一次**"
+            "（同一个 source），换个角度讲（类比、画流程、举个具体例子），"
+            "**不要**让学生报题号、也不要复读上一轮的原话。\n"
+            "· 切换课程/章节时明确说清现在在讲哪门课、哪一章、进到哪了，**不串课**。"
+        )
+    if session.get("current_paper"):
+        extra.append(f"【当前试卷】{session['current_paper']}"
+                     + (f"（第 {session['last_group']['index']} 组）"
+                        if session.get("last_group") else ""))
+    return SYSTEM_PROMPT + ("\n\n" + "\n".join(extra) if extra else "")
 
 
 def _new_session(sid: str) -> dict:
@@ -818,6 +1106,11 @@ def process_message(session_id: str | None, user_input: str):
     session = _get_session(session_id)
     sid = session["id"]
 
+    # 每轮刷新 system prompt 里的动态状态（学习位置 / 当前试卷）
+    # —— 基础 prompt 保持简短，状态按会话实时注入。
+    if session["messages"] and session["messages"][0].get("role") == "system":
+        session["messages"][0]["content"] = _system_prompt_for(session)
+
     yield {"type": "start", "session_id": sid}
 
     _compact_tools(session)
@@ -837,7 +1130,8 @@ def process_message(session_id: str | None, user_input: str):
         streamed_any = False
 
         try:
-            for kind, payload in _stream_round(session["messages"], tools=TOOLS):
+            for kind, payload in _stream_round(session["messages"],
+                                               tools=_tools_for(session)):
                 if kind == "content":
                     content_parts.append(payload)
                     streamed_any = True

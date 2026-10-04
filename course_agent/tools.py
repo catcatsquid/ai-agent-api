@@ -204,7 +204,8 @@ def _find_chapter(course: str, chapter: str):
 @tool
 def read_section(course: str = "", chapter: str = "",
                  section: "int | str" = 0, source: str = "",
-                 offset: "int | str" = 0, limit: "int | str" = 15) -> str:
+                 offset: "int | str" = 0, limit: "int | str" = 15,
+                 mode: str = "学习") -> str:
     """按**课件原始顺序**读取某一节的内容 —— 讲课程内容时用它（优先于 search_knowledge）
 
     ## 怎么用（**不需要你记文件名**）
@@ -226,105 +227,13 @@ def read_section(course: str = "", chapter: str = "",
         offset: 从第几块开始，默认 0
         limit: 本次读几块，默认 15（上限 40）
     """
-    from rag_tool import get_knowledge_base
-    kb_docs = {d["source"]: d for d in get_knowledge_base().list_documents()}
-    offset, limit, section = _as_int(offset, 0), _as_int(limit, 15), _as_int(section, 0)
-    offset = max(0, offset)
-    note = ""
-    real = None
-
-    # 0) 按章名找 —— 学生最自然的说法就是"某一章"（"我要学死锁那一章"）
-    if chapter and course:
-        hit = _find_chapter(course, chapter)
-        if hit is None:
-            ppts = _course_ppt_list(course)
-            names = "、".join(f"《{p['chapter']}》" for p in ppts)
-            return (f"（「{course}」里没有叫「{chapter}」的章。这门课的章有：{names}）")
-        real = hit["source"]
-        note = f"【按章定位】「{chapter}」→《{real}》（章节：{hit['chapter']}）\n\n"
-
-    # 1) 给了文件名就优先用它
-    if real is None and source:
-        matched = _match_source_name(source, list(kb_docs))
-        if matched is not None:
-            real = matched
-            # 结构性纠偏：讲课程内容却去读课本/笔记 —— 实测光提醒没用（模型照样拿笔记讲），
-            # 所以这里直接**换成这门课的课件**，让它手里拿到的是正确材料。
-            dtype = (kb_docs.get(real) or {}).get("doc_type", "")
-            if dtype in ("textbook", "notes") and course:
-                ppts = _course_ppt_list(course)
-                if ppts:
-                    pick = ppts[max(0, min(section - 1, len(ppts) - 1))] if section else ppts[0]
-                    note = (f"【已自动换材料】你指定的是{'课本' if dtype == 'textbook' else '补充笔记'}"
-                            f"《{real}》，讲课程内容应该用课件，已改为《{pick['source']}》。"
-                            f"（课本/笔记只在课件没覆盖某个点时作补充。）\n\n")
-                    real = pick["source"]
-        elif course:
-            # 2) 文件名对不上（模型爱编个"操作系统课件"这种名字）也别失败：
-            #    直接用这门课的课件，避免它转头去凭记忆讲。
-            ppts = _course_ppt_list(course)
-            if ppts:
-                pick = ppts[max(0, min(section - 1, len(ppts) - 1))] if section else ppts[0]
-                note = (f"【已自动选材料】没找到叫「{source}」的资料，"
-                        f"已改用「{course}」的课件《{pick['source']}》。"
-                        f"下次可以直接 read_section(course=\"{course}\", section=编号)。\n\n")
-                real = pick["source"]
-        if real is None:
-            names = "、".join(f"《{n}》" for n in list(kb_docs)[:8])
-            return (f"（没找到叫「{source}」的资料。请改用 "
-                    f"read_section(course=\"操作系统\", section=1) 这种写法；"
-                    f"现有资料如：{names}）")
-
-    # 3) 只给了课程：按第几份课件取（默认第 1 份）
-    if real is None and course:
-        ppts = _course_ppt_list(course)
-        if not ppts:
-            return f"（「{course}」没有可用课件，先调 list_course_sections 确认）"
-        idx = section if 1 <= section <= len(ppts) else 1
-        pick = ppts[idx - 1]
-        real = pick["source"]
-        note = (f"【本课课件 {idx}/{len(ppts)}】{course} · 《{real}》"
-                f"（章节：{pick['chapter']}）"
-                + (f"\n下一份是第 {idx + 1} 份《{ppts[idx]['source']}》"
-                   if idx < len(ppts) else "\n这是最后一份课件。") + "\n\n")
-
-    if real is None:
-        return ("（要指定材料：read_section(course=\"操作系统\", section=1)，"
-                "或者 read_section(source=\"05-死锁.pdf\")）")
-
-    data = quiz_service.section_chunks(real, offset=offset, limit=limit)
-    if data.get("error"):
-        return f"（{data['error']}）"
-
-    head = (f"《{real}》｜章节：{data['chapter'] or '未标注'}｜"
-            f"共 {data['total']} 块｜本次第 {data['offset'] + 1}~"
-            f"{data['offset'] + data['returned']} 块"
-            + (f"（后面还有 {data['total'] - data['offset'] - data['returned']} 块，"
-               f"下次用 offset={data['next_offset']} 继续）"
-               if data["has_more"] else "（已到本章末尾）"))
-    body = "\n\n".join(f"[{c['index']}] {c['text']}" for c in data["chunks"])
-    # 机器可读的一行：executor 靠它把"读到哪了"记进会话状态。
-    # 为什么明写而不是让上层解析自然语言：解析措辞太脆（而且我一开始就是这么干的，
-    # 结果 study 里没有 course，planner 的整块提示被跳过 —— 模型照样不知道读到哪）。
-    state_line = (f"[study-state] course={course or _course_of(real)} "
-                  f"chapter={data['chapter'] or ''} source={real} "
-                  f"read={data['offset'] + 1}-{data['offset'] + data['returned']} "
-                  f"total={data['total']} "
-                  f"next_offset={data['next_offset'] if data['next_offset'] is not None else 'none'}")
-    return (
-        f"{note}{head}\n\n{body}\n\n{state_line}\n\n"
-        "----\n"
-        "【怎么用这一节】上面就是这门课件的原文，按它自己的顺序排好了：\n"
-        "1. **以它为准讲解**，不要用你记忆里的通用教材内容替换它；\n"
-        "2. 一次只讲**一节**（节的划分由你按内容判断），讲完明确说「本节结束」，\n"
-        "   然后出 3~5 道覆盖本节核心考点的小测题，**不要**提前讲后面的内容；\n"
-        "3. 任何缩写/符号**第一次出现**都给全称与含义（如 TLB＝Translation "
-        "Look-aside Buffer，快表）；\n"
-        "4. 如果原文是 PPT 碎片、语句不通顺，你可以**组织成通顺的讲解**，"
-        "但不要改变它的技术含义，也不要编造它没说的内容；\n"
-        "5. 讲完这一节记得用 record_study_position 记下位置，学生说"
-        "「下一节」时你才知道从哪继续。"
-    )
+    # 实现已下沉到 quiz_service.study_read —— 两个运行面（LangGraph 图 / 手写助教）
+    # 共用同一份，避免像刷题那样各写一份、然后真实分叉。
+    res = quiz_service.study_read(course=course, chapter=chapter, section=section,
+                                  source=source, offset=offset, limit=limit, mode=mode)
+    if res.get("error"):
+        return f"（{res['error']}）"
+    return res["text"]
 
 
 @tool
@@ -368,6 +277,12 @@ def list_course_sections(course: str = "") -> str:
         f"{body}\n"
         "----\n"
         "【怎么用这份地图】\n"
+        "⚠️ **不要把这份清单直接发给学生** —— 他要的是「带我复习」，不是一份目录。\n"
+        "拿到地图后**接着就开讲第一节**：用 read_section(course=…, section=1) "
+        "取课件原文，然后按契约讲。最多用一句话说明「这门课有哪几块内容」，就开讲。\n"
+        "⚠️ 学生**按章名**提问时（「复习传输层」「学死锁那一章」），"
+        "必须用 `read_section(course=…, chapter=\"章名\")` —— "
+        "**不要自己数编号**去猜 section。实测数错过：说传输层却读了网络层那章。\n"
         "1. **分节由你判断**：这份地图只告诉你「有哪些资料、各有多厚」，"
         "不规定一节包含几个知识点。按内容的内在结构切，"
         "一节控制在「学生一节课（约半小时到一小时）能消化」的量；\n"
@@ -464,7 +379,10 @@ def list_papers(course: str = "") -> str:
         "【本步只做一件事】把上面这份清单发给学生，并问他选哪一份。\n"
         "**这一步不要开始出题**：题目只能来自 list_papers 里列出的试卷，"
         "必须等学生选定后调用 get_paper_questions 才有题。\n"
-        "**绝对不要自己编写题目、选项或图片链接** —— 编出来的题和图片都是假的。"
+        "**绝对不要自己编写题目、选项或图片链接** —— 编出来的题和图片都是假的。\n"
+        "如果学生要刷的是**某个知识点**的题（而不是整份卷子），"
+        "题库没有按知识点组卷 —— 那种情况用 prepare_custom_quiz 自己出题，"
+        "不要拿某份卷子的第一组硬凑给他。"
     )
 
 
