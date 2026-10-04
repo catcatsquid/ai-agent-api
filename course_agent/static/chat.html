@@ -430,7 +430,7 @@ updateStatus('idle', '就绪');
 renderChatList();
 showToast('对话已删除', 'info');
 }
-function exportChat() {
+async function exportChat() {
 if (!currentChatId) {
 showToast('当前没有对话可导出', 'warning');
 return;
@@ -450,18 +450,50 @@ const role = msg.role === 'user' ? '👤 用户' : '🤖 助手';
 md += `## ${role}\n\n`;
 md += `${msg.content}\n\n`;
 }
-// 下载
+// 关键改动：先在**服务端**落盘，再顺带触发浏览器下载。
+// 原来只做浏览器下载还无条件报成功 —— 实测提示"已导出"但下载目录空无一物，
+// 因为下载是异步的、还可能被浏览器/iframe 拦掉，前端无从得知结果。
+// 服务端落盘这一步的成败我们一定拿得到，所以以它为准来报结果。
+let savedPath = '';
+try {
+const resp = await fetch('/chat/export', {
+method: 'POST',
+headers: { 'Content-Type': 'application/json', ...(authHeaders ? authHeaders() : {}) },
+body: JSON.stringify({ title: chat.title, markdown: md })
+});
+const data = await resp.json();
+if (data && data.code === 0) {
+savedPath = data.path || '';
+} else {
+showToast(`导出失败：${(data && data.msg) || resp.status}`, 'error');
+return;
+}
+} catch (e) {
+showToast(`导出失败：${e.message}`, 'error');
+return;
+}
+
+// 浏览器下载（best-effort，失败也不影响上面的结果）
+const safeTitle = chat.title.replace(/[\\/:*?"<>|]/g, '_');
+const filename = `${safeTitle}_${new Date().toISOString().slice(0,10)}.md`;
+try {
 const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
 const url = URL.createObjectURL(blob);
 const a = document.createElement('a');
 a.href = url;
-const safeTitle = chat.title.replace(/[\\/:*?"<>|]/g, '_');
-a.download = `${safeTitle}_${new Date().toISOString().slice(0,10)}.md`;
+a.download = filename;
 document.body.appendChild(a);
 a.click();
 document.body.removeChild(a);
-URL.revokeObjectURL(url);
-showToast('对话已导出', 'success');
+// 不能立刻 revoke：下载还没开始解析这个 blob URL 就失效了，
+// 正是"提示成功但没有文件"的元凶之一。留足时间再释放。
+setTimeout(() => URL.revokeObjectURL(url), 60000);
+} catch (e) {
+console.warn('浏览器下载触发失败（服务端已保存）:', e);
+}
+
+// 报真实结果：路径说清楚，文件名也说清楚
+showToast(`已导出到 ${savedPath}`, 'success');
 }
 function renderMessages(messages) {
 const container = document.getElementById('messages');

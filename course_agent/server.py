@@ -17,6 +17,7 @@ Week 10 升级：知识库管理接口（增量导入 + 检索测试）
 
 import json
 import uuid
+from datetime import datetime
 from pathlib import Path as FilePath
 from fastapi import FastAPI, Depends, Query
 from fastapi.staticfiles import StaticFiles
@@ -628,6 +629,87 @@ def kb_remove_document(source: str, auth: dict = Depends(any_auth)):
     if deleted:
         return {"code": 0, "msg": f"已删除: {source}"}
     return {"code": 404, "msg": f"文档不在知识库中: {source}"}
+
+
+# ---------------------------------------------------------------- 对话导出
+#
+# 为什么要有服务端导出：前端原来只做 `Blob` + `<a download>`，
+# 然后**无条件**弹"对话已导出"。但下载是异步的，还可能被浏览器/iframe 拦掉，
+# 前端根本无从得知结果 —— 实测点完提示成功，下载目录里却一个文件都没有。
+#
+# 所以改成：**先在服务端落盘**（这一步的成败前端一定拿得到），
+# 把真实路径显示给用户；浏览器下载降级为"顺带触发一下"。
+EXPORT_ROOT = (PROJECT_ROOT / "exports").resolve()
+
+
+class ChatExportRequest(BaseModel):
+    title: str = ""
+    markdown: str = ""
+    messages: list[dict] = []
+
+
+def _safe_export_name(title: str) -> str:
+    """把对话标题变成安全的文件名（去掉路径分隔符与 Windows 非法字符）"""
+    name = (title or "对话").strip()
+    for ch in '\\/:*?"<>|\r\n\t':
+        name = name.replace(ch, "_")
+    name = name.strip(". ") or "对话"
+    return name[:60]
+
+
+def _render_chat_markdown(title: str, messages: list[dict]) -> str:
+    """把 messages 渲染成 Markdown（与前端保持同一份格式）"""
+    lines = [f"# {title or '对话'}", "",
+             f"> 导出时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+             f"> 消息数: {len(messages)}", "", "---", ""]
+    for m in messages:
+        role = "👤 用户" if m.get("role") == "user" else "🤖 助手"
+        lines += [f"## {role}", "", str(m.get("content") or ""), ""]
+    return "\n".join(lines)
+
+
+@app.post("/chat/export")
+def chat_export(req: ChatExportRequest, auth: dict = Depends(any_auth)):
+    """把当前对话导出成 Markdown，落在项目的 exports/ 目录下
+
+    返回里带**真实路径**，前端会显示出来 —— 这样"导出到哪了"永远有答案，
+    不依赖浏览器的下载行为。
+    """
+    md = req.markdown
+    if not md and req.messages:
+        md = _render_chat_markdown(req.title, req.messages)
+    if not md.strip():
+        return {"code": 400, "msg": "没有可导出的内容"}
+
+    EXPORT_ROOT.mkdir(parents=True, exist_ok=True)
+    # 时间戳只到秒 —— 同一秒内导出两次会算出同一个文件名，
+    # 后一次会把前一次**静默覆盖**掉（写测试时实测到了）。
+    # 所以这里保证不重名：撞了就往后加序号。
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    base = f"{_safe_export_name(req.title)}_{stamp}"
+    target = EXPORT_ROOT / f"{base}.md"
+    n = 2
+    while target.exists():
+        target = EXPORT_ROOT / f"{base}_{n}.md"
+        n += 1
+
+    # 文件名已过滤分隔符，这里再兜一道：必须仍落在 exports/ 之内
+    if EXPORT_ROOT != target.resolve().parent:
+        logger.warning("拒绝越界的导出文件名: %s", target.name)
+        return {"code": 403, "msg": "非法文件名"}
+    target = target.resolve()
+
+    try:
+        target.write_text(md, encoding="utf-8")
+    except OSError as e:
+        logger.warning("对话导出写入失败: %s", e)
+        return {"code": 500, "msg": f"写入失败: {str(e)[:120]}"}
+
+    rel = target.relative_to(PROJECT_ROOT).as_posix()
+    nbytes = len(md.encode("utf-8"))
+    logger.info("对话已导出: %s (%d 字节)", rel, nbytes)
+    return {"code": 0, "msg": "ok", "path": rel, "abs_path": str(target),
+            "filename": target.name, "bytes": nbytes}
 
 
 @app.get("/kb/browse")
