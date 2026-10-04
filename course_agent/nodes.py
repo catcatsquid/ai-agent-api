@@ -27,6 +27,7 @@ from course_agent.tools import tools, tools_by_name
 from course_agent.errors import safe_llm_invoke, safe_tool_invoke, LLMError
 from course_agent.memory import trim_messages, compress_history, SUMMARY_MARK
 from course_agent.logger import logger
+from course_agent import quiz_service
 
 llm_with_tools = llm.bind_tools(tools)
 
@@ -142,6 +143,33 @@ def _missed_questions(text: str) -> bool:
 _QUIZ_ANSWER_HINT = re.compile(
     r"(\d\s*[.、)]\s*[A-Ha-h对错√×]|(?<![A-Za-z])[A-H]{3,}(?![A-Za-z])|我答|答案[:：])"
 )
+
+
+_STUDY_REQ_RE = re.compile(r"复习|预习|我要学|带我|过一遍|串一遍|讲讲|讲解|梳理|学一下")
+_CONT_RE = re.compile(r"继续|接着|下一节|往下")
+
+
+def _looks_like_study_request(text: str) -> bool:
+    """学生是不是在要求「系统讲这门课/这一章」或「接着讲下去」
+
+    包含「继续/接着/下一节」这类**延续信号** —— 实测「继续讲」里没有
+    「讲讲/讲解」这种词，只按请求词判断会漏掉它（而它恰恰是最常见的一句）。
+    漏判的代价：不补 read_section → 模型凭记忆接着讲。
+    """
+    t = str(text or "")
+    if not (_STUDY_REQ_RE.search(t) or _CONT_RE.search(t)):
+        return False
+    # 别再拦「学生交答案」那一轮（那轮由另一条守卫处理成不调工具）
+    return not _looks_like_quiz_answer(t)
+
+
+def _course_from_text(text: str) -> str:
+    """从学生这句话里认出课程名（认不出就返回空，**不乱猜**）"""
+    t = str(text or "")
+    for c in ("操作系统", "计算机网络"):
+        if c in t:
+            return c
+    return ""
 
 
 def _looks_like_quiz_answer(text: str) -> bool:
@@ -564,6 +592,25 @@ def planner_node(state: AgentState, config=None) -> dict:
         logger.info("讲课/复习中收到小测答案 → 不走题库工具，交给 synthesizer 自批")
         normalized = []
 
+    # 【守卫 3】学生在听课/复习，但计划里**没有任何"取材料"的动作** →
+    # 这一轮它一定会凭记忆讲（实测：只调 list_course_sections 就开讲，
+    # 讲的内容不在课件里，还自己编了题和 example.com 图片）。
+    # 这里确定性地补一步 read_section，把课件原文塞到它手里。
+    _material = ("read_section", "search_knowledge", "search_knowledge_base")
+    if not any(s.get("tool") in _material for s in normalized) \
+            and _looks_like_study_request(user_content):
+        _study = drill.get("study") or {}
+        _course = _study.get("course") or _course_from_text(user_content)
+        if _course:
+            if _study.get("last_source") and _study.get("next_offset") is not None:
+                # 有书签就接着上次读（别把学生拉回第一节）
+                _args = {"course": _course, "source": _study["last_source"],
+                         "offset": _study["next_offset"]}
+            else:
+                _args = {"course": _course, "section": 1}
+            logger.info("听课/复习但计划里没有取材料 → 补一步 read_section(%s)", _args)
+            normalized = [{"tool": "read_section", "args": _args}] + normalized
+
     out: dict = {"plan": normalized}
 
     # 【守卫 2】状态上限：MemorySaver 原来**没有任何裁剪**（审查文档 F2），
@@ -754,6 +801,23 @@ def _extract_study_session(current: dict, plan: list, results: list):
             merged_pos.update({k: v for k, v in pos.items() if str(v or "").strip()})
             updated["study"] = merged_pos
 
+        elif tool == "list_course_sections":
+            # 只调了地图、没调 read_section 的情况：至少把"在学哪门课"记下来，
+            # 否则学习契约（以课件原文为准 / 收尾 / 不要编题编图）全都不会注入 ——
+            # 实测那一轮模型就凭记忆讲课、还编了题和 example.com 图片。
+            text = msg.content if isinstance(msg.content, str) else ""
+            m = re.search(r"\[study-course\]\s*(.+)", text)
+            if not m:
+                continue
+            kv = dict(re.findall(r"(\w+)=(\S*)", m.group(1)))
+            if not kv.get("course"):
+                continue
+            updated = dict(updated if updated is not None else (current or {}))
+            study = dict(updated.get("study") or {})
+            study.setdefault("course", kv["course"])
+            study["mode"] = kv.get("mode") or study.get("mode") or "学习"
+            updated["study"] = study
+
         elif tool == "read_section":
             # 解析工具显式给出的 [study-state] 行（不要解析自然语言措辞 —— 太脆：
             # 我第一版就是按措辞解析，结果 study 里没有 course，
@@ -910,6 +974,12 @@ def synthesizer_node(state: AgentState) -> dict:
     base_prompt += _session_block(state.get("session") or {})
     if summary_text:
         base_prompt = f"{base_prompt}\n\n{SUMMARY_MARK}\n{summary_text}"
+    # 收尾动作放在**最末尾**（连摘要都在它前面）。
+    # 实测三档：写在提示中段 → 3 轮里 1 轮照做；只说一句要求+放末尾 → 2/3；
+    # 所以最后改成**给可照抄的收尾格式**，把不可靠的动作（写「本节结束」）
+    # 绑到可靠的动作（出小测，3/3）上一起做。格式的唯一出处是 quiz_service。
+    if (state.get("session") or {}).get("study", {}).get("course"):
+        base_prompt += "\n\n--- " + quiz_service.closing_block()
     # 工具报错时的行为约束（实测：批改失败后模型会"假装重试"、
     # 编造一个不存在的工具名（get_paper_answers），或者让学生改格式重发）
     if any(isinstance(m, str) and '"error"' in m for m in tool_results):
@@ -942,6 +1012,17 @@ def synthesizer_node(state: AgentState) -> dict:
         # 兜底：把泄漏成正文的工具调用片段摘掉（正解是允许一次重规划，见文件头注释）
         if isinstance(response, AIMessage) and response.content:
             cleaned = strip_tool_call_text(str(response.content))
+            # 再摘掉**编造的图片链接**（合法图片只有题库题图 /qb_images/…）。
+            # 提示词里写了不许编、实测照样编，所以这里用代码兜住。
+            cleaned, dropped = quiz_service.sanitize_images(cleaned)
+            if dropped:
+                logger.warning("摘掉回答里编造的图片链接 %d 个: %s",
+                               len(dropped), dropped[:3])
+            # 学习/复习时，收尾标记由代码保证（模型只有 3/4 会写，而它必须可靠）
+            if (state.get("session") or {}).get("study", {}).get("course"):
+                cleaned, added = quiz_service.ensure_closing(cleaned)
+                if added:
+                    logger.info("模型没写「本节结束」→ 已由代码补上")
             if cleaned != response.content:
                 logger.info("摘掉回答里泄漏的工具调用片段 (%d → %d 字符)",
                             len(str(response.content)), len(cleaned))

@@ -7,6 +7,7 @@
 外加一条：模型把工具调用**当正文写出来**给学生看（实测出现过）。
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -257,5 +258,11 @@ class TestToolCallTextIsStripped:
     def test_synthesizer_applies_the_stripper(self):
         src = (ROOT / "course_agent/nodes.py").read_text(encoding="utf-8")
         i = src.index("def synthesizer_node")
-        body = src[i:i + 2600]
+        # 取到**下一个顶层 def** 为止。原来写死 2600 字符窗口，
+        # 我在提示里加了两段话就把 strip 调用挤出窗口 → 测试假红了一次。
+        # （教训：别用"字符数窗口"当函数边界，那就是一种数据快照。）
+        nxt = re.search(r"\ndef \w", src[i + 10:])
+        body = src[i:i + 10 + nxt.start()] if nxt else src[i:]
         assert "strip_tool_call_text" in body, "synthesizer 没有应用兜底清理"
+        # 收紧一点：不能只是"提到了"，必须真的调用了
+        assert "cleaned = strip_tool_call_text(" in body

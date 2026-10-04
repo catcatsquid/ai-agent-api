@@ -137,6 +137,176 @@ class TestNoPhantomToolStep:
         assert server._tool_result_messages(None) == []
 
 
+class TestFabricatedImagesAreStripped:
+    """实测：模型没取到课件、凭记忆讲课那一轮，自己编了题**和图片**：
+    `![进程与线程测试题](https://example.com/process_thread_question.png)`
+    提示词里早就写了「绝不允许编造图片链接」，照样编 —— 所以用代码兜。
+    """
+
+    def test_fake_image_is_dropped(self):
+        t = ("接下面是小测：\n![进程与线程测试题]"
+             "(https://example.com/process_thread_question.png)\n请作答。")
+        cleaned, dropped = quiz_service.sanitize_images(t)
+        assert "example.com" not in cleaned
+        assert dropped == ["https://example.com/process_thread_question.png"]
+        assert "请作答" in cleaned, "正文不能被误删"
+
+    def test_real_question_image_is_kept(self):
+        t = "1. 进程状态转换  ![题目](/qb_images/2025%E5%B9%B4..._Q1_p1.png)"
+        cleaned, dropped = quiz_service.sanitize_images(t)
+        assert cleaned == t
+        assert dropped == []
+
+    def test_static_images_are_kept(self):
+        t = "![示意图](/static/img/x.png)"
+        assert quiz_service.sanitize_images(t)[0] == t
+
+    def test_plain_text_untouched(self):
+        t = "正确答案是 C。没有图片。"
+        assert quiz_service.sanitize_images(t) == (t, [])
+
+
+class TestStudyContractReachesTheSynthesizerWithoutReadSection:
+    """实测：只调了 list_course_sections、没调 read_section 时，
+    会话里没有学习书签 → 「以课件为准 / 收尾 / 不要编题编图」全都不会注入 →
+    模型凭记忆讲课还编题编图。所以 list_course_sections 也要报"在学哪门课"。
+    """
+
+    def test_list_course_sections_reports_the_course(self):
+        out = tools.list_course_sections.invoke({"course": "操作系统"})
+        assert "[study-course] course=操作系统" in out
+
+    def test_extraction_sets_the_bookmark(self):
+        out = tools.list_course_sections.invoke({"course": "计算机网络"})
+        sess = nodes._extract_study_session(
+            {}, [{"tool": "list_course_sections", "args": {}}],
+            [ToolMessage(content=out, tool_call_id="p0", name="list_course_sections")])
+        assert sess["study"]["course"] == "计算机网络"
+
+    def test_contract_is_injected_from_that_bookmark_alone(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(nodes, "safe_llm_invoke",
+                            lambda fn, msgs, context=None: (
+                                captured.update(prompt=msgs[0].content)
+                                or AIMessage(content="ok")))
+        nodes.synthesizer_node({
+            "messages": [nodes.HumanMessage(content="我要复习操作系统")],
+            "plan": [], "tool_rounds": 0,
+            "session": {"study": {"course": "操作系统", "mode": "复习"}}})
+        p = captured["prompt"]
+        assert "本节结束" in p, "收尾契约没注入"
+        assert "不要编造" in p or "编造" in p or "quiz" in p.lower() or "小测" in p
+
+
+class TestStudyRequestAlwaysReadsMaterial:
+    """守卫：学生在听课/复习，但计划里没有取材料的动作 → 确定性补一步 read_section
+
+    实测那一轮只调了 list_course_sections 就开讲，内容不在课件里。
+    """
+
+    def _plan(self, monkeypatch, steps):
+        monkeypatch.setattr(
+            nodes, "safe_llm_invoke",
+            lambda fn, msgs, context=None: AIMessage(
+                content=json.dumps({"need_tools": True, "steps": steps},
+                                   ensure_ascii=False)))
+        return nodes.planner_node({
+            "messages": [nodes.HumanMessage(content="我要复习操作系统")],
+            "plan": [], "tool_rounds": 0, "session": {}})
+
+    def test_forces_read_section_when_only_map_was_planned(self, monkeypatch):
+        out = self._plan(monkeypatch, [{"tool": "list_course_sections",
+                                        "args": {"course": "操作系统"}}])
+        tools_ = [s["tool"] for s in out["plan"]]
+        assert "read_section" in tools_, tools_
+        rs = next(s for s in out["plan"] if s["tool"] == "read_section")
+        assert rs["args"]["course"] == "操作系统"
+
+    def test_continues_from_the_bookmark_instead_of_restarting(self, monkeypatch):
+        monkeypatch.setattr(
+            nodes, "safe_llm_invoke",
+            lambda fn, msgs, context=None: AIMessage(content=json.dumps(
+                {"need_tools": True, "steps": [{"tool": "record_study_position",
+                                                "args": {}}]})))
+        out = nodes.planner_node({
+            "messages": [nodes.HumanMessage(content="继续讲")],
+            "plan": [], "tool_rounds": 0,
+            "session": {"study": {"course": "操作系统",
+                                  "last_source": "05-死锁.pdf", "next_offset": 15}}})
+        rs = next(s for s in out["plan"] if s["tool"] == "read_section")
+        assert rs["args"]["source"] == "05-死锁.pdf"
+        assert rs["args"]["offset"] == 15
+
+    def test_does_not_touch_non_study_questions(self, monkeypatch):
+        monkeypatch.setattr(nodes, "safe_llm_invoke",
+                            lambda fn, msgs, context=None: AIMessage(
+                                content='{"need_tools": true, "steps": '
+                                        '[{"tool": "list_papers", "args": {}}]}'))
+        out = nodes.planner_node({
+            "messages": [nodes.HumanMessage(content="我想刷题")],
+            "plan": [], "tool_rounds": 0, "session": {}})
+        assert [s["tool"] for s in out["plan"]] == ["list_papers"]
+
+    def test_quiz_answer_turn_is_left_to_the_other_guard(self, monkeypatch):
+        """交答案那一轮不能被"补 read_section"污染（那条守卫要求不调工具）"""
+        monkeypatch.setattr(nodes, "safe_llm_invoke",
+                            lambda fn, msgs, context=None: AIMessage(
+                                content='{"need_tools": true, "steps": '
+                                        '[{"tool": "grade_answers", "args": {}}]}'))
+        out = nodes.planner_node({
+            "messages": [nodes.HumanMessage(content="我答一下：1.B 2.D")],
+            "plan": [], "tool_rounds": 0,
+            "session": {"study": {"course": "操作系统", "section": "x"}}})
+        assert out["plan"] == [], out["plan"]
+
+
+class TestClosingMarkerIsGuaranteedByCode:
+    """「本节结束」这条契约换过三种写法、量了三轮：
+    提示中段 1/3 → 末尾+一句要求 2/3 → 给可照抄格式 3/4。
+    而「出小测」一直 4/4。所以最后一级：缺了就由代码补，插在小测标题之前。
+    """
+
+    def test_inserts_before_the_quiz_heading(self):
+        t = "## 进程的引入\n…讲解…\n\n### 本节小测\n1. 什么是进程？"
+        out, added = quiz_service.ensure_closing(t)
+        assert added
+        assert out.index("本节结束") < out.index("本节小测"), "顺序必须是 讲解→本节结束→小测"
+
+    def test_appends_when_there_is_no_quiz_heading(self):
+        out, added = quiz_service.ensure_closing("## 进程的引入\n…讲解…")
+        assert added and out.endswith("**本节结束**")
+
+    def test_does_not_touch_text_that_already_has_it(self):
+        t = "…讲解…\n\n**本节结束**\n\n【本节小测】\n1. x"
+        assert quiz_service.ensure_closing(t) == (t, False)
+
+    def test_empty_text_is_safe(self):
+        assert quiz_service.ensure_closing("") == ("", False)
+
+    def test_synthesizer_補上收尾标记(self, monkeypatch):
+        """端到端：模型答了课但没写收尾 → synthesizer 输出里必须有"""
+        monkeypatch.setattr(nodes, "safe_llm_invoke",
+                            lambda fn, msgs, context=None: AIMessage(
+                                content="进程是程序的一次执行过程。\n\n"
+                                        "### 本节小测\n1. 什么是进程？"))
+        out = nodes.synthesizer_node({
+            "messages": [nodes.HumanMessage(content="我要复习操作系统")],
+            "plan": [], "tool_rounds": 0,
+            "session": {"study": {"course": "操作系统", "mode": "复习"}}})
+        text = out["messages"][0].content
+        assert "本节结束" in text
+        assert text.index("本节结束") < text.index("本节小测")
+
+    def test_synthesizer_不在学习模式时不动它(self, monkeypatch):
+        monkeypatch.setattr(nodes, "safe_llm_invoke",
+                            lambda fn, msgs, context=None: AIMessage(
+                                content="这是普通回答，没有收尾标记。"))
+        out = nodes.synthesizer_node({
+            "messages": [nodes.HumanMessage(content="你好")],
+            "plan": [], "tool_rounds": 0, "session": {}})
+        assert "本节结束" not in out["messages"][0].content
+
+
 class TestSynthesizerHandlesToolErrors:
     """缺陷 3 的配套：工具报错时不许「假装重试」或编造调用"""
 
