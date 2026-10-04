@@ -110,7 +110,88 @@ def strip_tool_call_text(text: str) -> str:
 
 
 # ============================================================
-# System Prompts
+# 会话状态注入 + 两个守卫（从手写助教那侧移植过来）
+# ============================================================
+#
+# 起因：同题对比 BOT 与手写助教时发现 BOT 在"学习/复习"流程上明显吃亏，而原因不是
+# 范式，是**状态注入放的位置不同** —— 助教把状态注进"写回答的模型"的 system prompt，
+# 而 BOT 只注进了 planner（写回答的 synthesizer 根本看不到）。实测后果：
+#   · 学生交小测答案 → BOT 说"请提供具体的问题和选项"（它手里没有书签，也没题面）
+#   · 讲了课但不说"本节结束"、不出小测（那是写给 synthesizer 的契约）
+#
+# 另外把助教的两个守卫也补过来（这两条 BOT 一直没有）：
+#   · 学生说"没看到题目" → 确定性重发（不许只口头道歉）
+#   · 历史/工具结果的裁剪与压缩（BOT 的 MemorySaver 原来**没有任何上限**，审查文档 F2）
+
+_MISSED_QUESTIONS = re.compile(
+    r"没看到|没有题|题目呢|题呢|没给|没发|没显示|没出来|漏了|再发一遍|重新发|再看一遍|重复一遍"
+)
+_BOT_KEEP_TOOL_TURNS = 2          # 只保留最近 N 轮的工具结果原文
+_BOT_MAX_MESSAGES = 40            # 与手写助教同口径
+
+
+def _missed_questions(text: str) -> bool:
+    """学生是不是在说「题目没给我」"""
+    return bool(_MISSED_QUESTIONS.search(str(text or "")))
+
+
+_QUIZ_ANSWER_HINT = re.compile(
+    r"(\d\s*[.、)]\s*[A-Ha-h对错√×]|(?<![A-Za-z])[A-H]{3,}(?![A-Za-z])|我答|答案[:：])"
+)
+
+
+def _looks_like_quiz_answer(text: str) -> bool:
+    """学生像在提交一份答案（"1.B 2.D"、"ACDBE"、"我答一下…"）
+
+    用于"讲课/复习中交自拟小测答案"这个场景 —— 那种答案题库里没有，
+    只能由模型自己批；实测模型会习惯性去调 grade_answers，
+    然后反问学生"你在做哪份卷子"，把学习流程硬拽回刷题流程。
+    """
+    return bool(_QUIZ_ANSWER_HINT.search(str(text or "")))
+
+
+def _session_block(session: dict) -> str:
+    """把会话状态整理成"写给**写回答的模型**"的一段提示
+
+    这段必须同时给 synthesizer 和 chitchat 用 —— 因为学生交小测答案那一轮
+    **一个工具都不会调**（走的是 CHITCHAT_PROMPT），而"小测由你自己批"这条
+    恰恰要在那一轮生效。
+    """
+    if not session:
+        return ""
+    bits = []
+    study = session.get("study") or {}
+    if study.get("course"):
+        line = (f"【当前学习位置】{study.get('mode', '学习')} · {study['course']}"
+                + (f" · {study['chapter']}" if study.get("chapter") else "")
+                + f" · 上一节《{study.get('section', '')}》"
+                  f"({study.get('status', '讲解中')})")
+        if study.get("last_source"):
+            line += f" · 刚读到《{study['last_source']}》的 {study.get('last_read', '')}"
+            line += (f"，继续讲要用 offset={study['next_offset']}"
+                     if study.get("next_offset") is not None else "（已读完）")
+        bits.append(line + "\n"
+                    "· **本节的测验题是你自己出的，所以由你自己批**：逐题给 ✓/✗ 与讲解，"
+                    "说清**错在哪、为什么错、正确答案是什么**，错的知识点要重讲一遍。\n"
+                    "· **不要**调 grade_answers / get_paper_questions —— 那是题库真题的"
+                    "批改通道；学生答的是你刚出的小测，题库里没有它。\n"
+                    "· 学生说「继续讲」＝接着读**同一份**课件；说「下一节」＝进下一份。\n"
+                    "· 学生说「没听懂 / 换个讲法」→ 换角度重讲（类比、画流程、举具体例子），"
+                    "**不要**让学生报题号、也不要复读上一轮的原话。\n"
+                    "· 讲完这一节要明确说「本节结束」，然后出覆盖本节核心考点的小测题；"
+                    "**不要**提前讲后面的内容。")
+    drill = session.get("paper")
+    if drill:
+        bits.append(f"【当前试卷】{drill}"
+                    + (f" · 刚出到第 {session['group_index']} 组"
+                       if session.get("group_index") else "")
+                    + (f" · 下一组传 group_index={session['next_group_index']}"
+                       if session.get("next_group_index") else ""))
+    return ("\n\n--- 当前会话状态（务必据此回答）---\n" + "\n".join(bits)) if bits else ""
+
+
+# ============================================================
+# 学习/复习相关工具（先定义给 planner 用）
 # ============================================================
 
 PLANNER_PROMPT = """你是「知识寻回BOT」的规划师。分析用户当前的需求，决定是否需要调用工具，以及调用哪些工具。
@@ -174,9 +255,14 @@ PLANNER_PROMPT = """你是「知识寻回BOT」的规划师。分析用户当前
 3. 用户提交答案（字母串如ABCDE、或1.A 2.B格式）→ 调用 grade_answers
 4. 用户说"不会/没思路/讲讲这道题/为什么" → 调用 explain_question 取题面和答案
 5. 用户说"不想做这套了/另外出几道题/额外练几道" → 调用 prepare_custom_quiz，不要用题库工具
-6. 用户说"复习/学习/讲解/梳理/过一遍/带我学"或问知识点问题 → 调 search_knowledge
-   （带 course）或 read_section，并且只讲检索到的课程资料里的内容
-   （资料没覆盖就直说，再用通用知识补充）
+   ⚠️ **也要看"刷题"的宾语**：学生说"刷几道**传输层**的题""练练**死锁**"这类
+   **按知识点**的练习（不是整份卷子）→ 用 prepare_custom_quiz(topic=…)，**不要** list_papers。
+   题库没有按知识点组卷，给菜单等于没满足需求 —— 实测三轮里 BOT 全这么错了。
+6. 用户说"复习/学习/讲解/梳理/过一遍/带我学"或问知识点问题 → 调用 search_knowledge，
+   并且只讲检索到的课程资料里的内容（资料没覆盖就直说，再用通用知识补充）
+   ⚠️ 学生说"**没听懂 / 换个讲法 / 再讲一遍**"且当前在讲课（见下方学习位置）→
+   必须调 read_section **把同一份课件的原文再取一次**再讲，换个角度；
+   **不要**不调工具就凭记忆复述，也不要让学生自己报题号。
 7. 闲聊/问候/不需要工具 → 直接回答
 
 你必须返回JSON格式：
@@ -431,7 +517,77 @@ def planner_node(state: AgentState, config=None) -> dict:
         logger.warning("planner 返回的计划无法解析，回退默认计划: %s", e)
         normalized = [{"tool": "search_knowledge", "args": {"query": user_content}}]
 
-    return {"plan": normalized}
+    # 【守卫 1】学生说"没看到题目" → **确定性重发**，不许只口头道歉。
+    # 移植自手写助教（那边有这条守卫，BOT 一直没有）。实测模型会回一句
+    # 「很抱歉…我将重新发送这组题目」，然后一条题都没发、也没调工具。
+    if _missed_questions(user_content) and drill.get("next_group_index") is not None \
+            and not any(s.get("tool") == "get_paper_questions" for s in normalized):
+        resend_index = max(1, int(drill.get("group_index") or 1))
+        logger.info("学生说没收到题目 → 确定性重发第 %s 组（覆盖原计划）", resend_index)
+        normalized = [{"tool": "get_paper_questions",
+                       "args": {"paper_source": drill.get("paper", ""),
+                                "group_index": resend_index,
+                                "qtype": drill.get("type") or ""}}]
+
+    # 【守卫 2】讲课/复习中学生交**自拟小测**的答案 →
+    # 这一轮不规划任何工具，直接让 synthesizer 自己逐题批。
+    # 为什么用代码拦：实测 planner 在"学生提交答案"这种输入上**总是**想到题库
+    # （grade_answers / get_paper_questions），而题库里没有这道题，
+    # 于是它会反问"你在做哪份卷子"。system prompt 里写了不要用，它不跟。
+    study = drill.get("study") or {}
+    if study.get("course") and not drill.get("paper") \
+            and _looks_like_quiz_answer(user_content):
+        logger.info("讲课/复习中收到小测答案 → 不走题库工具，交给 synthesizer 自批")
+        normalized = []
+
+    out: dict = {"plan": normalized}
+
+    # 【守卫 2】状态上限：MemorySaver 原来**没有任何裁剪**（审查文档 F2），
+    # 长会话下 messages 单调增长。这里按 user 消息边界裁剪，并在边界之外
+    # 把较早的工具结果正文替换成占位符 —— 与手写助教的 _trim_history +
+    # _compact_tools 同口径，只是用 RemoveMessage / 同 id 覆盖来实现。
+    pruned = _prune_old_messages(state["messages"])
+    if pruned:
+        out["messages"] = pruned
+    return out
+
+
+def _prune_old_messages(messages: list) -> list:
+    """返回需要写回 state 的"裁剪结果"（RemoveMessage 列表）
+
+    两条规则，都保护消息配对完整性（assistant 的 tool_calls 与 tool 消息必须成对，
+    否则接口会 400）：
+      1. 超过 _BOT_MAX_MESSAGES 时，在 **user 消息处**切开，丢掉更早的整段；
+      2. 较早的工具结果正文压成占位符（保留消息本身与 id，只换 content）。
+    返回空列表表示"不需要动"。
+    """
+    from langgraph.graph.message import RemoveMessage
+
+    out = []
+    msgs = messages or []
+    if len(msgs) > _BOT_MAX_MESSAGES:
+        cut = len(msgs) - _BOT_MAX_MESSAGES
+        while cut < len(msgs) and not isinstance(msgs[cut], HumanMessage):
+            cut += 1
+        if cut < len(msgs):
+            for m in msgs[:cut]:
+                mid = getattr(m, "id", None)
+                if mid:
+                    out.append(RemoveMessage(id=mid))
+
+    # 较早的工具结果压缩：只保留最近 _BOT_KEEP_TOOL_TURNS 轮的 ToolMessage 原文
+    tool_msgs = [m for m in msgs if isinstance(m, ToolMessage)]
+    if len(tool_msgs) > _BOT_KEEP_TOOL_TURNS:
+        for m in tool_msgs[:-_BOT_KEEP_TOOL_TURNS]:
+            text = m.content if isinstance(m.content, str) else ""
+            if len(text) > 200 and getattr(m, "id", None):
+                out.append(ToolMessage(
+                    content=json.dumps(
+                        {"note": "（这一步的工具结果已省略，避免上下文过长）"},
+                        ensure_ascii=False),
+                    tool_call_id=m.tool_call_id, name=getattr(m, "name", None),
+                    id=m.id))
+    return out
 
 
 def route_after_plan(state: AgentState) -> str:
@@ -724,6 +880,10 @@ def synthesizer_node(state: AgentState) -> dict:
     # 多段 system 消息在部分模型上行为不一致，合并成一条最稳。
     summary_text, history_msgs = compress_history(history_msgs, llm)
     base_prompt = SYNTHESIZER_PROMPT if tool_results else CHITCHAT_PROMPT
+    # 会话状态（学习书签 / 刷题游标）必须给**写回答的这个模型**看。
+    # 原来只注入了 planner —— 而"本节结束 / 出小测 / 小测自己批"这些是写给
+    # 最终回答的契约，学生交小测答案那一轮更是一个工具都不调（走 CHITCHAT_PROMPT）。
+    base_prompt += _session_block(state.get("session") or {})
     if summary_text:
         base_prompt = f"{base_prompt}\n\n{SUMMARY_MARK}\n{summary_text}"
 
