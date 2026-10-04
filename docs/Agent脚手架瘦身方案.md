@@ -189,7 +189,7 @@ JSON 参数条目的固定成本很高（每个参数至少 `"type"` + `"descrip
 将来真要做练习统计，加回来成本极低。
 
 > 这条需要你拍板：README 的工具表里列了"练习次数统计"，
-> 删掉的话我会同步更新 README 和 `docs/llm_tutor_refactor.md`。
+> 删掉的话我会同步更新 README 和 `docs/案例-手写助教的完整生命周期.md`。
 
 ### L3. 压缩 `prepare_custom_quiz` 的参数（5 → 2）
 
