@@ -45,7 +45,22 @@ def search_knowledge(query: str) -> str:
     Args:
         query: 搜索关键词或问题，如 "TCP三次握手" 或 "死锁的四个必要条件"
     """
-    return _search_knowledge(query, top_k=3)
+    raw = _search_knowledge(query, top_k=3)
+    # 呈现契约必须写进返回值 —— 和 list_papers / get_paper_questions 一个道理：
+    # 只给一段资料，模型会拿自己记忆里的通用教材内容替换它，
+    # 于是学生问"这门课怎么讲"，得到的是模型背的教科书。
+    # 实测：说"想复习操作系统"，它讲的全是 MS-DOS / OS/360 这类通用常识，
+    # 而课程课件讲的是进程/调度/死锁/内存 —— 检索到的资料完全没被用上。
+    return (
+        f"{raw}\n\n"
+        "----\n"
+        "【怎么用上面的片段】它们就是这门课的资料原文，是你讲解的依据：\n"
+        "1. **以这些片段为准**来讲，不要用你记忆里的通用教材内容替换它；\n"
+        "2. 讲完可以点一下来源（如「来自 03-OS调度」），让学生知道这是本课资料；\n"
+        "3. 如果片段里**没有**覆盖学生问的点，就直说「课程资料里这部分没找到」，\n"
+        "   再用你的通用知识补充，并**明确标注**那是补充、不是本课内容；\n"
+        "4. 不要编造片段里没有的「课件原文」或页码。"
+    )
 
 
 @retry_on_rate_limit(max_retries=3, base_wait=2.0)
@@ -165,6 +180,9 @@ def get_paper_questions(paper_source: str, group_index: int = 1) -> str:
     # 也就没有"拼不出题就编题"的空间。
     return json.dumps({
         "paper": payload["paper"],
+        # type 要带上：executor 靠它把"当前在做哪种题型"写进跨轮游标，
+        # 漏了的话重启后恢复出来的游标里题型是 null（实测到过）。
+        "type": payload["type"],
         "progress": payload["progress"],
         "group_index": payload["group_index"],
         "group_count": payload["group_count"],

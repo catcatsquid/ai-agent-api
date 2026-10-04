@@ -166,6 +166,41 @@ def _norm_name(s: str) -> str:
     return re.sub(r"[\s()\[\]\-_·、,，。.]", "", s).lower()
 
 
+# 用户口语里的量词/单位。删掉它们永远不会造成误匹配：
+#   · 「卷/试卷/卷子/套/份」**任何卷名里都没有这些字**（实测 6 份全无）
+#   · 「年」只在部分卷名里有（2024年/2025年），但它在用户嘴里是可选的
+#     （"2026年卷" = "2026卷"），删掉后剩下的数字仍能唯一确定年份
+_ALIAS_NOISE = ("试卷", "卷子", "卷", "套", "份", "年")
+# 常见缩写/别称 → 卷名里真实出现的写法（卷名里没有拉丁字母，所以 OS 必须映射）
+_ALIAS_SYNONYMS = (("os", "操作系统"), ("计网", "计算机网络"), ("网课", "计算机网络"))
+
+
+def _strip_alias_noise(s: str, allowed: set | None = None) -> str:
+    """把用户口语剥成"卷名里真的会出现的写法"
+
+    两步，都是**可证明安全**的（只做减法和确定性替换，不猜）：
+      1. 去掉量词与缩写（见上面两个常量）；
+      2. 去掉首尾那些**任何卷名里都不存在**的字符 ——
+         比如「我选择2026卷」→ 前面的「我选择」不可能属于任何卷名，直接剥掉。
+
+    第 2 步的字符集是从真实卷名算出来的，不是手写清单，
+    所以新增卷子后自动适应，也不会有"漏了一个词"的问题。
+    """
+    out = s
+    for w in _ALIAS_NOISE:
+        out = out.replace(w, "")
+    for short, full in _ALIAS_SYNONYMS:
+        if short in out.lower():
+            out = re.sub(short, full, out, flags=re.IGNORECASE)
+    if allowed:
+        # 只剥首尾：中间的字（如"计算机网络"里的"网"）是有意义的
+        while out and out[0] not in allowed:
+            out = out[1:]
+        while out and out[-1] not in allowed:
+            out = out[:-1]
+    return out
+
+
 def _is_subsequence(needle: str, haystack: str) -> bool:
     """needle 是否是 haystack 的子序列（顺序保留、可不连续）
 
@@ -208,6 +243,14 @@ def resolve_paper(name: str, course: str | None = None) -> tuple[dict | None, li
             return p, []
 
     target = _norm_name(name)
+    # 剥掉"卷/试卷/套"这类**量词**与 OS 这类缩写。
+    #
+    # 为什么必须做：简称匹配（第 4 步）要求输入的每个字符都能在卷名里按序找到，
+    # 而**任何一份卷名里都没有「卷」字**（实测 6 份全都没有）。
+    # 于是学生说「2026卷」「2026操作系统卷」——最自然的说法——必然匹配失败，
+    # 而只写「2026」反而能成功。这是真实踩到的坑。
+    allowed = set("".join(_norm_name(p["source"]) for p in papers)) | set("0123456789")
+    target = _strip_alias_noise(target, allowed)
     if not target:
         return None, all_names
 

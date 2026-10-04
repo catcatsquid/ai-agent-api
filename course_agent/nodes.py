@@ -17,6 +17,8 @@ Week 7 升级：自适应规划层（check_results + web_search_fallback）
 """
 
 import json
+import re
+from pathlib import Path
 from langchain_core.messages import SystemMessage, ToolMessage, AIMessage, HumanMessage
 from langgraph.graph import END
 from course_agent.state import AgentState
@@ -27,6 +29,85 @@ from course_agent.memory import trim_messages, compress_history, SUMMARY_MARK
 from course_agent.logger import logger
 
 llm_with_tools = llm.bind_tools(tools)
+
+# ============================================================
+# 刷题游标的落盘（让它活过一次进程重启）
+# ============================================================
+#
+# 游标原本只存在 AgentState["session"] 里，而 state 由 MemorySaver 保管 ——
+# **进程内存**。所以服务一重启，学生再说"继续下一组"，planner 手里既没有卷子也没有
+# 组号，只能回答"找不到题目了"（用户实测遇到过，而且当时确实是我重启了服务）。
+#
+# 真正的修法是把整个 checkpointer 换成持久化的（需要 langgraph-checkpoint-sqlite
+# 这个额外依赖，环境里装不上），所以这里先解决最影响体验的那一半：
+# **把游标单独落盘**。会话消息仍会随重启丢失（App 会显示成新对话），
+# 但"继续下一组"一定能工作。
+CURSOR_FILE = Path(__file__).resolve().parent.parent / "runtime" / "plan_cursors.json"
+
+
+def _thread_id(config) -> str:
+    """从 LangGraph 传入的 config 里取 thread_id"""
+    try:
+        return str((config or {}).get("configurable", {}).get("thread_id") or "")
+    except AttributeError:
+        return ""
+
+
+def _load_cursor(thread_id: str) -> dict:
+    if not thread_id or not CURSOR_FILE.exists():
+        return {}
+    try:
+        data = json.loads(CURSOR_FILE.read_text(encoding="utf-8"))
+        return data.get(thread_id) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_cursor(thread_id: str, session: dict) -> None:
+    if not thread_id or not session:
+        return
+    try:
+        CURSOR_FILE.parent.mkdir(parents=True, exist_ok=True)
+        data = {}
+        if CURSOR_FILE.exists():
+            try:
+                data = json.loads(CURSOR_FILE.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = {}
+        data[thread_id] = session
+        # 只留最近 200 个会话，避免文件无限增长
+        if len(data) > 200:
+            for k in list(data)[:-200]:
+                data.pop(k, None)
+        CURSOR_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                               encoding="utf-8")
+    except OSError as e:
+        logger.warning("刷题游标落盘失败: %s", e)
+
+
+# ============================================================
+# 工具调用泄漏成正文的兜底清理
+# ============================================================
+#
+# 实测：synthesizer 手里没有工具，但当它觉得"还差一步"时，
+# 会把工具调用**当正文写出来**给学生看：
+#     请稍等，我马上为你获取题目。get_paper_questions {"paper_source": "..."}
+# 根因是 Plan 图单向、synthesizer 无法再取数据（结构问题，正解是允许一次重规划）。
+# 这里先做兜底：把这种片段从回答里摘掉，别让学生看到内部协议。
+# 只匹配"已知工具名 + 空白 + JSON 对象"，误伤正常文本的概率极低。
+_TOOL_CALL_TEXT_RE = re.compile(
+    r"(?:" + "|".join(re.escape(t) for t in tools_by_name) + r")\s*\{[^{}]*\}")
+
+
+def strip_tool_call_text(text: str) -> str:
+    """摘掉回答里泄漏出来的工具调用片段"""
+    if not text:
+        return text
+    cleaned = _TOOL_CALL_TEXT_RE.sub("", text)
+    # 摘掉后可能留下多余空行与结尾的悬空提示
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
+
 
 # ============================================================
 # System Prompts
@@ -40,6 +121,11 @@ PLANNER_PROMPT = """你是「知识寻回BOT」的规划师。分析用户当前
 - 用户说"刷题/做题/写题/答题/练习/做卷子/考试/自测/找题/出题目" → 都是要从习题库抽题做，用 list_papers
 - 用户说"知识库里的题/题库里的题" → 也是指习题库，用 list_papers
 - 用户问"什么是XX/解释XX/XX原理" → 是知识点问题，用 search_knowledge
+- ⚠️ 用户说"复习/学习/讲解/梳理/带我过一遍/讲讲这门课/开始第一天的复习" →
+  这是**学知识点**，必须用 search_knowledge 取课程资料后讲解。
+  **不要**用 list_papers / get_paper_questions —— 那是刷题，不是复习。
+  （真实踩过：学生说"想复习操作系统"，结果被当成了刷题，直接甩卷子清单；
+   说"开始第一天的复习"，直接被塞了一组题。学生要的是讲解，不是做题。）
 
 你有 10 个工具可用：
 1. search_knowledge(query) — 搜索课程知识库（计算机网络+操作系统），用于回答知识点问题
@@ -62,12 +148,14 @@ PLANNER_PROMPT = """你是「知识寻回BOT」的规划师。分析用户当前
 
 【强制规则 - 必须严格遵守】
 1. 用户说"刷题/做题/写题/答题/练习/做卷子/考试/自测/找题/出题目/题库/卷子/试卷" → 必须调用 list_papers，绝对不能用 search_knowledge
-2. 用户选了某套试卷（说"第X套"或试卷名）→ 调用 get_paper_questions；
+2. 用户**指名**某份试卷（"2026卷"/"2025那套"/"2019模拟题"/"第X套"等）→ 必须调用 get_paper_questions
+   取题。**不要**只调 list_papers 把清单再念一遍 —— 学生已经选好了。
    说"继续/下一组"→ 也要调 get_paper_questions，并把上一组的 next_group_index 传进去
 3. 用户提交答案（字母串如ABCDE、或1.A 2.B格式）→ 调用 grade_answers
 4. 用户说"不会/没思路/讲讲这道题/为什么" → 调用 explain_question 取题面和答案
 5. 用户说"不想做这套了/另外出几道题/额外练几道" → 调用 prepare_custom_quiz，不要用题库工具
-6. 用户问知识点问题 → 用 search_knowledge
+6. 用户说"复习/学习/讲解/梳理/过一遍/带我学"或问知识点问题 → 调用 search_knowledge，
+   并且只讲检索到的课程资料里的内容（资料没覆盖就直说，再用通用知识补充）
 7. 闲聊/问候/不需要工具 → 直接回答
 
 你必须返回JSON格式：
@@ -159,7 +247,7 @@ REACT_PROMPT = """你是「知识寻回BOT」，一位耐心、专业的课程�
 # Planner Node
 # ============================================================
 
-def planner_node(state: AgentState) -> dict:
+def planner_node(state: AgentState, config=None) -> dict:
     """规划器节点：分析用户需求，决定用哪些工具"""
     # 历史口径必须和 synthesizer 一致（都排除系统提示和工具结果），
     # 这样 compress_history 的摘要能在两个节点间命中缓存，不会一轮调两次摘要 LLM。
@@ -192,7 +280,10 @@ def planner_node(state: AgentState) -> dict:
     # 把跨轮会话游标显式交给 planner。
     # 不加这段的话，学生说"继续下一组"时 planner 手里既没有卷子也没有组号
     # （上一轮的工具结果被上面的 history_msgs 过滤掉了），实测会瞎猜卷子、甚至编题。
-    drill = state.get("session") or {}
+    # 把跨轮会话游标显式交给 planner。
+    # 优先用 state 里的（同进程内的正常路径）；state 里没有说明进程重启过，
+    # 这时从落盘副本里恢复 —— 否则学生说"继续下一组"只能听到"找不到题目"。
+    drill = state.get("session") or _load_cursor(_thread_id(config))
     if drill.get("paper"):
         prog = [f"卷子：{drill['paper']}"]
         if drill.get("type"):
@@ -273,7 +364,7 @@ def route_after_plan(state: AgentState) -> str:
 # Executor Node
 # ============================================================
 
-def executor_node(state: AgentState) -> dict:
+def executor_node(state: AgentState, config=None) -> dict:
     """执行器节点：按计划批量执行所有工具调用
 
     返回时**必须同时给出声明这些 tool_call 的 AIMessage**。
@@ -329,6 +420,9 @@ def executor_node(state: AgentState) -> dict:
                                         state.get("plan") or [], results)
     if new_session is not None:
         out["session"] = new_session
+        # 同时落盘一份：进程重启后 MemorySaver 里的 state 会没，
+        # 但"学生在做哪份卷子、下一组是几"必须活下来。
+        _save_cursor(_thread_id(config), new_session)
     return out
 
 
@@ -508,6 +602,13 @@ def synthesizer_node(state: AgentState) -> dict:
 
     try:
         response = safe_llm_invoke(llm, messages, context="synthesizer")
+        # 兜底：把泄漏成正文的工具调用片段摘掉（正解是允许一次重规划，见文件头注释）
+        if isinstance(response, AIMessage) and response.content:
+            cleaned = strip_tool_call_text(str(response.content))
+            if cleaned != response.content:
+                logger.info("摘掉回答里泄漏的工具调用片段 (%d → %d 字符)",
+                            len(str(response.content)), len(cleaned))
+                response = AIMessage(content=cleaned)
         return {"messages": [response]}
     except LLMError:
         fallback = AIMessage(content="抱歉，生成回答时遇到服务问题，请稍后重试。")
