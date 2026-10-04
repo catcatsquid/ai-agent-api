@@ -21,6 +21,7 @@ Week 4 工具调用能力 + 刷题扩展能力。
 """
 
 import json
+import re
 
 import requests
 from langchain_core.tools import tool
@@ -37,29 +38,344 @@ from course_agent.errors import retry_on_rate_limit, RateLimitError
 # ============================================================
 
 @tool
-def search_knowledge(query: str) -> str:
+def search_knowledge(query: str, course: str = "", source: str = "") -> str:
     """搜索课程知识库（计算机网络+操作系统）。输入问题或关键词，返回相关的知识点内容。
 
     知识库包含: TCP/UDP、拥塞控制、进程调度、死锁、同步互斥等课程内容。
 
+    **讲解课程内容时务必带上 course（或者在知道具体是哪份课件时带上 source）** ——
+    这样检索会收敛到那门课/那份课件的资料上，不会串到另一门课，
+    也才谈得上"优先参考 PPT"。
+
     Args:
         query: 搜索关键词或问题，如 "TCP三次握手" 或 "死锁的四个必要条件"
+        course: 可选，限定课程：操作系统 / 计算机网络
+        source: 可选，限定到某个具体文件（课件名，可用 list_course_sections 拿到），
+                如 "05-死锁.pdf"。给了它就只在这份资料里找，最适合"讲某一章"
     """
-    raw = _search_knowledge(query, top_k=3)
+    if source:
+        raw, scope_note = _search_in_source(query, source, top_k=5)
+    elif course:
+        raw, scope_note = _search_in_course(query, course, top_k=4)
+    else:
+        raw, scope_note = _search_knowledge(query, top_k=3), ""
     # 呈现契约必须写进返回值 —— 和 list_papers / get_paper_questions 一个道理：
     # 只给一段资料，模型会拿自己记忆里的通用教材内容替换它，
     # 于是学生问"这门课怎么讲"，得到的是模型背的教科书。
     # 实测：说"想复习操作系统"，它讲的全是 MS-DOS / OS/360 这类通用常识，
     # 而课程课件讲的是进程/调度/死锁/内存 —— 检索到的资料完全没被用上。
     return (
-        f"{raw}\n\n"
+        f"{scope_note}{raw}\n\n"
         "----\n"
         "【怎么用上面的片段】它们就是这门课的资料原文，是你讲解的依据：\n"
         "1. **以这些片段为准**来讲，不要用你记忆里的通用教材内容替换它；\n"
         "2. 讲完可以点一下来源（如「来自 03-OS调度」），让学生知道这是本课资料；\n"
         "3. 如果片段里**没有**覆盖学生问的点，就直说「课程资料里这部分没找到」，\n"
         "   再用你的通用知识补充，并**明确标注**那是补充、不是本课内容；\n"
-        "4. 不要编造片段里没有的「课件原文」或页码。"
+        "4. 不要编造片段里没有的「课件原文」或页码；\n"
+        "5. **任何缩写或符号第一次出现**，都要给出全称和含义（如 LRU＝Least Recently Used，"
+        "最近最少使用），别默认学生认识。"
+    )
+
+
+def _search_in_course(query: str, course: str, top_k: int = 4):
+    """在指定课程范围内检索，并如实告诉调用方"这门课到底有没有这个内容"
+
+    复用 quiz_service.search_with_course：它用**绝对相似度**判断话题是否真落在
+    这门课里（拿"结果非空"当命中是不行的 —— 非空库永远返回 top_k 条）。
+    """
+    from rag_tool import get_knowledge_base
+    try:
+        hits, confirmed = quiz_service.search_with_course(
+            get_knowledge_base(), query, course, top_k=top_k)
+    except Exception as e:                      # 检索失败不能把整轮打崩
+        return f"（检索出错：{str(e)[:80]}）", ""
+    text = _format_hits(hits)
+    if confirmed:
+        return text, f"【检索范围】已在「{course}」的资料内检索。\n\n"
+    return (text, f"【检索范围】「{course}」的资料里**没找到**这个话题，"
+                  f"下面是全库结果 —— 讲的时候要说清楚这不是该课程的内容。\n\n")
+
+
+def _search_in_source(query: str, source: str, top_k: int = 5):
+    """在某个具体文件里检索（"讲某一章"就用它）"""
+    from rag_tool import get_knowledge_base
+    kb = get_knowledge_base()
+    real = _match_source_name(source, [d["source"] for d in kb.list_documents()])
+    if real is None:
+        return (f"（没找到叫「{source}」的资料，先用 list_course_sections 看清课程结构）",
+                "")
+    try:
+        hits = kb.search(query, top_k=top_k, sources=[real])
+    except Exception as e:
+        return f"（检索出错：{str(e)[:80]}）", ""
+    if not hits:
+        return (f"（「{real}」里没检索到与「{query}」相关的内容，"
+                f"可以换个关键词，或先 list_course_sections 看看这一章都有什么）", "")
+    return _format_hits(hits), f"【检索范围】只在《{real}》里检索。\n\n"
+
+
+def _match_source_name(given: str, names: list):
+    """把用户/模型给的文件名对到真实 source（允许省略后缀、写章节名）"""
+    g = (given or "").strip()
+    if not g:
+        return None
+    for n in names:
+        if n == g:
+            return n
+    gl = g.lower()
+    for n in names:
+        nl = n.lower()
+        if nl == gl or nl.startswith(gl) or gl in nl or nl in gl:
+            return n
+    stem = g.rsplit(".", 1)[0]
+    if stem != g:
+        return _match_source_name(stem, names)
+    return None
+
+
+def _format_hits(hits: list) -> str:
+    """把检索结果排成模型好读的样子（带来源与相关度）
+
+    ⚠️ 两个字段语义不同，必须分清楚（我在这里踩过一次）：
+      · `kb.search()`（纯向量）返回 **score = 绝对余弦**，没有 sim；
+      · `kb._hybrid_search()`（融合）返回 sim = 绝对余弦、score = **归一化融合分**。
+    归一化分只能排序、不能当"够不够相关"的判据，所以显示时优先用 sim。
+    """
+    if not hits:
+        return "（没有检索到内容）"
+    parts = []
+    for h in hits:
+        rel = h.get("sim") if h.get("sim") is not None else h.get("score", 0)
+        parts.append(f"[{h.get('source', '?')} · 相关度={rel:.3f}]\n{h.get('text', '')}")
+    return "\n\n".join(parts)
+
+
+def _as_int(v, default: int) -> int:
+    """容错取整数（模型常传字符串、负数、甚至"2节"这种）"""
+    if isinstance(v, bool):
+        return default
+    if isinstance(v, (int, float)):
+        return int(v)
+    m = re.search(r"-?\d+", str(v or ""))
+    return int(m.group(0)) if m else default
+
+
+def _course_ppt_list(course: str) -> list:
+    idx = quiz_service.section_index(course)
+    return idx.get("ppt") or []
+
+
+def _course_of(source: str) -> str:
+    """反查某份资料属于哪门课（知识库 metadata 里没有课程字段，只能按目录反查）"""
+    for c in ("操作系统", "计算机网络"):
+        try:
+            if source in set(quiz_service.course_sources(c)):
+                return c
+        except Exception:
+            continue
+    return ""
+
+
+def _find_chapter(course: str, chapter: str):
+    """按章名找课件（学生说"死锁那一章"时用）
+
+    匹配优先级：章节名完全相等 → 互相包含 → 出现在文件名里。
+    """
+    want = (chapter or "").strip()
+    if not want:
+        return None
+    ppts = _course_ppt_list(course)
+    norm = lambda s: re.sub(r"[\s\-_·、,，。()（）]", "", str(s or "")).lower()
+    w = norm(want)
+    for p in ppts:
+        if norm(p["chapter"]) == w:
+            return p
+    for p in ppts:
+        c = norm(p["chapter"])
+        if w and (w in c or c in w):
+            return p
+    for p in ppts:
+        if w and w in norm(p["source"]):
+            return p
+    return None
+
+
+@tool
+def read_section(course: str = "", chapter: str = "",
+                 section: "int | str" = 0, source: str = "",
+                 offset: "int | str" = 0, limit: "int | str" = 15) -> str:
+    """按**课件原始顺序**读取某一节的内容 —— 讲课程内容时用它（优先于 search_knowledge）
+
+    ## 怎么用（**不需要你记文件名**）
+
+    学生说"**某一章**"（如"我要学死锁那一章"）→ 用章名：
+        read_section(course="操作系统", chapter="死锁")
+    学生说"**第几节 / 接着讲**"→ 用节号（编号来自 list_course_sections）：
+        read_section(course="操作系统", section=1)
+    想知道这门课有哪些章、几份课件，先调 list_course_sections。
+
+    一份课件很长时（如"06-内存管理与虚拟内存"有 314 块）用 offset 续读。
+    **一块/一节读多少由你判断**，本工具不规定。
+
+    Args:
+        course: 课程名（**必填**）：操作系统 / 计算机网络
+        chapter: 章名（学生按章提问时用它，如 "死锁"、"OS调度"、"Transport Layer"）
+        section: 第几份课件，从 1 开始
+        source: 也可以直接给课件名（一般不用）
+        offset: 从第几块开始，默认 0
+        limit: 本次读几块，默认 15（上限 40）
+    """
+    from rag_tool import get_knowledge_base
+    kb_docs = {d["source"]: d for d in get_knowledge_base().list_documents()}
+    offset, limit, section = _as_int(offset, 0), _as_int(limit, 15), _as_int(section, 0)
+    offset = max(0, offset)
+    note = ""
+    real = None
+
+    # 0) 按章名找 —— 学生最自然的说法就是"某一章"（"我要学死锁那一章"）
+    if chapter and course:
+        hit = _find_chapter(course, chapter)
+        if hit is None:
+            ppts = _course_ppt_list(course)
+            names = "、".join(f"《{p['chapter']}》" for p in ppts)
+            return (f"（「{course}」里没有叫「{chapter}」的章。这门课的章有：{names}）")
+        real = hit["source"]
+        note = f"【按章定位】「{chapter}」→《{real}》（章节：{hit['chapter']}）\n\n"
+
+    # 1) 给了文件名就优先用它
+    if real is None and source:
+        matched = _match_source_name(source, list(kb_docs))
+        if matched is not None:
+            real = matched
+            # 结构性纠偏：讲课程内容却去读课本/笔记 —— 实测光提醒没用（模型照样拿笔记讲），
+            # 所以这里直接**换成这门课的课件**，让它手里拿到的是正确材料。
+            dtype = (kb_docs.get(real) or {}).get("doc_type", "")
+            if dtype in ("textbook", "notes") and course:
+                ppts = _course_ppt_list(course)
+                if ppts:
+                    pick = ppts[max(0, min(section - 1, len(ppts) - 1))] if section else ppts[0]
+                    note = (f"【已自动换材料】你指定的是{'课本' if dtype == 'textbook' else '补充笔记'}"
+                            f"《{real}》，讲课程内容应该用课件，已改为《{pick['source']}》。"
+                            f"（课本/笔记只在课件没覆盖某个点时作补充。）\n\n")
+                    real = pick["source"]
+        elif course:
+            # 2) 文件名对不上（模型爱编个"操作系统课件"这种名字）也别失败：
+            #    直接用这门课的课件，避免它转头去凭记忆讲。
+            ppts = _course_ppt_list(course)
+            if ppts:
+                pick = ppts[max(0, min(section - 1, len(ppts) - 1))] if section else ppts[0]
+                note = (f"【已自动选材料】没找到叫「{source}」的资料，"
+                        f"已改用「{course}」的课件《{pick['source']}》。"
+                        f"下次可以直接 read_section(course=\"{course}\", section=编号)。\n\n")
+                real = pick["source"]
+        if real is None:
+            names = "、".join(f"《{n}》" for n in list(kb_docs)[:8])
+            return (f"（没找到叫「{source}」的资料。请改用 "
+                    f"read_section(course=\"操作系统\", section=1) 这种写法；"
+                    f"现有资料如：{names}）")
+
+    # 3) 只给了课程：按第几份课件取（默认第 1 份）
+    if real is None and course:
+        ppts = _course_ppt_list(course)
+        if not ppts:
+            return f"（「{course}」没有可用课件，先调 list_course_sections 确认）"
+        idx = section if 1 <= section <= len(ppts) else 1
+        pick = ppts[idx - 1]
+        real = pick["source"]
+        note = (f"【本课课件 {idx}/{len(ppts)}】{course} · 《{real}》"
+                f"（章节：{pick['chapter']}）"
+                + (f"\n下一份是第 {idx + 1} 份《{ppts[idx]['source']}》"
+                   if idx < len(ppts) else "\n这是最后一份课件。") + "\n\n")
+
+    if real is None:
+        return ("（要指定材料：read_section(course=\"操作系统\", section=1)，"
+                "或者 read_section(source=\"05-死锁.pdf\")）")
+
+    data = quiz_service.section_chunks(real, offset=offset, limit=limit)
+    if data.get("error"):
+        return f"（{data['error']}）"
+
+    head = (f"《{real}》｜章节：{data['chapter'] or '未标注'}｜"
+            f"共 {data['total']} 块｜本次第 {data['offset'] + 1}~"
+            f"{data['offset'] + data['returned']} 块"
+            + (f"（后面还有 {data['total'] - data['offset'] - data['returned']} 块，"
+               f"下次用 offset={data['next_offset']} 继续）"
+               if data["has_more"] else "（已到本章末尾）"))
+    body = "\n\n".join(f"[{c['index']}] {c['text']}" for c in data["chunks"])
+    # 机器可读的一行：executor 靠它把"读到哪了"记进会话状态。
+    # 为什么明写而不是让上层解析自然语言：解析措辞太脆（而且我一开始就是这么干的，
+    # 结果 study 里没有 course，planner 的整块提示被跳过 —— 模型照样不知道读到哪）。
+    state_line = (f"[study-state] course={course or _course_of(real)} "
+                  f"chapter={data['chapter'] or ''} source={real} "
+                  f"read={data['offset'] + 1}-{data['offset'] + data['returned']} "
+                  f"total={data['total']} "
+                  f"next_offset={data['next_offset'] if data['next_offset'] is not None else 'none'}")
+    return (
+        f"{note}{head}\n\n{body}\n\n{state_line}\n\n"
+        "----\n"
+        "【怎么用这一节】上面就是这门课件的原文，按它自己的顺序排好了：\n"
+        "1. **以它为准讲解**，不要用你记忆里的通用教材内容替换它；\n"
+        "2. 一次只讲**一节**（节的划分由你按内容判断），讲完明确说「本节结束」，\n"
+        "   然后出 3~5 道覆盖本节核心考点的小测题，**不要**提前讲后面的内容；\n"
+        "3. 任何缩写/符号**第一次出现**都给全称与含义（如 TLB＝Translation "
+        "Look-aside Buffer，快表）；\n"
+        "4. 如果原文是 PPT 碎片、语句不通顺，你可以**组织成通顺的讲解**，"
+        "但不要改变它的技术含义，也不要编造它没说的内容；\n"
+        "5. 讲完这一节记得用 record_study_position 记下位置，学生说"
+        "「下一节」时你才知道从哪继续。"
+    )
+
+
+@tool
+def list_course_sections(course: str = "") -> str:
+    """列出某门课**实际有哪些资料**（课件/课本/笔记），用于分节讲解与复习
+
+    学生说"我要复习操作系统""我要学死锁那一章""带我一章一章过"时，
+    先调它拿到这门课的**资料地图**，再决定怎么分节 —— 不要凭记忆编章节。
+
+    返回值里每份课件都带 `chapter`（章节名）与 `chunks`（内容量，近似课时长度），
+    分节粒度由你按内容判断（本工具刻意不给固定切分）。
+
+    Args:
+        course: 课程名：操作系统 / 计算机网络；留空则两门课都给
+    """
+    data = quiz_service.section_index(course)
+    lines = []
+    for c, v in (data.items() if isinstance(data, dict) and course == "" else
+                 [(course, data)]):
+        lines.append(f"## {c}")
+        if v.get("note"):
+            lines.append(v["note"])
+        lines.append("### 课件（讲课时**优先用这些**，按课程顺序排好）")
+        for i, s in enumerate(v.get("ppt", []), 1):
+            lines.append(f"{i}. {s['source']}  ｜章节：{s['chapter']}｜约 {s['chunks']} 块")
+        if v.get("ppt"):
+            lines.append(f"→ 学生没说从哪章开始时，**从第 1 份课件开始**"
+                         f"（《{v['ppt'][0]['source']}》），不要跳到课本的章节去讲。")
+        if v.get("others"):
+            lines.append("### 其它资料（**只在课件没覆盖时**才用；课本章节顺序"
+                         "不代表本课讲授顺序，不要拿它当「第一节」）")
+            for s in v["others"]:
+                lines.append(f"- {s['source']}  ｜{s['doc_type']}｜约 {s['chunks']} 块")
+        if v.get("not_ingested"):
+            lines.append("### 在磁盘上但**还没入库**（讲不了，需要先导入）")
+            for n in v["not_ingested"]:
+                lines.append(f"- {n}")
+        lines.append("")
+    body = "\n".join(lines)
+    return (
+        f"{body}\n"
+        "----\n"
+        "【怎么用这份地图】\n"
+        "1. **分节由你判断**：这份地图只告诉你「有哪些资料、各有多厚」，"
+        "不规定一节包含几个知识点。按内容的内在结构切，"
+        "一节控制在「学生一节课（约半小时到一小时）能消化」的量；\n"
+        "2. 讲某一节时，用 `search_knowledge(query, source=\"那份课件名\")` "
+        "把资料取出来再讲 —— **不要凭记忆讲这门课的内容**；\n"
+        "3. 一次只讲一节，讲完就说「本节结束」，不要提前把后面的内容也倒出来；\n"
+        "4. 定了这一节要讲什么之后，用 `record_study_position` 记一下当前位置，"
+        "这样学生说「下一节」时你知道该从哪继续（也避免两门课串味）。"
     )
 
 
@@ -279,6 +595,62 @@ def prepare_custom_quiz(topic: str, course: str = "", qtype: str = "选择题",
 
 
 @tool
+def record_study_position(course: str, section: "str | int" = "", mode: str = "学习",
+                          chapter: str = "", source: str = "", status: str = "讲解中") -> str:
+    """记下当前学习/复习到哪了，供下一轮「下一节」接着讲
+
+    **它只是一个书签，不是状态机** —— 讲什么、怎么分节、何时进下一节，
+    全部由你判断；这个工具只负责让下一轮的你知道"现在在哪"。
+
+    什么时候调：
+      · 定好要讲哪一节、开始讲时 → status="讲解中"
+      · 本节讲完并小测通过时 → status="已通过"（下次要讲下一节）
+      · 学生卡住了没听懂 → status="待巩固"（下次先回来解决这个）
+
+    Args:
+        course: 课程名：操作系统 / 计算机网络
+        section: 这一节的标题（**你自己起的**，如"进程与线程：进程的引入"）
+        mode: 学习 / 复习
+        chapter: 可选，对应的章（一般填课件对应的章节名）
+        source: 可选，这一节主要依据哪份课件（如 "02-1-进程与线程之进程.pdf"）
+        status: 讲解中 / 已通过 / 待巩固
+    """
+    # 纠偏：实测模型会把**章名**填进 course（course="死锁"）。
+    # 课程名是有限集合，不是就直接当章名处理，避免污染书签里的课程字段。
+    known = ("操作系统", "计算机网络")
+    course = (course or "").strip()
+    if course and course not in known:
+        for c in known:
+            if _find_chapter(c, course):
+                chapter = chapter or course
+                course = c
+                break
+    pos = {
+        "mode": (mode or "学习").strip(),
+        "course": (course or "").strip(),
+        "chapter": (chapter or "").strip(),
+        "section": str(section or "").strip(),
+        "source": (source or "").strip(),
+        "status": (status or "讲解中").strip(),
+    }
+    return json.dumps({
+        "recorded": pos,
+        "guide": (
+            f"已记下：{pos['course']} · {pos['chapter'] or '（未标章）'} · {pos['section']}"
+            f"（{pos['status']}）。\n"
+            "接下来按你自己定的节奏走：\n"
+            "- 本节还在讲 → 只讲这一节，讲完明确说「本节结束」，不要提前讲后面的内容；\n"
+            "- 本节已讲完 → 出 3~5 道**覆盖本节核心考点**的小测题"
+            "（选择/填空/简答/计算混合，题量与题型由你按内容定，不必凑固定数目）；\n"
+            "- 学生作答后 → 逐题批改：每题给 ✓/✗ + 一句讲解；"
+            "**错的要说清「错在哪、为什么错、正确答案」**，并把相关知识点重讲一遍；\n"
+            "- 确认学生真懂了再进下一节（再用本工具记一次新位置）；"
+            "学生卡住就停下来解决，不要硬推。"
+        ),
+    }, ensure_ascii=False)
+
+
+@tool
 def get_practice_stats(paper_source: str) -> str:
     """获取试卷练习统计（练习次数）。
 
@@ -306,6 +678,9 @@ def record_practice(paper_source: str) -> str:
 
 tools = [
     search_knowledge,
+    list_course_sections,
+    read_section,
+    record_study_position,
     web_search,
     get_course_info,
     list_papers,

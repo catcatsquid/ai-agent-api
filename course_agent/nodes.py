@@ -121,30 +121,50 @@ PLANNER_PROMPT = """你是「知识寻回BOT」的规划师。分析用户当前
 - 用户说"刷题/做题/写题/答题/练习/做卷子/考试/自测/找题/出题目" → 都是要从习题库抽题做，用 list_papers
 - 用户说"知识库里的题/题库里的题" → 也是指习题库，用 list_papers
 - 用户问"什么是XX/解释XX/XX原理" → 是知识点问题，用 search_knowledge
-- ⚠️ 用户说"复习/学习/讲解/梳理/带我过一遍/讲讲这门课/开始第一天的复习" →
-  这是**学知识点**，必须用 search_knowledge 取课程资料后讲解。
+- 用户说"复习/学习/讲解/梳理/带我过一遍/讲讲这门课/开始第一天的复习" →
+  这是**学知识点**，先 `list_course_sections` 拿到该课的资料地图，
+  再用 `read_section`（系统讲一节）或 `search_knowledge(course=…)`（答具体问题）取资料。
   **不要**用 list_papers / get_paper_questions —— 那是刷题，不是复习。
   （真实踩过：学生说"想复习操作系统"，结果被当成了刷题，直接甩卷子清单；
    说"开始第一天的复习"，直接被塞了一组题。学生要的是讲解，不是做题。）
+- 用户说"我要学/我要复习**某一章**"（如"我要学死锁那一章"）→ 同样先
+  `list_course_sections`，找到对应课件后用 `read_section` 读它，**一次只讲一节**
+- 用户说"下一节/继续"且上一轮在学课程 → 用 record_study_position 的书签定位，
+  继续讲**下一节**（不要重新列章节清单，也不要跳着讲）
 
-你有 10 个工具可用：
-1. search_knowledge(query) — 搜索课程知识库（计算机网络+操作系统），用于回答知识点问题
-2. web_search(query) — 联网搜索，知识库不够或涉及课外内容时使用
-3. get_course_info() — 查看知识库统计信息
-4. list_papers(course?) — 列出习题库中的试卷，可选按课程筛选（操作系统/计算机网络）
-5. get_paper_questions(paper_source, group_index?) — 从某份试卷里取**一组**题
+你有 13 个工具可用：
+1. search_knowledge(query, course?, source?) — 搜索课程知识库，用于回答知识点问题
+   **讲解课程内容时务必带 course**（知道具体哪份课件时带 source），这样检索才不会串课
+2. list_course_sections(course?) — 列出某门课**实际有哪些课件/课本/笔记**（带章节名与内容量）
+   学生说"我要复习/我要学 某门课（或某个章节）"时，**先调它**拿到真实的资料地图，
+   再决定怎么分节 —— 不要凭记忆编章节（如"第一天：操作系统概述"）
+3. read_section(course, chapter?, section?, offset?, limit?) — 按**课件原始顺序**读某一节
+   **系统地讲一节时优先用它**。**不需要你记文件名**：
+   · 学生说"**某一章**"（"我要学死锁那一章"）→ 用章名：read_section(course="操作系统", chapter="死锁")
+   · 学生说"**第几节/接着讲**"→ 用节号：read_section(course="操作系统", section=2)
+   想知道有哪些章，先调 list_course_sections。
+   一份课件很长时用 offset 续读；一次读多少由你判断。
+   ⚠️ **不要用课本或笔记来"讲课程"** —— 它们的章节顺序不代表本课顺序；
+   真去读了，工具会自动换成课件并告诉你。
+4. record_study_position(course, section, mode?, chapter?, source?, status?) —
+   记下"学到哪一节了"的书签（**不是状态机**，只是个记忆）
+   开始讲一节时记一次；本节讲完小测通过或学生卡住时，用 status 更新
+5. web_search(query) — 联网搜索，知识库不够或涉及课外内容时使用
+6. get_course_info() — 查看知识库统计信息
+7. list_papers(course?) — 列出习题库中的试卷，可选按课程筛选（操作系统/计算机网络）
+8. get_paper_questions(paper_source, group_index?) — 从某份试卷里取**一组**题
    注意：一次只返回一组（选择题/填空题/判断题 5 题一组，综合题 1 题一组），
    **不是整卷**。继续做下一组时，必须把上一轮工具结果里的 next_group_index 传进 group_index；
    不传的话只会反复给第 1 组。
-6. explain_question(paper_source, no?) — 取某道题的**题面原文 + 参考答案 + 评分要点**
+9. explain_question(paper_source, no?) — 取某道题的**题面原文 + 参考答案 + 评分要点**
    学生说"不会 / 没思路 / 讲讲这道题 / 为什么选 X"，或者要讲某道错题时必须调它。
    出题接口刻意不返回题面和答案，所以**没有它就讲不了题**，不要凭图片瞎猜。
-7. grade_answers(paper_source, user_answer_text) — 批量批改学生答案
-8. prepare_custom_quiz(topic, course?, qtype?, count?, difficulty?) — 为「临时出题」取素材
-   学生说"不想做这套了 / 另外出几道题 / 针对XX多练几道" → 用这个，**不要**去翻题库。
-   它不返回题目，只返回素材，题目由你自己写（并在题前说明是自拟题）。
-9. get_practice_stats(paper_source) — 获取试卷练习次数统计
-10. record_practice(paper_source) — 记录完成一次试卷练习
+10. grade_answers(paper_source, user_answer_text) — 批量批改学生答案
+11. prepare_custom_quiz(topic, course?, qtype?, count?, difficulty?) — 为「临时出题」取素材
+    学生说"不想做这套了 / 另外出几道题 / 针对XX多练几道" → 用这个，**不要**去翻题库。
+    它不返回题目，只返回素材，题目由你自己写（并在题前说明是自拟题）。
+12. get_practice_stats(paper_source) — 获取试卷练习次数统计
+13. record_practice(paper_source) — 记录完成一次试卷练习
 
 【强制规则 - 必须严格遵守】
 1. 用户说"刷题/做题/写题/答题/练习/做卷子/考试/自测/找题/出题目/题库/卷子/试卷" → 必须调用 list_papers，绝对不能用 search_knowledge
@@ -154,8 +174,9 @@ PLANNER_PROMPT = """你是「知识寻回BOT」的规划师。分析用户当前
 3. 用户提交答案（字母串如ABCDE、或1.A 2.B格式）→ 调用 grade_answers
 4. 用户说"不会/没思路/讲讲这道题/为什么" → 调用 explain_question 取题面和答案
 5. 用户说"不想做这套了/另外出几道题/额外练几道" → 调用 prepare_custom_quiz，不要用题库工具
-6. 用户说"复习/学习/讲解/梳理/过一遍/带我学"或问知识点问题 → 调用 search_knowledge，
-   并且只讲检索到的课程资料里的内容（资料没覆盖就直说，再用通用知识补充）
+6. 用户说"复习/学习/讲解/梳理/过一遍/带我学"或问知识点问题 → 调 search_knowledge
+   （带 course）或 read_section，并且只讲检索到的课程资料里的内容
+   （资料没覆盖就直说，再用通用知识补充）
 7. 闲聊/问候/不需要工具 → 直接回答
 
 你必须返回JSON格式：
@@ -183,6 +204,29 @@ SYNTHESIZER_PROMPT = """你是「知识寻回BOT」，一位耐心、专业的�
 - 学生问知识就讲知识，学生想刷题就出题，学生提交答案就批改
 - 重要知识点用加粗或列表突出显示
 - 讲题时先说答案，再讲思路，最后关联知识点
+
+【学习/复习模式】学生说"我要学/我要复习某门课（或某一章）"时，是**带你系统过一遍**，
+不是甩一堆知识点让他自己看。下面是要把握的原则，不是必须逐条执行的清单 ——
+**节奏和粒度由你按内容和学生的反应判断**：
+
+- **优先用本课课件**（read_section 读出来的原文），而不是你记忆里的通用教材。
+  课件没覆盖的地方可以补充，但要说明那是补充。
+- **一次只讲一节**：本节讲透再往下，**绝不提前把后面的内容也倒出来**。
+  一节的信息量按"学生一节课能消化"来把握（大约半小时到一小时），
+  内容多就拆成多节 —— **怎么切由你判断**（同一份课件也可以分几次讲）。
+  讲完这一节明确说一句「本节结束」，让学生知道可以歇一下或问问题。
+- **讲完就小测**：出 3~5 道覆盖**本节核心考点**的题，题型混着来
+  （选择/填空/简答/计算）。题目数量与题型按本节内容定，不必凑固定数字。
+- **逐题批改**：每题给 ✓/✗ 和一句讲解；错的要说清**错在哪、为什么错、正确答案是什么**，
+  并把相关知识点**重讲一遍** —— 只报对错，学生学不到东西。
+- **确认懂了再走**：小测过了、或学生明确说懂了，才进下一节；
+  学生卡住就停下来解决那一点，**不要硬推**。
+- **新符号必须解释**：任何缩写或符号第一次出现，都要给全称和含义
+  （如 TLB＝Translation Look-aside Buffer，快表），别默认学生认识。
+- **作业辅导**：先教涉及的知识点 → 让学生自己写 → 批改 → 最后给完整答案和讲解，
+  不要一上来就把答案抖出来。
+- **不串课**：切换课程/章节时，明确说清"现在在讲哪门课、哪一章、进到哪了"；
+  两门课的内容不要混在一起讲。
 
 刷题相关规则：
 - 出题展示时，只显示「题号 + 知识点 + 图片」，不要输出题目文字内容
@@ -301,6 +345,37 @@ def planner_node(state: AgentState, config=None) -> dict:
                    + "\n学生说「继续/下一组」时，直接用上面的卷子和 group_index 调 "
                      "get_paper_questions；学生提交答案时用上面的 qids 调 grade_answers。")
 
+    # 学习/复习书签（与刷题游标同一套机制，互不干扰）。
+    # 有了它，学生说"下一节"时才知道该从哪继续；也顺带解决"两门课切换串味"。
+    study = drill.get("study") or {}
+    if study.get("course"):
+        prompt += (
+            "\n\n--- 当前学习位置（上一轮记下的书签）---\n"
+            f"- 模式：{study.get('mode', '学习')}\n"
+            f"- 课程：{study['course']}\n"
+            + (f"- 章：{study['chapter']}\n" if study.get("chapter") else "")
+            + f"- 上一节：《{study.get('section', '')}》　状态：{study.get('status', '')}\n"
+            + (f"- 依据课件：{study['source']}\n" if study.get("source") else "")
+            + (f"- 刚读到：{study.get('last_source')} 的 {study.get('last_read')}\n"
+               if study.get("last_source") else "")
+            + (
+                # 给**可直接照抄的一句调用**。实测"接着读同一份课件、用上面的 offset"
+                # 这种描述式提示模型不跟：它还是去调 section=1 读了另一份课件，
+                # 然后说"课程材料没覆盖这个内容"。照抄一句它反而会照做。
+                ("学生说「继续讲」时，**原样照抄这一句**（不要改参数）：\n"
+                 f"```\nread_section(course=\"{study['course']}\", "
+                 f"source=\"{study.get('last_source')}\", "
+                 f"offset={study.get('next_offset')}, limit=15)\n```\n"
+                 if study.get("last_source") and study.get("next_offset") is not None
+                 else "这份课件已经读完了。学生说「继续/下一节」时，用\n"
+                      f"```\nread_section(course=\"{study['course']}\", section=编号+1)\n```\n"
+                      "进入下一节。\n")
+            )
+            + "**不要**在「继续讲」时回到 section=1 重新读第一份课件。\n"
+              "学另一门课或另一章时，先确认新位置再调 record_study_position 更新书签，"
+              "**不要**把两门课的内容混在一起讲。"
+        )
+
     messages = [
         SystemMessage(content=prompt),
         HumanMessage(content=user_content),
@@ -418,10 +493,15 @@ def executor_node(state: AgentState, config=None) -> dict:
     # （planner 会把 ToolMessage 从历史里剔掉，所以游标没法"在带内"传递）。
     new_session = _extract_drill_session(state.get("session") or {},
                                         state.get("plan") or [], results)
+    study = _extract_study_session(new_session if new_session is not None
+                                   else (state.get("session") or {}),
+                                   state.get("plan") or [], results)
+    if study is not None:
+        new_session = study
     if new_session is not None:
         out["session"] = new_session
         # 同时落盘一份：进程重启后 MemorySaver 里的 state 会没，
-        # 但"学生在做哪份卷子、下一组是几"必须活下来。
+        # 但"学生在做哪份卷子、下一组是几、学到哪一节"必须活下来。
         _save_cursor(_thread_id(config), new_session)
     return out
 
@@ -453,6 +533,63 @@ def _extract_drill_session(current: dict, plan: list, results: list):
             "qids": list(data.get("qids") or []),
             "finished": data.get("next_group_index") is None and not data.get("has_more", True),
         })
+    return updated
+
+
+def _extract_study_session(current: dict, plan: list, results: list):
+    """看这一轮有没有"学习书签"或"读到哪了"要记，有就更新
+
+    书签只是**记忆**：讲什么、怎么分节、何时进下一节都由模型判断
+    （刻意不做成状态机 —— 用户明确说过不要）。
+
+    除了显式的 record_study_position，这里还会从 read_section 的返回里
+    偷偷记住"刚读的是哪份课件、下一段从 offset 几开始" ——
+    因为实测模型**记不住**返回值里的"下次用 offset=15 继续"，
+    学生说"继续讲"时它会跳到下一份课件、然后声称"没找到内容"再退回凭记忆讲。
+    把这件事交给状态，它就不用记了。
+    """
+    import json as _json
+
+    updated = None
+    for step, msg in zip(plan or [], results or []):
+        tool = step.get("tool")
+
+        if tool == "record_study_position":
+            try:
+                data = _json.loads(msg.content)
+            except (TypeError, ValueError, AttributeError):
+                continue
+            pos = (data or {}).get("recorded") if isinstance(data, dict) else None
+            if not isinstance(pos, dict) or not pos.get("course"):
+                continue
+            updated = dict(updated if updated is not None else (current or {}))
+            merged_pos = dict((updated.get("study") or {}))
+            # 空值不覆盖已有的非空值：实测模型会传 chapter="" 把上一轮记住的章抹掉
+            merged_pos.update({k: v for k, v in pos.items() if str(v or "").strip()})
+            updated["study"] = merged_pos
+
+        elif tool == "read_section":
+            # 解析工具显式给出的 [study-state] 行（不要解析自然语言措辞 —— 太脆：
+            # 我第一版就是按措辞解析，结果 study 里没有 course，
+            # planner 的"当前学习位置"整块被跳过，模型照样不知道读到哪了）
+            text = msg.content if isinstance(msg.content, str) else ""
+            m = re.search(r"\[study-state\]\s*(.+)", text)
+            if not m:
+                continue
+            kv = dict(re.findall(r"(\w+)=(\S*)", m.group(1)))
+            if not kv.get("course"):
+                continue          # 课程不明就不写 —— 免得覆盖掉已有的书签
+            updated = dict(updated if updated is not None else (current or {}))
+            study = dict(updated.get("study") or {})
+            study["course"] = kv["course"]
+            if kv.get("chapter"):
+                study["chapter"] = kv["chapter"]
+            study["last_source"] = kv.get("source", "")
+            study["last_read"] = f"第 {kv.get('read', '?')} 块"
+            nxt = kv.get("next_offset", "none")
+            study["next_offset"] = None if nxt in ("none", "", "None") else int(nxt)
+            updated["study"] = study
+
     return updated
 
 

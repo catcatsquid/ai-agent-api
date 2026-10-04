@@ -421,6 +421,136 @@ def search_with_course(kb, query: str, course: str, top_k: int = 6):
     return kb.search(query, top_k=top_k), False
 
 
+def section_index(course: str = "") -> dict:
+    """把课程的资料构成整理成"章节地图"，供学习/复习模式分节
+
+    ## 为什么需要它
+
+    学生说"我要复习操作系统"或"我要学死锁那一章"时，模型需要知道**这门课实际
+    有哪些资料**，否则只能凭记忆编出一套章节（"第一天：操作系统概述…"），
+    与本课课件对不上 —— 这正是用户实测反馈的问题。
+
+    ## 节是从哪来的
+
+    **PPT 的文件名本身就是天然的分节结构**：
+        02-1-进程与线程之进程.pdf / 03-OS调度.pdf / 05-死锁.pdf / Chapter4-Network Layer.pdf
+    文件名里带着编号与章节名，`chunk_count` 又近似等于内容量 ——
+    这两样就是给模型判断"怎么分节、一节讲多少"的依据。
+
+    ⚠️ 刻意**不**替模型决定粒度：不写"每 N 个知识点一节"这类硬规则，
+    也不给出"第几节"的固定切分。返回的是**素材地图**，
+    怎么切由模型按内容判断（用户明确要求不要写死）。
+
+    Args:
+        course: 课程名（操作系统 / 计算机网络）；留空则两门课都返回
+    """
+    from rag_tool import get_knowledge_base
+
+    courses = [course] if course else ["操作系统", "计算机网络"]
+    kb_docs = {d["source"]: d for d in get_knowledge_base().list_documents()}
+
+    out = {}
+    for c in courses:
+        names = set(course_sources(c))
+        if not names:
+            out[c] = {"ppt": [], "others": [], "not_ingested": [],
+                      "note": f"没找到「{c}」的资料目录（data/{c}/）"}
+            continue
+        ppts, others = [], []
+        for name in sorted(names):
+            d = kb_docs.get(name)
+            if not d:
+                continue                      # 在磁盘上但还没入库
+            item = {
+                "source": name,
+                "chapter": d.get("chapter") or _chapter_from_name(name),
+                "chunks": d.get("chunk_count", 0),
+                "doc_type": d.get("doc_type", ""),
+            }
+            (ppts if item["doc_type"] == "ppt" else others).append(item)
+        # 按文件名里的编号排序（02-1 < 02-2 < 03 < Chapter4…），与课程讲授顺序一致
+        ppts.sort(key=lambda x: (_leading_number(x["source"]), x["source"]))
+        others.sort(key=lambda x: -x["chunks"])
+        out[c] = {
+            "ppt": ppts,
+            "others": others,
+            "not_ingested": sorted(n for n in names if n not in kb_docs),
+        }
+    return out if not course else out.get(course, {})
+
+
+def _leading_number(name: str) -> int:
+    """取文件名开头的编号（02-1-xxx → 2，Chapter4-xxx → 4，没有 → 999）"""
+    m = re.match(r"^(\d+)", name)
+    if m:
+        return int(m.group(1))
+    m = re.match(r"^Chapter(\d+)", name, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    return 999
+
+
+def _chapter_from_name(name: str) -> str:
+    """从文件名兜底推章节名（规则与入库时的 _extract_chapter 保持一致）"""
+    stem = name.rsplit(".", 1)[0]
+    m = re.match(r"^\d+[-_]?\d*[-_](.+)", stem)
+    if m:
+        return re.sub(r"之.+$", "", m.group(1))
+    m = re.match(r"^Chapter\d+[-_](.+)", stem, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    return stem
+
+
+def section_chunks(source: str, offset: int = 0, limit: int = 15) -> dict:
+    """按**课件原始顺序**取出某一节的内容
+
+    为什么不是"取 top-k 相似片段"：讲一章时，模型需要的往往不是"最相似的几句"，
+    而是**这章按顺序讲了哪些东西** —— PPT 的 chunk_index 顺序就是它的讲授顺序。
+    只给相似片段会让讲解跳跃、丢东西。
+
+    同时这也天然支持"分节"：一份课件可能很长（06-内存管理 314 块），
+    用 offset/limit 分页读，读多少算一节的量由模型判断。
+
+    Returns:
+        {"source", "chapter", "total", "offset", "limit", "returned",
+         "has_more", "next_offset", "chunks": [{"index", "text"}]}
+    """
+    from rag_tool import get_knowledge_base
+
+    kb = get_knowledge_base()
+    try:
+        got = kb._get_collection().get(where={"source": source},
+                                      include=["documents", "metadatas"])
+    except Exception as e:
+        return {"source": source, "error": f"读取失败: {str(e)[:100]}"}
+
+    ids = got.get("ids") or []
+    if not ids:
+        return {"source": source, "error": "这份资料不在知识库里"}
+
+    rows = []
+    for text, meta in zip(got.get("documents") or [], got.get("metadatas") or []):
+        rows.append({"index": int(meta.get("chunk_index", 0)),
+                     "text": text, "chapter": meta.get("chapter", "")})
+    rows.sort(key=lambda r: r["index"])
+
+    offset = max(0, int(offset or 0))
+    limit = max(1, min(int(limit or 15), 40))     # 上限防止一次灌爆上下文
+    page = rows[offset:offset + limit]
+    return {
+        "source": source,
+        "chapter": rows[0]["chapter"] if rows else "",
+        "total": len(rows),
+        "offset": offset,
+        "limit": limit,
+        "returned": len(page),
+        "has_more": offset + len(page) < len(rows),
+        "next_offset": (offset + len(page)) if offset + len(page) < len(rows) else None,
+        "chunks": [{"index": r["index"], "text": r["text"]} for r in page],
+    }
+
+
 # ============================================================
 # 7. 临时出题（不返回题目，返回出题素材）
 # ============================================================
