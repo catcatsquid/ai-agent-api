@@ -17,13 +17,45 @@ debug.log
 extracted/
 vector_store_test/
 vector_store/
-data/
+chroma_db/
+
+# 原始课程资料（PDF 体积大，不入库）
+data/*
+!data/question_bank/
+# 题库结构化数据体积很小（约 0.6MB）且是人工整理成果，必须入库 ——
+# 否则别人 clone 下来题库是空的，刷题功能直接失效
+data/question_bank/*
+!data/question_bank/*.json
+# 题目图片约 130MB，默认不入库；需要图片随仓库分发时改用 Git LFS 或另建资源包
+data/question_bank/images/
+
+# 嵌入缓存
+embedding_cache/
+*.npy
+*.pkl
 
 # 调试脚本
 debug/
 
 # TRAE 内部文件
 .trae-html-share-packages/
+
+# npm / node 缓存（跑 tests/js 的 Node 断言时产生的，620 个文件不要入库）
+.npm-cache/
+node_modules/
+
+# 编辑器/重构留下的一次性备份（终版已入库，这些只是草稿）
+*.bak
+*.bak_*
+
+# 题库预览（生成物；内容随题库变化，不入库。当前那份已随两份卷子的删除一起删掉）
+docs/题目库预览.html
+
+# 对话导出（/chat/export 落地目录，用户自己的对话记录，不入库）
+exports/
+
+# 运行时状态（刷题游标的落盘副本，见 nodes.py 的 CURSOR_FILE）
+runtime/
 
 # 测试结果（JSON）
 debug/003-exam-qa-results*.json

@@ -52,9 +52,17 @@ def retry_on_rate_limit(max_retries: int = 3, base_wait: float = 3.0):
     """装饰器：429 限流时指数退避重试
 
     Args:
-        max_retries: 最大重试次数
+        max_retries: 最大重试次数（必须 >= 1）
         base_wait: 第一次等待秒数，后续翻倍（3 → 6 → 12）
+
+    注意：被装饰的函数必须抛 RateLimitError（或 requests 的 HTTPError）才会触发重试。
+    抛 APIError 不会被捕获 —— APIError 是 RateLimitError 的父类，
+    历史上 tools.py 就是抛了父类导致重试静默失效的。
     """
+    if max_retries < 1:
+        # 否则下面的 raise last_error 会在 last_error 为 None 时抛 TypeError
+        raise ValueError("max_retries 必须 >= 1")
+
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> T:

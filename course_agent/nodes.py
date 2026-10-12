@@ -8,130 +8,657 @@ Week 7 升级：自适应规划层（check_results + web_search_fallback）
               ├→ executor → [check_results]
               │                ├→ synthesizer → END        (结果充足)
               │                └→ web_search_fallback → synthesizer → END  (结果不足，补搜)
-              └→ synthesizer → END                        (闲聊等无需工具的问题)
+              └→ synthesizer → END                        (无需工具的问题)
 
-对比 Week 4 的 ReAct 循环：
-  - ReAct: LLM 每轮决定调哪个工具，逐步试错
-  - Plan-Execute: LLM 先一次性规划好用哪些工具，再批量执行
-  - 自适应层: executor 执行完检查结果质量，不足时自动补 web_search
+特点：
+- 以用户需求为中心，灵活选择工具，不死板
+- 支持知识库问答、联网搜索、刷题训练等多种场景
+- 工具参数由 planner 动态决定，executor 直接执行
 """
 
 import json
+import re
+from pathlib import Path
 from langchain_core.messages import SystemMessage, ToolMessage, AIMessage, HumanMessage
 from langgraph.graph import END
 from course_agent.state import AgentState
 from course_agent.llm import llm
 from course_agent.tools import tools, tools_by_name
 from course_agent.errors import safe_llm_invoke, safe_tool_invoke, LLMError
-from course_agent.memory import trim_messages
+from course_agent.memory import trim_messages, compress_history, SUMMARY_MARK
+from course_agent.logger import logger
+from course_agent import quiz_service
 
 llm_with_tools = llm.bind_tools(tools)
 
 # ============================================================
-# System Prompts
+# 刷题游标的落盘（让它活过一次进程重启）
+# ============================================================
+#
+# 游标原本只存在 AgentState["session"] 里，而 state 由 MemorySaver 保管 ——
+# **进程内存**。所以服务一重启，学生再说"继续下一组"，planner 手里既没有卷子也没有
+# 组号，只能回答"找不到题目了"（用户实测遇到过，而且当时确实是我重启了服务）。
+#
+# 真正的修法是把整个 checkpointer 换成持久化的（需要 langgraph-checkpoint-sqlite
+# 这个额外依赖，环境里装不上），所以这里先解决最影响体验的那一半：
+# **把游标单独落盘**。会话消息仍会随重启丢失（App 会显示成新对话），
+# 但"继续下一组"一定能工作。
+CURSOR_FILE = Path(__file__).resolve().parent.parent / "runtime" / "plan_cursors.json"
+
+
+def _thread_id(config) -> str:
+    """从 LangGraph 传入的 config 里取 thread_id"""
+    try:
+        return str((config or {}).get("configurable", {}).get("thread_id") or "")
+    except AttributeError:
+        return ""
+
+
+def _load_cursor(thread_id: str) -> dict:
+    if not thread_id or not CURSOR_FILE.exists():
+        return {}
+    try:
+        data = json.loads(CURSOR_FILE.read_text(encoding="utf-8"))
+        return data.get(thread_id) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_cursor(thread_id: str, session: dict) -> None:
+    if not thread_id or not session:
+        return
+    try:
+        CURSOR_FILE.parent.mkdir(parents=True, exist_ok=True)
+        data = {}
+        if CURSOR_FILE.exists():
+            try:
+                data = json.loads(CURSOR_FILE.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = {}
+        data[thread_id] = session
+        # 只留最近 200 个会话，避免文件无限增长
+        if len(data) > 200:
+            for k in list(data)[:-200]:
+                data.pop(k, None)
+        CURSOR_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                               encoding="utf-8")
+    except OSError as e:
+        logger.warning("刷题游标落盘失败: %s", e)
+
+
+# ============================================================
+# 工具调用泄漏成正文的兜底清理
+# ============================================================
+#
+# 实测：synthesizer 手里没有工具，但当它觉得"还差一步"时，
+# 会把工具调用**当正文写出来**给学生看：
+#     请稍等，我马上为你获取题目。get_paper_questions {"paper_source": "..."}
+# 根因是 Plan 图单向、synthesizer 无法再取数据（结构问题，正解是允许一次重规划）。
+# 这里先做兜底：把这种片段从回答里摘掉，别让学生看到内部协议。
+# 注意**不要**用"已知工具名白名单"来匹配 —— 实测模型会**编造不存在的工具名**
+# （学生答 ACDBA 时它输出了 `get_paper_answers {...}`，而白名单里没有这个名字，
+#  于是整段泄漏给了学生）。改成通用的"标识符 + JSON 对象"：
+# 蛇形命名的标识符紧跟一个 JSON 对象，正常中文回复里不会长这样。
+_TOOL_CALL_TEXT_RE = re.compile(
+    r"(?:\b[a-z][a-z0-9]*(?:_[a-z0-9]+){1,4}\s*\{[^{}]*\})"
+    r"|(?:\b[a-z][a-z0-9]*(?:_[a-z0-9]+){1,4}\(\s*\{[^{}]*\}\s*\))")
+
+
+def strip_tool_call_text(text: str) -> str:
+    """摘掉回答里泄漏出来的工具调用片段"""
+    if not text:
+        return text
+    cleaned = _TOOL_CALL_TEXT_RE.sub("", text)
+    # 摘掉后可能留下多余空行与结尾的悬空提示
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
+
+
+# ============================================================
+# 会话状态注入 + 两个守卫（从手写助教那侧移植过来）
+# ============================================================
+#
+# 起因：同题对比 BOT 与手写助教时发现 BOT 在"学习/复习"流程上明显吃亏，而原因不是
+# 范式，是**状态注入放的位置不同** —— 助教把状态注进"写回答的模型"的 system prompt，
+# 而 BOT 只注进了 planner（写回答的 synthesizer 根本看不到）。实测后果：
+#   · 学生交小测答案 → BOT 说"请提供具体的问题和选项"（它手里没有书签，也没题面）
+#   · 讲了课但不说"本节结束"、不出小测（那是写给 synthesizer 的契约）
+#
+# 另外把助教的两个守卫也补过来（这两条 BOT 一直没有）：
+#   · 学生说"没看到题目" → 确定性重发（不许只口头道歉）
+#   · 历史/工具结果的裁剪与压缩（BOT 的 MemorySaver 原来**没有任何上限**，审查文档 F2）
+
+_MISSED_QUESTIONS = re.compile(
+    r"没看到|没有题|题目呢|题呢|没给|没发|没显示|没出来|漏了|再发一遍|重新发|再看一遍|重复一遍"
+)
+_BOT_KEEP_TOOL_TURNS = 2          # 只保留最近 N 轮的工具结果原文
+_BOT_MAX_MESSAGES = 40            # 与手写助教同口径
+
+
+def _missed_questions(text: str) -> bool:
+    """学生是不是在说「题目没给我」"""
+    return bool(_MISSED_QUESTIONS.search(str(text or "")))
+
+
+_QUIZ_ANSWER_HINT = re.compile(
+    r"(\d\s*[.、)]\s*[A-Ha-h对错√×]|(?<![A-Za-z])[A-H]{3,}(?![A-Za-z])|我答|答案[:：])"
+)
+
+
+_STUDY_REQ_RE = re.compile(r"复习|预习|我要学|带我|过一遍|串一遍|讲讲|讲解|梳理|学一下")
+_CONT_RE = re.compile(r"继续|接着|下一节|往下")
+
+
+def _looks_like_study_request(text: str) -> bool:
+    """学生是不是在要求「系统讲这门课/这一章」或「接着讲下去」
+
+    包含「继续/接着/下一节」这类**延续信号** —— 实测「继续讲」里没有
+    「讲讲/讲解」这种词，只按请求词判断会漏掉它（而它恰恰是最常见的一句）。
+    漏判的代价：不补 read_section → 模型凭记忆接着讲。
+    """
+    t = str(text or "")
+    if not (_STUDY_REQ_RE.search(t) or _CONT_RE.search(t)):
+        return False
+    # 别再拦「学生交答案」那一轮（那轮由另一条守卫处理成不调工具）
+    return not _looks_like_quiz_answer(t)
+
+
+def _course_from_text(text: str) -> str:
+    """从学生这句话里认出课程名（认不出就返回空，**不乱猜**）"""
+    t = str(text or "")
+    for c in ("操作系统", "计算机网络"):
+        if c in t:
+            return c
+    return ""
+
+
+def _looks_like_quiz_answer(text: str) -> bool:
+    """学生像在提交一份答案（"1.B 2.D"、"ACDBE"、"我答一下…"）
+
+    用于"讲课/复习中交自拟小测答案"这个场景 —— 那种答案题库里没有，
+    只能由模型自己批；实测模型会习惯性去调 grade_answers，
+    然后反问学生"你在做哪份卷子"，把学习流程硬拽回刷题流程。
+    """
+    return bool(_QUIZ_ANSWER_HINT.search(str(text or "")))
+
+
+def _session_block(session: dict) -> str:
+    """把会话状态整理成"写给**写回答的模型**"的一段提示
+
+    这段必须同时给 synthesizer 和 chitchat 用 —— 因为学生交小测答案那一轮
+    **一个工具都不会调**（走的是 CHITCHAT_PROMPT），而"小测由你自己批"这条
+    恰恰要在那一轮生效。
+    """
+    if not session:
+        return ""
+    bits = []
+    study = session.get("study") or {}
+    if study.get("course"):
+        line = (f"【当前学习位置】{study.get('mode', '学习')} · {study['course']}"
+                + (f" · {study['chapter']}" if study.get("chapter") else "")
+                + f" · 上一节《{study.get('section', '')}》"
+                  f"({study.get('status', '讲解中')})")
+        if study.get("last_source"):
+            line += f" · 刚读到《{study['last_source']}》的 {study.get('last_read', '')}"
+            line += (f"，继续讲要用 offset={study['next_offset']}"
+                     if study.get("next_offset") is not None else "（已读完）")
+        bits.append(line + "\n"
+                    "· **本节的测验题是你自己出的，所以由你自己批**：逐题给 ✓/✗ 与讲解，"
+                    "说清**错在哪、为什么错、正确答案是什么**，错的知识点要重讲一遍。\n"
+                    "· **不要**调 grade_answers / get_paper_questions —— 那是题库真题的"
+                    "批改通道；学生答的是你刚出的小测，题库里没有它。\n"
+                    "· 学生说「继续讲」＝接着读**同一份**课件；说「下一节」＝进下一份。\n"
+                    "· 学生说「没听懂 / 换个讲法」→ 换角度重讲（类比、画流程、举具体例子），"
+                    "**不要**让学生报题号、也不要复读上一轮的原话。\n"
+                    "· 讲完这一节要明确说「本节结束」，然后出覆盖本节核心考点的小测题；"
+                    "**不要**提前讲后面的内容。")
+    drill = session.get("paper")
+    if drill:
+        bits.append(f"【当前试卷】{drill}"
+                    + (f" · 刚出到第 {session['group_index']} 组"
+                       if session.get("group_index") else "")
+                    + (f" · 下一组传 group_index={session['next_group_index']}"
+                       if session.get("next_group_index") else ""))
+    return ("\n\n--- 当前会话状态（务必据此回答）---\n" + "\n".join(bits)) if bits else ""
+
+
+# ============================================================
+# 学习/复习相关工具（先定义给 planner 用）
 # ============================================================
 
-PLANNER_PROMPT = """你是一个课程知识库问答助手的规划器。分析用户问题，制定搜索策略。
+PLANNER_PROMPT = """你是「知识寻回BOT」的规划师。分析用户当前的需求，决定是否需要调用工具，以及调用哪些工具。
 
-可用工具：
-1. search_knowledge - 搜索课程知识库（计网+OS），优先使用
-2. web_search - 联网搜索，当问题涉及课程外内容或需要最新信息时使用
+【重要概念区分】
+- 「知识库」= 课程课件、课本、笔记，用于学习知识点（search_knowledge 搜索）
+- 「习题库」= 往年试卷、练习题，用于刷题训练（list_papers / get_paper_questions / grade_answers 操作）
+- 用户说"刷题/做题/写题/答题/练习/做卷子/考试/自测/找题/出题目" → 都是要从习题库抽题做，用 list_papers
+- 用户说"知识库里的题/题库里的题" → 也是指习题库，用 list_papers
+- 用户问"什么是XX/解释XX/XX原理" → 是知识点问题，用 search_knowledge
+- 用户说"复习/学习/讲解/梳理/带我过一遍/讲讲这门课/开始第一天的复习" →
+  这是**学知识点**，先 `list_course_sections` 拿到该课的资料地图，
+  再用 `read_section`（系统讲一节）或 `search_knowledge(course=…)`（答具体问题）取资料。
+  **不要**用 list_papers / get_paper_questions —— 那是刷题，不是复习。
+  （真实踩过：学生说"想复习操作系统"，结果被当成了刷题，直接甩卷子清单；
+   说"开始第一天的复习"，直接被塞了一组题。学生要的是讲解，不是做题。）
+- 用户说"我要学/我要复习**某一章**"（如"我要学死锁那一章"）→ 同样先
+  `list_course_sections`，找到对应课件后用 `read_section` 读它，**一次只讲一节**
+- 用户说"下一节/继续"且上一轮在学课程 → 用 record_study_position 的书签定位，
+  继续讲**下一节**（不要重新列章节清单，也不要跳着讲）
 
-规划规则：
-1. 课程知识点问题（进程、线程、调度、死锁、TCP、UDP等）→ 只用 search_knowledge
-2. 课程外扩展问题（Linux内核、最新技术、具体实现等）→ 先 search_knowledge，再 web_search
-3. 闲聊或非知识问题 → 返回空计划，直接回答
-
-你必须返回JSON格式：
-{"need_tools": true/false, "steps": [{"tool": "search_knowledge", "query": "搜索词"}, ...]}
-
-注意：query 应该是精炼的搜索关键词，不是完整的问句。
-最多规划 3 个步骤。"""
-
-SYNTHESIZER_PROMPT = """你是一个课程知识库问答助手。基于检索结果回答用户问题。
-
-回答规则：
-1. 优先引用知识库内容（课件 > 课本 > 笔记），网络搜索内容作为补充
-2. 标注来源：「来源：xxx（课件/课本/笔记/网络搜索）」
-3. 如果知识库结果不足，可结合网络搜索结果，但需区分来源
-4. 不能编造来源，只引用检索结果中真实出现的内容
-5. 回答要结构化、清晰，适合学生理解"""
-
-CHITCHAT_PROMPT = """你是一个课程知识库问答助手。你可以帮助用户解答计算机网络和操作系统课程的问题。
-
-当用户闲聊时，友好回应，并可以引导用户提问课程相关的问题。
-如果用户的问题不涉及课程知识，尽力帮助用户，但不要编造课程内容。"""
-
-REACT_PROMPT = """你是一个课程知识库问答助手，帮助用户解答【计算机网络】和【操作系统】两门课程的知识点问题。
-
-知识库内容覆盖：
-- 计算机网络：TCP三次握手/四次挥手、TCP与UDP区别、拥塞控制等
-- 操作系统：进程与线程、调度算法、死锁、同步互斥机制等
-
-资料类型与优先级：
-- 课件（ppt）：老师上课的课件，是主要学习材料，优先级最高
-- 课本（textbook）：参考教材，仅作补充
-- 笔记（notes）：课程笔记
-
-重要规则：
-1. 当课件内容和课本内容不一致时，以课件为准
-2. 回答时优先引用课件中的内容，课本内容仅作为补充说明
-3. 标注内容来源时要说明是课件还是课本
-
-你可以使用的工具：
-1. search_knowledge：搜索知识库中的课程内容（优先使用）
-2. web_search：联网搜索，获取知识库之外的信息（知识库搜索结果不足时使用）
-3. get_course_info：查看知识库状态
-
-【工具使用策略】
-- 第一步：总是先用 search_knowledge 搜索知识库
-- 第二步：检查知识库搜索结果是否足以完整回答问题。如果结果为空、不相关、或覆盖不全，**必须调用 web_search 联网补充搜索**，不能直接用自身知识回答。
-- 第三步：综合知识库和网络搜索结果，给出完整回答
+你有 13 个工具可用：
+1. search_knowledge(query, course?, source?) — 搜索课程知识库，用于回答知识点问题
+   **讲解课程内容时务必带 course**（知道具体哪份课件时带 source），这样检索才不会串课
+2. list_course_sections(course?) — 列出某门课**实际有哪些课件/课本/笔记**（带章节名与内容量）
+   学生说"我要复习/我要学 某门课（或某个章节）"时，**先调它**拿到真实的资料地图，
+   再决定怎么分节 —— 不要凭记忆编章节（如"第一天：操作系统概述"）
+3. read_section(course, chapter?, section?, offset?, limit?) — 按**课件原始顺序**读某一节
+   **系统地讲一节时优先用它**。**不需要你记文件名**：
+   · 学生说"**某一章**"（"我要学死锁那一章"）→ 用章名：read_section(course="操作系统", chapter="死锁")
+   · 学生说"**第几节/接着讲**"→ 用节号：read_section(course="操作系统", section=2)
+   想知道有哪些章，先调 list_course_sections。
+   一份课件很长时用 offset 续读；一次读多少由你判断。
+   ⚠️ **不要用课本或笔记来"讲课程"** —— 它们的章节顺序不代表本课顺序；
+   真去读了，工具会自动换成课件并告诉你。
+4. record_study_position(course, section, mode?, chapter?, source?, status?) —
+   记下"学到哪一节了"的书签（**不是状态机**，只是个记忆）
+   开始讲一节时记一次；本节讲完小测通过或学生卡住时，用 status 更新
+5. web_search(query) — 联网搜索，知识库不够或涉及课外内容时使用
+6. get_course_info() — 查看知识库统计信息
+7. list_papers(course?) — 列出习题库中的试卷，可选按课程筛选（操作系统/计算机网络）
+8. get_paper_questions(paper_source, group_index?) — 从某份试卷里取**一组**题
+   注意：一次只返回一组（选择题/填空题/判断题 5 题一组，综合题 1 题一组），
+   **不是整卷**。继续做下一组时，必须把上一轮工具结果里的 next_group_index 传进 group_index；
+   不传的话只会反复给第 1 组。
+9. explain_question(paper_source, no?) — 取某道题的**题面原文 + 参考答案 + 评分要点**
+   学生说"不会 / 没思路 / 讲讲这道题 / 为什么选 X"，或者要讲某道错题时必须调它。
+   出题接口刻意不返回题面和答案，所以**没有它就讲不了题**，不要凭图片瞎猜。
+10. grade_answers(paper_source, user_answer_text) — 批量批改学生答案
+11. prepare_custom_quiz(topic, course?, qtype?, count?, difficulty?) — 为「临时出题」取素材
+    学生说"不想做这套了 / 另外出几道题 / 针对XX多练几道" → 用这个，**不要**去翻题库。
+    它不返回题目，只返回素材，题目由你自己写（并在题前说明是自拟题）。
+12. get_practice_stats(paper_source) — 获取试卷练习次数统计
+13. record_practice(paper_source) — 记录完成一次试卷练习
 
 【强制规则 - 必须严格遵守】
-1. 只要用户问的是计算机网络或操作系统的课程知识点问题，**必须先调用 search_knowledge 搜索知识库**，绝对不能仅凭自己的记忆回答。
-2. 回答必须基于搜索结果中的内容，不能编造知识库中没有的信息。
-3. 绝对不能编造来源！只有在工具返回的检索结果中真实出现的来源才能标注。如果搜索结果为空或不相关，必须明确说"知识库中未找到相关内容"。
-4. 如果搜索结果不足以回答问题，可以调用 web_search 联网补充，或明确告知用户"知识库中相关内容有限"，再补充通用知识，但必须明确区分哪些是知识库内容、哪些是补充说明。
-5. 标注来源格式：「来源：xxx（课件/课本/笔记/网络搜索）」。
+1. 用户说"刷题/做题/写题/答题/练习/做卷子/考试/自测/找题/出题目/题库/卷子/试卷" → 必须调用 list_papers，绝对不能用 search_knowledge
+2. 用户**指名**某份试卷（"2026卷"/"2025那套"/"2019模拟题"/"第X套"等）→ 必须调用 get_paper_questions
+   取题。**不要**只调 list_papers 把清单再念一遍 —— 学生已经选好了。
+   说"继续/下一组"→ 也要调 get_paper_questions，并把上一组的 next_group_index 传进去
+3. 用户提交答案（字母串如ABCDE、或1.A 2.B格式）→ 调用 grade_answers
+4. 用户说"不会/没思路/讲讲这道题/为什么" → 调用 explain_question 取题面和答案
+5. 用户说"不想做这套了/另外出几道题/额外练几道" → 调用 prepare_custom_quiz，不要用题库工具
+   ⚠️ **也要看"刷题"的宾语**：学生说"刷几道**传输层**的题""练练**死锁**"这类
+   **按知识点**的练习（不是整份卷子）→ 用 prepare_custom_quiz(topic=…)，**不要** list_papers。
+   题库没有按知识点组卷，给菜单等于没满足需求 —— 实测三轮里 BOT 全这么错了。
+6. 用户说"复习/学习/讲解/梳理/过一遍/带我学"或问知识点问题 → 调用 search_knowledge，
+   并且只讲检索到的课程资料里的内容（资料没覆盖就直说，再用通用知识补充）
+   ⚠️ 学生说"**没听懂 / 换个讲法 / 再讲一遍**"且当前在讲课（见下方学习位置）→
+   必须调 read_section **把同一份课件的原文再取一次**再讲，换个角度；
+   **不要**不调工具就凭记忆复述，也不要让学生自己报题号。
+7. 闲聊/问候/不需要工具 → 直接回答
 
-资料优先级（引用时遵守）：
-- 课件内容优先于课本内容
-- 两者冲突时，以课件为准
-- 知识库内容优先于网络搜索内容"""
+你必须返回JSON格式：
+{"need_tools": true/false, "steps": [{"tool": "工具名", "args": {"参数名": "参数值"}}, ...]}
+
+注意：
+- steps 最多 3 个步骤
+- args 是工具的参数字典，根据工具定义填写正确的参数名
+- 如果不需要工具，steps 为空数组，need_tools 为 false
+- 只规划当前这一轮需要做的事，不要规划未来多轮的流程
+- **题目和图片只能来自工具返回**：绝不允许规划"自己出题"或"编一道题"，
+  也不允许编造图片链接（出题只能通过 list_papers / get_paper_questions 从题库取）"""
+
+SYNTHESIZER_PROMPT = """你是「知识寻回BOT」，一位耐心、专业的课程学习助手。
+
+你的能力：
+- 答疑解惑 — 基于知识库内容回答学生问题
+- 教学讲解 — 分章节、分节给学生讲课
+- 刷题训练 — 从习题库抽题让学生做，批改并讲解
+- 复习总结 — 帮学生梳理知识点、回顾错题
+
+交互原则：
+- 自然、像真人老师一样对话，不要太机械
+- 基于工具返回的结果回答，不要编造内容
+- 学生问知识就讲知识，学生想刷题就出题，学生提交答案就批改
+- 重要知识点用加粗或列表突出显示
+- 讲题时先说答案，再讲思路，最后关联知识点
+
+【学习/复习模式】学生说"我要学/我要复习某门课（或某一章）"时，是**带你系统过一遍**，
+不是甩一堆知识点让他自己看。下面是要把握的原则，不是必须逐条执行的清单 ——
+**节奏和粒度由你按内容和学生的反应判断**：
+
+- **优先用本课课件**（read_section 读出来的原文），而不是你记忆里的通用教材。
+  课件没覆盖的地方可以补充，但要说明那是补充。
+- **讲解节奏照 read_section 返回里的契约走**（它会按 mode 给出：复习＝快速过＋多测、
+  学习＝细讲＋少测；讲完说「本节结束」、出小测、逐题批改并重讲错的知识点、
+  新符号先给全称、确认懂了再进下一节、不串课）。"快慢多少"由你按内容判断。
+- **一次只讲一节**：本节讲透再往下，**绝不提前把后面的内容也倒出来**。
+  一节的信息量按"学生一节课能消化"来把握（大约半小时到一小时），
+  内容多就拆成多节 —— **怎么切由你判断**（同一份课件也可以分几次讲）。
+  讲完这一节明确说一句「本节结束」，让学生知道可以歇一下或问问题。
+- **讲完就小测**：出 3~5 道覆盖**本节核心考点**的题，题型混着来
+  （选择/填空/简答/计算）。题目数量与题型按本节内容定，不必凑固定数字。
+- **逐题批改**：每题给 ✓/✗ 和一句讲解；错的要说清**错在哪、为什么错、正确答案是什么**，
+  并把相关知识点**重讲一遍** —— 只报对错，学生学不到东西。
+- **确认懂了再走**：小测过了、或学生明确说懂了，才进下一节；
+  学生卡住就停下来解决那一点，**不要硬推**。
+- **新符号必须解释**：任何缩写或符号第一次出现，都要给全称和含义
+  （如 TLB＝Translation Look-aside Buffer，快表），别默认学生认识。
+- **作业辅导**：先教涉及的知识点 → 让学生自己写 → 批改 → 最后给完整答案和讲解，
+  不要一上来就把答案抖出来。
+- **不串课**：切换课程/章节时，明确说清"现在在讲哪门课、哪一章、进到哪了"；
+  两门课的内容不要混在一起讲。
+
+刷题相关规则：
+- 出题展示时，只显示「题号 + 知识点 + 图片」，不要输出题目文字内容
+- 题目格式：Q1 [进程调度] 然后贴图片（![题目](图片URL)）
+- 选择题 5 道一组出，其他题型 1 道一组出
+- 批改结果来自 grade_answers 工具，不要自己判断对错
+- 学生做完一组后，给出批改结果和讲解，然后问是否继续下一组
+
+【最重要的一条：不许编题】
+- **题目和图片只能来自工具返回**。工具没返回题目时，就如实说"我没能取到题目"，
+  绝不允许自己编一道题、也不允许编造图片链接（尤其不许用 example.com 之类的占位地址）。
+- 出题工具只给「题号 + 知识点 + 图片」，**题干和答案是故意不给的**（防泄题）。
+  学生要讲解时用 explain_question 取回来，不要凭知识点名字去猜题目内容。
+- 讲题时如果手里只有知识点名字、没有题面，就说"我先把题面取出来"并调 explain_question，
+  而不是围绕那个知识点泛泛而谈。
+
+输出格式：
+- 用 Markdown 格式
+- 题目图片用 ![题目](图片URL) 格式
+- 保持自然流畅，不要输出 JSON 或代码块
+- **不要把工具调用本身写进回复**（比如 `get_paper_questions {"paper_source": ...}` 这种）"""
+
+CHITCHAT_PROMPT = """你是「知识寻回BOT」，一位课程学习助手，擅长操作系统和计算机网络。
+
+友好回应用户，可以引导用户提问课程问题或开始刷题。
+如果用户的问题不涉及课程知识，尽力帮助用户，但不要编造课程内容。"""
+
+REACT_PROMPT = """你是「知识寻回BOT」，一位耐心、专业的课程学习助手，擅长操作系统和计算机网络两门课程。
+
+你的能力：
+1. 教学讲解 — 根据知识库内容，分章节、分节给学生讲课
+2. 刷题训练 — 从习题库中抽题让学生做，批改并讲解
+3. 答疑解惑 — 学生提问时，检索知识库后给出清晰解答
+4. 复习总结 — 帮学生梳理知识点、回顾错题
+
+可用工具：
+- search_knowledge(query) — 搜索课程知识库，优先使用
+- web_search(query) — 联网搜索，知识库不够时补充
+- get_course_info() — 查看知识库信息
+- list_papers(course?) — 列出习题库试卷
+- get_paper_questions(paper_source) — 获取试卷题目
+- grade_answers(paper_source, user_answer_text) — 批改答案
+- get_practice_stats(paper_source) — 练习统计
+- record_practice(paper_source) — 记录练习
+
+交互原则：
+- 自然、像真人老师一样对话，不要太机械
+- 学生说"学XX"就检索知识库开始教学
+- 学生说"刷题/做题"就调用 list_papers 列试卷
+- 学生提交答案后，调用 grade_answers 批改，不要自己判
+- 出题只显示题号+知识点+图片，不要输出题目文字
+- 学生想换内容、问问题、闲聊时，灵活响应，不要死板
+- 不能编造答案，所有题目答案必须来自工具
+
+输出格式：
+- 用 Markdown 格式
+- 题目图片用 ![题目](图片URL) 格式
+- 保持自然流畅"""
 
 
 # ============================================================
 # Planner Node
 # ============================================================
 
-def planner_node(state: AgentState) -> dict:
-    """规划器节点：分析问题，决定用哪些工具和搜索查询"""
+def _grade_call_template(drill: dict) -> str:
+    """给 planner 一句**可直接照抄**的批改调用
+
+    为什么明写而不是描述规则：实测只说「用上面的 qids 调 grade_answers」时，
+    planner 把那串 qid **填进了 paper_source**，于是批改直接失败
+    （`没能确定试卷: 2025OS_Q1,2025OS_Q2,…`）。给可照抄的一句它才会照做 ——
+    这套「照抄」办法在 `read_section` 的「继续讲」上已经验证过。
+    """
+    paper = drill.get("paper", "")
+    qids = json.dumps(drill.get("qids") or [], ensure_ascii=False)
+    return (f'```\ngrade_answers(paper_source="{paper}", '
+            f'user_answer_text="<学生这段答案原文>", qids={qids})\n```\n')
+
+
+def planner_node(state: AgentState, config=None) -> dict:
+    """规划器节点：分析用户需求，决定用哪些工具"""
+    # 历史口径必须和 synthesizer 一致（都排除系统提示和工具结果），
+    # 这样 compress_history 的摘要能在两个节点间命中缓存，不会一轮调两次摘要 LLM。
+    # 之前 planner 用的是含 ToolMessage 的全量窗口，既不共享缓存，
+    # 也看不到摘要 —— 于是"刚才第一个问题问的是什么"这类指代型追问，
+    # 规划阶段就丢了上下文，只会拿上一轮的话题去检索。
+    history_msgs = [
+        m for m in state["messages"]
+        if not isinstance(m, SystemMessage) and not isinstance(m, ToolMessage)
+    ]
+    summary_text, recent_msgs = compress_history(history_msgs, llm)
+
+    history_lines = []
+    if summary_text:
+        history_lines.append(f"（更早的对话摘要）{summary_text}")
+    for m in recent_msgs[-4:]:
+        if isinstance(m, HumanMessage):
+            history_lines.append(f"用户: {m.content}")
+        elif isinstance(m, AIMessage):
+            history_lines.append(f"助手: {m.content[:200]}")
+    history_text = "\n".join(history_lines) if history_lines else ""
+
     user_msg = state["messages"][-1]
     user_content = user_msg.content if hasattr(user_msg, "content") else str(user_msg)
 
+    prompt = PLANNER_PROMPT
+    if history_text:
+        prompt += f"\n\n--- 对话上下文 ---\n{history_text}"
+
+    # 把跨轮会话游标显式交给 planner。
+    # 不加这段的话，学生说"继续下一组"时 planner 手里既没有卷子也没有组号
+    # （上一轮的工具结果被上面的 history_msgs 过滤掉了），实测会瞎猜卷子、甚至编题。
+    # 把跨轮会话游标显式交给 planner。
+    # 优先用 state 里的（同进程内的正常路径）；state 里没有说明进程重启过，
+    # 这时从落盘副本里恢复 —— 否则学生说"继续下一组"只能听到"找不到题目"。
+    drill = state.get("session") or _load_cursor(_thread_id(config))
+    if drill.get("paper"):
+        prog = [f"卷子：{drill['paper']}"]
+        if drill.get("type"):
+            prog.append(f"题型：{drill['type']}")
+        if drill.get("group_index"):
+            prog.append(f"刚出到第 {drill['group_index']} 组")
+        if drill.get("finished"):
+            prog.append("这份卷子已经出完了")
+        elif drill.get("next_group_index"):
+            prog.append(f"**下一组要传 group_index={drill['next_group_index']}**")
+        if drill.get("qids"):
+            prog.append("刚出的题 qids（**这是数组，不是卷名**）："
+                        + json.dumps(drill["qids"], ensure_ascii=False))
+        prompt += ("\n\n--- 当前刷题进度（来自上一轮，务必据此填参数）---\n"
+                   + "\n".join(f"- {x}" for x in prog)
+                   + "\n学生说「继续/下一组」时，用 **group_index** 调 get_paper_questions。\n"
+                     "学生提交答案时，**原样照抄这一句**（不要改参数名）：\n"
+                     + _grade_call_template(drill)
+                   + "\n⚠️ 上面那串 `xxx_Q1` 是 **qids（数组）**，"
+                     "**绝对不要把它填进 paper_source** —— paper_source 要的是"
+                     "「试卷来源名称」这种中文卷名（见上一行）。"
+                     "实测填错会导致批改直接失败。")
+
+    # 学习/复习书签（与刷题游标同一套机制，互不干扰）。
+    # 有了它，学生说"下一节"时才知道该从哪继续；也顺带解决"两门课切换串味"。
+    study = drill.get("study") or {}
+    if study.get("course"):
+        prompt += (
+            "\n\n--- 当前学习位置（上一轮记下的书签）---\n"
+            f"- 模式：{study.get('mode', '学习')}\n"
+            f"- 课程：{study['course']}\n"
+            + (f"- 章：{study['chapter']}\n" if study.get("chapter") else "")
+            + f"- 上一节：《{study.get('section', '')}》　状态：{study.get('status', '')}\n"
+            + (f"- 依据课件：{study['source']}\n" if study.get("source") else "")
+            + (f"- 刚读到：{study.get('last_source')} 的 {study.get('last_read')}\n"
+               if study.get("last_source") else "")
+            + (
+                # 给**可直接照抄的一句调用**。实测"接着读同一份课件、用上面的 offset"
+                # 这种描述式提示模型不跟：它还是去调 section=1 读了另一份课件，
+                # 然后说"课程材料没覆盖这个内容"。照抄一句它反而会照做。
+                ("学生说「继续讲」时，**原样照抄这一句**（不要改参数）：\n"
+                 f"```\nread_section(course=\"{study['course']}\", "
+                 f"source=\"{study.get('last_source')}\", "
+                 f"offset={study.get('next_offset')}, limit=15)\n```\n"
+                 if study.get("last_source") and study.get("next_offset") is not None
+                 else "这份课件已经读完了。学生说「继续/下一节」时，用\n"
+                      f"```\nread_section(course=\"{study['course']}\", section=编号+1)\n```\n"
+                      "进入下一节。\n")
+            )
+            + "**不要**在「继续讲」时回到 section=1 重新读第一份课件。\n"
+              "**本节的测验题是你自己出的，所以由你自己批**（逐题 ✓/✗ + 讲解，"
+              "说清错在哪、为什么、正确答案），**不要**调 grade_answers —— "
+              "那是题库真题的批改通道。\n"
+              "学另一门课或另一章时，先确认新位置再调 record_study_position 更新书签，"
+              "**不要**把两门课的内容混在一起讲。"
+        )
+
     messages = [
-        SystemMessage(content=PLANNER_PROMPT),
+        SystemMessage(content=prompt),
         HumanMessage(content=user_content),
     ]
     try:
         response = safe_llm_invoke(llm, messages, context="planner")
         raw = response.content.strip()
     except LLMError:
-        return {"plan": [{"tool": "search_knowledge", "query": user_content}]}
+        return {"plan": [{"tool": "search_knowledge", "args": {"query": user_content}}]}
 
-    # 解析 JSON 计划（LLM 可能包裹在 ```json ... ``` 中）
+    # 解析 JSON 计划
     if "```json" in raw:
         raw = raw.split("```json")[1].split("```")[0].strip()
     elif "```" in raw:
         raw = raw.split("```")[1].split("```")[0].strip()
 
     try:
-        plan = json.loads(raw)
-    except json.JSONDecodeError:
-        plan = {"need_tools": True, "steps": [{"tool": "search_knowledge", "query": user_content}]}
+        plan_data = json.loads(raw)
+        # 模型经常返回"合法 JSON 但结构不对"的东西（顶层是数组、
+        # steps 是对象、steps 里混进字符串）。原来只 catch JSONDecodeError，
+        # 这些情况会抛 AttributeError 冒到路由层，整个请求 500。
+        if not isinstance(plan_data, dict):
+            raise ValueError(f"计划顶层不是对象: {type(plan_data).__name__}")
+        steps = plan_data.get("steps", [])
+        if not isinstance(steps, list):
+            raise ValueError(f"steps 不是数组: {type(steps).__name__}")
+        # 统一格式：每个 step 必须有 tool 和 args
+        normalized = []
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            tool_name = step.get("tool", "")
+            if not tool_name:
+                continue
+            args = step.get("args", {})
+            if not isinstance(args, dict):
+                args = {}
+            # 兼容旧格式：如果有 query 字段但没有 args
+            if not args and step.get("query"):
+                args = {"query": step["query"]}
+            normalized.append({"tool": tool_name, "args": args})
+        # steps 有内容但一条可用都没有（例如里面全是字符串）：
+        # 不能当成"不需要工具"，否则会绕过检索直接作答
+        if not normalized and steps:
+            raise ValueError("steps 里没有可用的工具调用")
+    except (json.JSONDecodeError, ValueError, TypeError, AttributeError) as e:
+        logger.warning("planner 返回的计划无法解析，回退默认计划: %s", e)
+        normalized = [{"tool": "search_knowledge", "args": {"query": user_content}}]
 
-    return {"plan": plan.get("steps", [])}
+    # 【守卫 1】学生说"没看到题目" → **确定性重发**，不许只口头道歉。
+    # 移植自手写助教（那边有这条守卫，BOT 一直没有）。实测模型会回一句
+    # 「很抱歉…我将重新发送这组题目」，然后一条题都没发、也没调工具。
+    if _missed_questions(user_content) and drill.get("next_group_index") is not None \
+            and not any(s.get("tool") == "get_paper_questions" for s in normalized):
+        resend_index = max(1, int(drill.get("group_index") or 1))
+        logger.info("学生说没收到题目 → 确定性重发第 %s 组（覆盖原计划）", resend_index)
+        normalized = [{"tool": "get_paper_questions",
+                       "args": {"paper_source": drill.get("paper", ""),
+                                "group_index": resend_index,
+                                "qtype": drill.get("type") or ""}}]
+
+    # 【守卫 2】讲课/复习中学生交**自拟小测**的答案 →
+    # 这一轮不规划任何工具，直接让 synthesizer 自己逐题批。
+    # 为什么用代码拦：实测 planner 在"学生提交答案"这种输入上**总是**想到题库
+    # （grade_answers / get_paper_questions），而题库里没有这道题，
+    # 于是它会反问"你在做哪份卷子"。system prompt 里写了不要用，它不跟。
+    study = drill.get("study") or {}
+    if study.get("course") and not drill.get("paper") \
+            and _looks_like_quiz_answer(user_content):
+        logger.info("讲课/复习中收到小测答案 → 不走题库工具，交给 synthesizer 自批")
+        normalized = []
+
+    # 【守卫 3】学生在听课/复习，但计划里**没有任何"取材料"的动作** →
+    # 这一轮它一定会凭记忆讲（实测：只调 list_course_sections 就开讲，
+    # 讲的内容不在课件里，还自己编了题和 example.com 图片）。
+    # 这里确定性地补一步 read_section，把课件原文塞到它手里。
+    _material = ("read_section", "search_knowledge", "search_knowledge_base")
+    if not any(s.get("tool") in _material for s in normalized) \
+            and _looks_like_study_request(user_content):
+        _study = drill.get("study") or {}
+        _course = _study.get("course") or _course_from_text(user_content)
+        if _course:
+            if _study.get("last_source") and _study.get("next_offset") is not None:
+                # 有书签就接着上次读（别把学生拉回第一节）
+                _args = {"course": _course, "source": _study["last_source"],
+                         "offset": _study["next_offset"]}
+            else:
+                _args = {"course": _course, "section": 1}
+            logger.info("听课/复习但计划里没有取材料 → 补一步 read_section(%s)", _args)
+            normalized = [{"tool": "read_section", "args": _args}] + normalized
+
+    out: dict = {"plan": normalized}
+
+    # 【守卫 2】状态上限：MemorySaver 原来**没有任何裁剪**（审查文档 F2），
+    # 长会话下 messages 单调增长。这里按 user 消息边界裁剪，并在边界之外
+    # 把较早的工具结果正文替换成占位符 —— 与手写助教的 _trim_history +
+    # _compact_tools 同口径，只是用 RemoveMessage / 同 id 覆盖来实现。
+    pruned = _prune_old_messages(state["messages"])
+    if pruned:
+        out["messages"] = pruned
+    return out
+
+
+def _prune_old_messages(messages: list) -> list:
+    """返回需要写回 state 的"裁剪结果"（RemoveMessage 列表）
+
+    两条规则，都保护消息配对完整性（assistant 的 tool_calls 与 tool 消息必须成对，
+    否则接口会 400）：
+      1. 超过 _BOT_MAX_MESSAGES 时，在 **user 消息处**切开，丢掉更早的整段；
+      2. 较早的工具结果正文压成占位符（保留消息本身与 id，只换 content）。
+    返回空列表表示"不需要动"。
+    """
+    from langgraph.graph.message import RemoveMessage
+
+    out = []
+    msgs = messages or []
+    if len(msgs) > _BOT_MAX_MESSAGES:
+        cut = len(msgs) - _BOT_MAX_MESSAGES
+        while cut < len(msgs) and not isinstance(msgs[cut], HumanMessage):
+            cut += 1
+        if cut < len(msgs):
+            for m in msgs[:cut]:
+                mid = getattr(m, "id", None)
+                if mid:
+                    out.append(RemoveMessage(id=mid))
+
+    # 较早的工具结果压缩：只保留最近 _BOT_KEEP_TOOL_TURNS 轮的 ToolMessage 原文
+    tool_msgs = [m for m in msgs if isinstance(m, ToolMessage)]
+    if len(tool_msgs) > _BOT_KEEP_TOOL_TURNS:
+        for m in tool_msgs[:-_BOT_KEEP_TOOL_TURNS]:
+            text = m.content if isinstance(m.content, str) else ""
+            if len(text) > 200 and getattr(m, "id", None):
+                out.append(ToolMessage(
+                    content=json.dumps(
+                        {"note": "（这一步的工具结果已省略，避免上下文过长）"},
+                        ensure_ascii=False),
+                    tool_call_id=m.tool_call_id, name=getattr(m, "name", None),
+                    id=m.id))
+    return out
 
 
 def route_after_plan(state: AgentState) -> str:
@@ -145,55 +672,214 @@ def route_after_plan(state: AgentState) -> str:
 # Executor Node
 # ============================================================
 
-def executor_node(state: AgentState) -> dict:
-    """执行器节点：按计划批量执行所有工具调用"""
-    results = []
+def executor_node(state: AgentState, config=None) -> dict:
+    """执行器节点：按计划批量执行所有工具调用
 
-    for step in state["plan"]:
-        tool_name = step.get("tool", "search_knowledge")
-        query = step.get("query", "")
+    返回时**必须同时给出声明这些 tool_call 的 AIMessage**。
+    原来只往 messages 里塞 ToolMessage(tool_call_id="plan_0"...)，
+    而 state 里没有任何 assistant 消息声明过 plan_0 —— 这是一条"孤儿 tool 消息"，
+    违反 OpenAI 消息协议：一旦这份 state 被整段送给模型（换模式续聊、
+    或者将来任何调用方直接 dump state["messages"]），接口会 400，
+    再被 safe_llm_invoke 吞成兜底套话，表现为"模型突然只会说套话"。
+    """
+    results = []
+    tool_calls = []
+
+    for i, step in enumerate(state["plan"]):
+        tool_name = step.get("tool", "")
+        args = step.get("args", {})
+        call_id = f"plan_{i}"
+        tool_calls.append({"id": call_id, "name": tool_name, "args": args})
 
         if tool_name not in tools_by_name:
             results.append(ToolMessage(
                 content=f"未知工具: {tool_name}",
-                tool_call_id=f"plan_{len(results)}",
+                tool_call_id=call_id,
                 name=tool_name,
             ))
             continue
 
         tool = tools_by_name[tool_name]
-        invoke_args = {"query": query} if tool_name != "get_course_info" else {}
-        result = safe_tool_invoke(tool, invoke_args, tool_name=tool_name)
+        try:
+            result = safe_tool_invoke(tool, args, tool_name=tool_name)
+        except Exception as e:
+            result = f"工具调用失败: {str(e)[:100]}"
+
         results.append(ToolMessage(
             content=str(result),
-            tool_call_id=f"plan_{len(results)}",
+            tool_call_id=call_id,
             name=tool_name,
         ))
 
-    return {"messages": results}
+    if not results:
+        return {"messages": []}
+
+    # 内容留成可读的"我调用了哪些工具"：它对 planner/synthesizer 的历史是有用上下文，
+    # 前端则不会看到它（sse_content_event 会跳过带 tool_calls 的消息）。
+    declaration = AIMessage(
+        content="（调用了工具：" + "、".join(tc["name"] for tc in tool_calls) + "）",
+        tool_calls=tool_calls,
+    )
+    out = {"messages": [declaration] + results}
+
+    # 从工具结果里抽出"刷题进度"存进 state —— 这是 Plan 图里游标唯一的落脚点
+    # （planner 会把 ToolMessage 从历史里剔掉，所以游标没法"在带内"传递）。
+    new_session = _extract_drill_session(state.get("session") or {},
+                                        state.get("plan") or [], results)
+    study = _extract_study_session(new_session if new_session is not None
+                                   else (state.get("session") or {}),
+                                   state.get("plan") or [], results)
+    if study is not None:
+        new_session = study
+    if new_session is not None:
+        out["session"] = new_session
+        # 同时落盘一份：进程重启后 MemorySaver 里的 state 会没，
+        # 但"学生在做哪份卷子、下一组是几、学到哪一节"必须活下来。
+        _save_cursor(_thread_id(config), new_session)
+    return out
+
+
+def _extract_drill_session(current: dict, plan: list, results: list):
+    """看这一轮的工具结果里有没有刷题进度，有就更新游标
+
+    只认我们自己生成的这几个字段（`get_paper_questions` 的 JSON 输出），
+    解析不出来就原样返回 None（不动游标）。
+    """
+    import json as _json
+
+    updated = None
+    for step, msg in zip(plan or [], results or []):
+        if step.get("tool") != "get_paper_questions":
+            continue
+        try:
+            data = _json.loads(msg.content)
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if not isinstance(data, dict) or "paper" not in data:
+            continue
+        updated = dict(current or {})
+        updated.update({
+            "paper": data.get("paper"),
+            "type": data.get("type") or step.get("args", {}).get("qtype"),
+            "group_index": data.get("group_index"),
+            "next_group_index": data.get("next_group_index"),
+            "qids": list(data.get("qids") or []),
+            "finished": data.get("next_group_index") is None and not data.get("has_more", True),
+        })
+    return updated
+
+
+def _extract_study_session(current: dict, plan: list, results: list):
+    """看这一轮有没有"学习书签"或"读到哪了"要记，有就更新
+
+    书签只是**记忆**：讲什么、怎么分节、何时进下一节都由模型判断
+    （刻意不做成状态机 —— 用户明确说过不要）。
+
+    除了显式的 record_study_position，这里还会从 read_section 的返回里
+    偷偷记住"刚读的是哪份课件、下一段从 offset 几开始" ——
+    因为实测模型**记不住**返回值里的"下次用 offset=15 继续"，
+    学生说"继续讲"时它会跳到下一份课件、然后声称"没找到内容"再退回凭记忆讲。
+    把这件事交给状态，它就不用记了。
+    """
+    import json as _json
+
+    updated = None
+    for step, msg in zip(plan or [], results or []):
+        tool = step.get("tool")
+
+        if tool == "record_study_position":
+            try:
+                data = _json.loads(msg.content)
+            except (TypeError, ValueError, AttributeError):
+                continue
+            pos = (data or {}).get("recorded") if isinstance(data, dict) else None
+            if not isinstance(pos, dict) or not pos.get("course"):
+                continue
+            updated = dict(updated if updated is not None else (current or {}))
+            merged_pos = dict((updated.get("study") or {}))
+            # 空值不覆盖已有的非空值：实测模型会传 chapter="" 把上一轮记住的章抹掉
+            merged_pos.update({k: v for k, v in pos.items() if str(v or "").strip()})
+            updated["study"] = merged_pos
+
+        elif tool == "list_course_sections":
+            # 只调了地图、没调 read_section 的情况：至少把"在学哪门课"记下来，
+            # 否则学习契约（以课件原文为准 / 收尾 / 不要编题编图）全都不会注入 ——
+            # 实测那一轮模型就凭记忆讲课、还编了题和 example.com 图片。
+            text = msg.content if isinstance(msg.content, str) else ""
+            m = re.search(r"\[study-course\]\s*(.+)", text)
+            if not m:
+                continue
+            kv = dict(re.findall(r"(\w+)=(\S*)", m.group(1)))
+            if not kv.get("course"):
+                continue
+            updated = dict(updated if updated is not None else (current or {}))
+            study = dict(updated.get("study") or {})
+            study.setdefault("course", kv["course"])
+            study["mode"] = kv.get("mode") or study.get("mode") or "学习"
+            updated["study"] = study
+
+        elif tool == "read_section":
+            # 解析工具显式给出的 [study-state] 行（不要解析自然语言措辞 —— 太脆：
+            # 我第一版就是按措辞解析，结果 study 里没有 course，
+            # planner 的"当前学习位置"整块被跳过，模型照样不知道读到哪了）
+            text = msg.content if isinstance(msg.content, str) else ""
+            m = re.search(r"\[study-state\]\s*(.+)", text)
+            if not m:
+                continue
+            kv = dict(re.findall(r"(\w+)=(\S*)", m.group(1)))
+            if not kv.get("course"):
+                continue          # 课程不明就不写 —— 免得覆盖掉已有的书签
+            updated = dict(updated if updated is not None else (current or {}))
+            study = dict(updated.get("study") or {})
+            study["course"] = kv["course"]
+            if kv.get("chapter"):
+                study["chapter"] = kv["chapter"]
+            study["last_source"] = kv.get("source", "")
+            study["last_read"] = f"第 {kv.get('read', '?')} 块"
+            nxt = kv.get("next_offset", "none")
+            study["next_offset"] = None if nxt in ("none", "", "None") else int(nxt)
+            updated["study"] = study
+
+    return updated
 
 
 # ============================================================
 # Check Results (自适应规划层)
 # ============================================================
 
-# 判断"结果不足"的关键词阈值
 _INSUFFICIENT_MARKERS = [
     "知识库中未找到相关内容",
     "知识库中相关内容较少",
-    "建议调用 web_search",
-    "建议使用 web_search",
+    "没有找到符合条件的试卷",
+    "找不到试卷",
+    "习题库为空",
+    "习题库不存在",
 ]
 
 
-def route_after_executor(state: AgentState) -> str:
-    """条件边：检查 executor 的检索结果是否充足
+def _current_turn_tool_messages(state: AgentState) -> list:
+    """只取"本轮"的工具结果
 
-    判断逻辑：
-      1. planner 已经规划了 web_search → 结果应该够，直接走 synthesizer
-      2. 检索结果包含"未找到"/"内容较少"等标记 → 不够，走 web_search_fallback
-      3. 检索结果总文本太短（<100字）→ 不够，走 web_search_fallback
-      4. 其他 → 够，走 synthesizer
+    checkpointer 会把历史累积在 state["messages"] 里，
+    原来 route_after_executor / synthesizer 遍历全部消息，
+    于是：① 上一轮的"知识库未找到"标记会让本轮凭空多跑一次联网搜索；
+    ② 用户这轮只是闲聊，synthesizer 却拿上一轮的检索内容当本轮结果作答。
+    以最后一条 HumanMessage 为界切分即可。
+    """
+    msgs = state["messages"]
+    last_human = -1
+    for i, m in enumerate(msgs):
+        if isinstance(m, HumanMessage):
+            last_human = i
+    if last_human < 0:
+        return [m for m in msgs if isinstance(m, ToolMessage)]
+    return [m for m in msgs[last_human + 1:] if isinstance(m, ToolMessage)]
+
+
+def route_after_executor(state: AgentState) -> str:
+    """条件边：检查检索结果是否充足，不足时补搜
+
+    只对知识库问答场景做补搜判断，刷题场景不需要。
     """
     # 如果 planner 已经规划了 web_search，不需要再补
     has_web_search = any(
@@ -202,27 +888,39 @@ def route_after_executor(state: AgentState) -> str:
     if has_web_search:
         return "synthesizer"
 
-    # 收集 executor 返回的 ToolMessage 内容
+    # 如果调用了刷题相关工具，不需要补搜。
+    # explain_question 必须在名单里：它是讲题路径上的工具，结果本来就短，
+    # 不列进来的话 route_after_executor 会把它当成"检索结果不足"而多跑一次联网搜索。
+    has_paper_tools = any(
+        step.get("tool") in ("list_papers", "get_paper_questions", "grade_answers",
+                             "explain_question", "get_practice_stats", "record_practice")
+        for step in state.get("plan", [])
+    )
+    if has_paper_tools:
+        return "synthesizer"
+
+    # 收集本轮 ToolMessage 内容（"知识库有多少条"这类元信息不参与"够不够"的判断，
+    # 否则一句"知识库当前有 N 条分块"这种短回复会被判成结果不足）
     tool_contents = []
-    for msg in state["messages"]:
-        if isinstance(msg, ToolMessage):
-            content = msg.content
-            # 如果这条 ToolMessage 是 web_search_fallback 生成的，跳过
-            if "网络搜索结果" in content:
-                continue
-            tool_contents.append(content)
+    for msg in _current_turn_tool_messages(state):
+        content = msg.content
+        if "自适应补搜" in content or "网络搜索" in content:
+            continue
+        if "条文档分块" in content or "条分块" in content:
+            continue
+        tool_contents.append(content)
 
     if not tool_contents:
         return "web_search_fallback"
 
     combined = "\n".join(tool_contents)
 
-    # 检查"结果不足"标记
+    # 检查结果不足标记
     for marker in _INSUFFICIENT_MARKERS:
         if marker in combined:
             return "web_search_fallback"
 
-    # 检查总文本长度（太短说明没搜到什么）
+    # 文本太短
     if len(combined) < 100:
         return "web_search_fallback"
 
@@ -230,10 +928,7 @@ def route_after_executor(state: AgentState) -> str:
 
 
 def web_search_fallback_node(state: AgentState) -> dict:
-    """自适应补搜节点：知识库结果不足时自动联网搜索
-
-    从用户问题中提取搜索词，调用 web_search 工具补充信息。
-    """
+    """自适应补搜节点：知识库结果不足时自动联网搜索"""
     human_msgs = [m for m in state["messages"] if isinstance(m, HumanMessage)]
     user_msg = human_msgs[-1] if human_msgs else state["messages"][-1]
     user_content = user_msg.content if hasattr(user_msg, "content") else str(user_msg)
@@ -252,44 +947,61 @@ def web_search_fallback_node(state: AgentState) -> dict:
 # ============================================================
 
 def synthesizer_node(state: AgentState) -> dict:
-    """综合器节点：基于检索结果 + 历史对话生成最终回答
-
-    多轮对话：把历史对话上下文传给 LLM，让它记得之前聊了什么。
-    记忆管理：对话太长时自动裁剪（滑动窗口 + 摘要压缩），防止爆 token。
-    """
-    from langchain_core.messages import HumanMessage as HM
-    human_msgs = [m for m in state["messages"] if isinstance(m, HM)]
+    """综合器节点：基于工具结果 + 历史对话生成最终回答"""
+    human_msgs = [m for m in state["messages"] if isinstance(m, HumanMessage)]
     user_msg = human_msgs[-1] if human_msgs else state["messages"][-1]
     user_content = user_msg.content if hasattr(user_msg, "content") else str(user_msg)
 
-    # 收集当前轮次的工具结果（最后一批 ToolMessage）
-    tool_results = []
-    for msg in state["messages"]:
-        if isinstance(msg, ToolMessage):
-            tool_results.append(msg.content)
+    # 收集本轮工具结果（只看最后一条用户消息之后，避免把上一轮的检索内容
+    # 当成这一轮的结果 —— 用户说"谢谢"时那种情况最明显）
+    tool_results = [msg.content for msg in _current_turn_tool_messages(state)]
 
-    # 提取历史对话（排除系统消息和本轮工具结果）
+    # 提取历史对话（排除系统消息和工具结果）
     history_msgs = [
         m for m in state["messages"]
         if not isinstance(m, SystemMessage)
         and not isinstance(m, ToolMessage)
     ]
 
-    # 历史对话裁剪（最多保留最近 10 条，约 5 轮）
-    if len(history_msgs) > 10:
-        history_msgs = trim_messages(history_msgs, max_messages=10, keep_system=False)
+    # 历史压缩：超过阈值时用 LLM 把老对话总结成摘要，否则只做滑动窗口。
+    # 摘要文本拼进 system prompt（而不是作为第二条 system 消息塞进去）——
+    # 多段 system 消息在部分模型上行为不一致，合并成一条最稳。
+    summary_text, history_msgs = compress_history(history_msgs, llm)
+    base_prompt = SYNTHESIZER_PROMPT if tool_results else CHITCHAT_PROMPT
+    # 会话状态（学习书签 / 刷题游标）必须给**写回答的这个模型**看。
+    # 原来只注入了 planner —— 而"本节结束 / 出小测 / 小测自己批"这些是写给
+    # 最终回答的契约，学生交小测答案那一轮更是一个工具都不调（走 CHITCHAT_PROMPT）。
+    base_prompt += _session_block(state.get("session") or {})
+    if summary_text:
+        base_prompt = f"{base_prompt}\n\n{SUMMARY_MARK}\n{summary_text}"
+    # 收尾动作放在**最末尾**（连摘要都在它前面）。
+    # 实测三档：写在提示中段 → 3 轮里 1 轮照做；只说一句要求+放末尾 → 2/3；
+    # 所以最后改成**给可照抄的收尾格式**，把不可靠的动作（写「本节结束」）
+    # 绑到可靠的动作（出小测，3/3）上一起做。格式的唯一出处是 quiz_service。
+    if (state.get("session") or {}).get("study", {}).get("course"):
+        base_prompt += "\n\n--- " + quiz_service.closing_block()
+    # 工具报错时的行为约束（实测：批改失败后模型会"假装重试"、
+    # 编造一个不存在的工具名（get_paper_answers），或者让学生改格式重发）
+    if any(isinstance(m, str) and '"error"' in m for m in tool_results):
+        base_prompt += (
+            "\n\n--- 注意：这一步有工具返回了 error ---\n"
+            "· **不要**说「我将再次尝试」然后什么都不做；也**不要**编造工具名或调用方式"
+            "（例如凭空写 `get_paper_answers {…}`）—— 学生会看到内部协议。\n"
+            "· **不要**把工具的问题说成学生的格式问题（除非确实是他没给答案）。\n"
+            "· 该做的：用上面【当前试卷】/【当前学习位置】里的信息，能自己补就补一次；"
+            "补不了就**如实告诉学生卡在哪**，并问他一个具体的问题（如「是这一份卷子吗」）。")
 
     if tool_results:
-        context = "\n\n---\n\n".join(tool_results[-3:])  # 最多取最近3条工具结果
+        context = "\n\n---\n\n".join(tool_results[-5:])
         messages = [
-            SystemMessage(content=SYNTHESIZER_PROMPT),
+            SystemMessage(content=base_prompt),
         ]
         if len(history_msgs) > 1:
             messages.extend(history_msgs[:-1])
-        messages.append(HumanMessage(content=f"用户问题: {user_content}\n\n检索结果:\n{context}"))
+        messages.append(HumanMessage(content=f"用户: {user_content}\n\n工具返回结果:\n{context}"))
     else:
         messages = [
-            SystemMessage(content=CHITCHAT_PROMPT),
+            SystemMessage(content=base_prompt),
         ]
         if len(history_msgs) > 1:
             messages.extend(history_msgs[:-1])
@@ -297,32 +1009,72 @@ def synthesizer_node(state: AgentState) -> dict:
 
     try:
         response = safe_llm_invoke(llm, messages, context="synthesizer")
+        # 兜底：把泄漏成正文的工具调用片段摘掉（正解是允许一次重规划，见文件头注释）
+        if isinstance(response, AIMessage) and response.content:
+            cleaned = strip_tool_call_text(str(response.content))
+            # 再摘掉**编造的图片链接**（合法图片只有题库题图 /qb_images/…）。
+            # 提示词里写了不许编、实测照样编，所以这里用代码兜住。
+            cleaned, dropped = quiz_service.sanitize_images(cleaned)
+            if dropped:
+                logger.warning("摘掉回答里编造的图片链接 %d 个: %s",
+                               len(dropped), dropped[:3])
+            # 学习/复习时，收尾标记由代码保证（模型只有 3/4 会写，而它必须可靠）
+            if (state.get("session") or {}).get("study", {}).get("course"):
+                cleaned, added = quiz_service.ensure_closing(cleaned)
+                if added:
+                    logger.info("模型没写「本节结束」→ 已由代码补上")
+            if cleaned != response.content:
+                logger.info("摘掉回答里泄漏的工具调用片段 (%d → %d 字符)",
+                            len(str(response.content)), len(cleaned))
+                response = AIMessage(content=cleaned)
         return {"messages": [response]}
     except LLMError:
-        from langchain_core.messages import AIMessage
         fallback = AIMessage(content="抱歉，生成回答时遇到服务问题，请稍后重试。")
         return {"messages": [fallback]}
 
 
 # ============================================================
-# Legacy ReAct nodes (保留兼容)
+# ReAct 节点
 # ============================================================
 
+# ReAct 工具环的业务级轮数上限。
+#
+# 原来 should_continue 只看"最后一条消息有没有 tool_calls"、tool_node 也不计数，
+# 也就是说**循环次数完全由模型决定**，唯一的上限是 LangGraph 默认的
+# recursion_limit=10007 —— 实测模型每轮都要求调工具时，抛错前真实发生
+# LLM 调用 5004 次、工具调用 5003 次（线上每次都是一次 HTTP，超时 120s）。
+# 手写那条循环有自己的 _MAX_TOOL_ROUNDS = 6，这里对齐。
+MAX_TOOL_ROUNDS = 6
+
+
 def llm_node(state: AgentState) -> dict:
-    """ReAct LLM 节点"""
+    """ReAct LLM 节点
+
+    轮数用尽时改用**不带工具**的 llm 再答一次：这样模型必须给最终答案，
+    而不是让循环停在一个 tool 消息上、把工具原文当回复。
+    """
+    rounds = int(state.get("tool_rounds", 0) or 0)
+    exhausted = rounds >= MAX_TOOL_ROUNDS
+
     messages = [SystemMessage(content=REACT_PROMPT)] + trim_messages(
         state["messages"], max_messages=15, keep_system=False
     )
+    if exhausted:
+        logger.warning("ReAct 工具轮数已达上限 %d，改为直接作答", MAX_TOOL_ROUNDS)
+        messages.append(HumanMessage(
+            content="（工具调用次数已达上限，请基于已经拿到的信息直接作答，不要再调用工具。）"
+        ))
+
     try:
-        response = safe_llm_invoke(llm_with_tools, messages, context="react_llm")
+        response = safe_llm_invoke(llm if exhausted else llm_with_tools,
+                                   messages, context="react_llm")
         return {"messages": [response]}
     except LLMError:
-        from langchain_core.messages import AIMessage
         return {"messages": [AIMessage(content="抱歉，处理请求时遇到服务问题，请稍后重试。")]}
 
 
 def tool_node(state: AgentState) -> dict:
-    """ReAct 工具节点"""
+    """ReAct 工具节点（同时累加工具轮数）"""
     results = []
     last_message = state["messages"][-1]
 
@@ -341,77 +1093,23 @@ def tool_node(state: AgentState) -> dict:
             ToolMessage(content=str(result), tool_call_id=tool_call["id"], name=tool_name)
         )
 
-    return {"messages": results}
-
-
-FORCE_SEARCH_MSG = SystemMessage(
-    content="【系统纠正】你刚才没有调用 search_knowledge 工具就直接回答了。"
-    "这是课程知识点问题，你必须先调用 search_knowledge 搜索知识库，"
-    "然后基于搜索结果回答。请立即调用 search_knowledge 工具。"
-)
-
-# 课程知识点关键词（用于判断是否需要强制搜索）
-_COURSE_KEYWORDS = [
-    # OS
-    "进程", "线程", "调度", "死锁", "同步", "互斥", "信号量", "PV", "管程",
-    "内存", "分页", "分段", "虚拟内存", "页面置换", "缺页", "段页式",
-    "磁盘", "文件系统", "索引", "目录", "FCFS", "SJF", "RR", "优先级",
-    "银行家", "安全序列", "临界区", "忙等待", "自旋锁", "互斥锁",
-    "进程调度", "作业调度", "中级调度", "上下文切换", "PCB",
-    "TLB", "快表", "多级页表", "反置页表", "抖动", "工作集",
-    "SCAN", "C-SCAN", "SSTF", "磁盘调度", "寻道",
-    "inode", "软链接", "硬链接", "挂载",
-    # 计网
-    "TCP", "UDP", "IP", "HTTP", "DNS", "DHCP", "ARP", "ICMP", "NAT",
-    "三次握手", "四次挥手", "拥塞控制", "流量控制", "滑动窗口",
-    "路由", "路由器", "交换机", "集线器", "子网", "掩码", "网关",
-    "OSI", "TCP/IP", "应用层", "传输层", "网络层", "数据链路层", "物理层",
-    "以太网", "MAC", "CSMA", "VLAN", "STP",
-    "RIP", "OSPF", "BGP", "距离向量", "链路状态",
-    "可靠传输", "超时重传", "快重传", "快恢复", "慢启动", "拥塞避免",
-    "套接字", "socket", "端口",
-    "协议", "报文", "分组", "帧", "比特",
-    "知识点", "课程", "考试", "题目",
-]
-
-
-def _is_course_question(text: str) -> bool:
-    """判断是否为课程知识点问题（简单关键词匹配）"""
-    text_lower = text.lower()
-    # 明显的闲聊/问候
-    greetings = ["你好", "您好", "hi", "hello", "在吗", "在不在", "早上好", "下午好",
-                 "晚上好", "拜拜", "再见", "谢谢", "感谢", "ok", "好的", "嗯", "哦"]
-    for g in greetings:
-        if text_lower.strip().startswith(g) and len(text) < 20:
-            return False
-    # 关键词匹配
-    for kw in _COURSE_KEYWORDS:
-        if kw.lower() in text_lower:
-            return True
-    # 问句且较长 → 可能是课程问题
-    if len(text) > 15 and ("?" in text or "？" in text or "什么" in text or "怎么" in text or "为什么" in text):
-        return True
-    return False
-
-
-def force_search_node(state: AgentState) -> dict:
-    """守卫节点：LLM 未调工具就回答课程问题时，注入提醒消息让其重试"""
-    return {"messages": [FORCE_SEARCH_MSG]}
+    return {
+        "messages": results,
+        "tool_rounds": int(state.get("tool_rounds", 0) or 0) + 1,
+    }
 
 
 def should_continue(state: AgentState) -> str:
-    """ReAct 条件边"""
+    """ReAct 条件边：有工具调用就去执行，没有就结束
+
+    轮数用尽是硬性收敛条件：即使模型还在要求调工具也直接结束，
+    避免只靠框架默认的 recursion_limit 兜底（那意味着几千次调用）。
+    """
+    rounds = int(state.get("tool_rounds", 0) or 0)
+    if rounds >= MAX_TOOL_ROUNDS:
+        return END
+
     last_message = state["messages"][-1]
-    if last_message.tool_calls:
+    if getattr(last_message, "tool_calls", None):
         return "tools"
-
-    ai_count = sum(1 for msg in state["messages"] if isinstance(msg, AIMessage))
-    has_tool_msg = any(isinstance(msg, ToolMessage) for msg in state["messages"])
-
-    # 只有课程知识点问题才强制搜索，问候语/闲聊直接结束
-    user_msg = state["messages"][0]
-    user_text = user_msg.content if hasattr(user_msg, "content") else str(user_msg)
-    if not has_tool_msg and ai_count <= 1 and _is_course_question(user_text):
-        return "force_search"
-
     return END

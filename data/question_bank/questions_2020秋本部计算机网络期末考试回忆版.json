@@ -1,0 +1,508 @@
+[
+  {
+    "qid": "S1",
+    "q_num": 1,
+    "display_num": 1,
+    "type": "整页综合",
+    "course": "计算机网络",
+    "page": 1,
+    "image": "2020秋本部计算机网络期末考试回忆版_S1_p1.png",
+    "text": "一、填空题（每空1分，共10分）（本题得分：________）\n\n1. 若CDMA系统中的某站点的码片序列是（1, 1, -1, -1），则当该站点欲发送原始信息序列1001时，该站点向信道中实际发送的序列是（1,1,-1,-1,1,-1,1,1,1,-1,1,1,1,-1）。\n\n2. 基于cookie可以实现的主要功能有（身份认证）、（个性化推荐）等。\n\n3. 典型的轮转访问MAC协议有（令牌传递）、（轮询）等。\n\n4. 若某差错编码的编码集汉明距离是7，则该差错编码一定可以实现（6）位错检错，（3）位纠错。\n\n5. 若某路由器在向MTU=512B的链路上转发总长度为1500B的IP数据报时进行了分片，则最后一个分片的总长度字段的值是（36），片偏移量字段的值是（183），标志位MF的值是（0）。\n\n6. 若部分差分曼彻斯特编码信号波形如下图所示，则这段信号编码的二进制位串是（10101101）。\n\n二、判断题（每题1分，共5分）（得分：________）\n\n1. 电路交换网络中的电路需要独占其经过的每段物理链路。 F【\n\n2. P2P网络应用的通信过程仍然是应用进程间的C/S通信。 T【\n\n3. 在Internet中，复用/分解服务只需在传输层实现。 F【\n\n4. 封装ICMP报文的IP数据报在传输过程中出错，则不再发送ICMP报文。 T【\n\n5. 本地网主机在与外网服务器进行IP通信时，首先通过ARP协议解析服务器的MA/F【",
+    "answer": null,
+    "reference_points": [],
+    "topic": "CDMA系统、Cookie、轮转访问MAC协议",
+    "sub_questions": [
+      {
+        "label": "第1题(填空题)",
+        "answer": "1",
+        "q_num": 1,
+        "type": "填空题"
+      },
+      {
+        "label": "第2题(填空题)",
+        "answer": "身份认证",
+        "q_num": 2,
+        "type": "填空题"
+      },
+      {
+        "label": "第3题(填空题)",
+        "answer": "令牌传递",
+        "q_num": 3,
+        "type": "填空题"
+      },
+      {
+        "label": "第4题(填空题)",
+        "answer": "6",
+        "q_num": 4,
+        "type": "填空题"
+      },
+      {
+        "label": "第5题(填空题)",
+        "answer": "36",
+        "q_num": 5,
+        "type": "填空题"
+      },
+      {
+        "label": "第6题(填空题)",
+        "answer": "10101101",
+        "q_num": 6,
+        "type": "填空题"
+      },
+      {
+        "label": "第1题(填空题)",
+        "answer": "1,1,-1,-1,1,-1,1,1,1,-1,1,1,1,-1",
+        "q_num": 1,
+        "type": "填空题"
+      },
+      {
+        "label": "第2题(填空题)",
+        "answer": "个性化推荐",
+        "q_num": 2,
+        "type": "填空题"
+      },
+      {
+        "label": "第3题(填空题)",
+        "answer": "轮询",
+        "q_num": 3,
+        "type": "填空题"
+      },
+      {
+        "label": "第4题(填空题)",
+        "answer": "3",
+        "q_num": 4,
+        "type": "填空题"
+      },
+      {
+        "label": "第5题(填空题)",
+        "answer": "183",
+        "q_num": 5,
+        "type": "填空题"
+      },
+      {
+        "label": "第6题(填空题)",
+        "answer": "0",
+        "q_num": 6,
+        "type": "填空题"
+      },
+      {
+        "label": "第1题(填空题)",
+        "answer": "1,1,-1,-1,1,-1,1,1,1,-1,1,1,1,-1",
+        "q_num": 1,
+        "type": "填空题"
+      },
+      {
+        "label": "第2题(填空题)",
+        "answer": "个性化推荐",
+        "q_num": 2,
+        "type": "填空题"
+      },
+      {
+        "label": "第3题(填空题)",
+        "answer": "轮询",
+        "q_num": 3,
+        "type": "填空题"
+      },
+      {
+        "label": "第4题(填空题)",
+        "answer": "3",
+        "q_num": 4,
+        "type": "填空题"
+      },
+      {
+        "label": "第5题(填空题)",
+        "answer": "183",
+        "q_num": 5,
+        "type": "填空题"
+      },
+      {
+        "label": "第6题(填空题)",
+        "answer": "0",
+        "q_num": 6,
+        "type": "填空题"
+      },
+      {
+        "label": "第1题(填空题)",
+        "answer": "1,1,-1,-1,1,-1,1,1,1,-1,1,1,1,-1",
+        "q_num": 1,
+        "type": "填空题"
+      },
+      {
+        "label": "第2题(填空题)",
+        "answer": "个性化推荐",
+        "q_num": 2,
+        "type": "填空题"
+      },
+      {
+        "label": "第3题(填空题)",
+        "answer": "轮询",
+        "q_num": 3,
+        "type": "填空题"
+      },
+      {
+        "label": "第4题(填空题)",
+        "answer": "3",
+        "q_num": 4,
+        "type": "填空题"
+      },
+      {
+        "label": "第5题(填空题)",
+        "answer": "183",
+        "q_num": 5,
+        "type": "填空题"
+      },
+      {
+        "label": "第6题(填空题)",
+        "answer": "0",
+        "q_num": 6,
+        "type": "填空题"
+      }
+    ],
+    "section": "整页综合",
+    "source": "2020秋本部计算机网络期末考试回忆版",
+    "source_file": "2020秋本部计算机网络期末考试回忆版.pdf",
+    "needs_review": false,
+    "review_reason": ""
+  },
+  {
+    "qid": "S2",
+    "q_num": 2,
+    "display_num": 2,
+    "type": "整页综合",
+    "course": "计算机网络",
+    "page": 2,
+    "image": "2020秋本部计算机网络期末考试回忆版_S2_p2.png",
+    "text": "三、单项选择题（每题1分，共25分）（本大题得分：________）\n\n1. 若某链路带宽是10Mbps，信号往返时间RTT=20ms，则该链接的时延带宽积是（A）\nA. 100kbits B. 100kbps C. 200kbits D. 200kbps\n\n2. 如下图所示分组交换网络中，若主机H1, H2, H3同时向114发送一个1100B的分包。则这些分组在路由器R1处的平均排队时延是（B）15008\n\nA. 0us B. 12us C. 24us D. 36us\n\n3. 在分析一个协议的数据包结构及其每个字段的用时，主要涉及的协议要素是（D）\nI. 语法 II. 语义 III. 时序 IV. 仅I、II A. 仅I B. 仅II C. 仅III D. 仅I、II\n\n4. 下列数据交换网络类型中，比较适合突发网络通信需求的是（C）\nI. 电路交换网络 II. 报文交换网络 III. 数据报网络 IV. 虚电路网络 A. 仅I B. 仅I、II C. 仅III D. 仅III、IV\n\n5. 在OSI参考模型中，第5层（自下而上）完成的主要功能是（C）\nA. 差错控制 B. 路由选择 C. 会话管理 D. 数据表示转换\n\n6. 下列关于FTP的叙述中，错误的是（C）\nA. FTP是有状态协议 B. FTP是带外控制协议 C. 控制连接与数据连接均是持久的 D. FTP分别使用控制连接和数据连接传输命令和文件数据\n\n7. 下列应用层协议中，既可以用于用户发送邮件，又可以用于接收邮件的是（A）\nA. HTTP B. SMTP C. POP3 D. IMAP\n\n8. 如果ABC公司希望申请注册abc.com域，则需要在其顶级域名服务器中插入的两条RR（资源记录），这两条RR的类型分别是（D）\nA. CNAME, A B. NS, MX C. MX, CNAME D. NS, A\n\n9. 假设采用P2P方式为1000个客户分发文件F，文件F初始位于某服务器上；服务器接入Internet链路的上行带宽u=1000Mbps；每个客户接入Internet的下行带宽d=10Mbps，上行带宽u=1Mbps（注：M=106）；若F=1MB，则完成文件F分发所需时间至少为（C）\nA. 0008s B. 0.8s C. 45s D. 8s\n\nhttp可以用户收发到服务器imap是服务器之间收发pop3和Imap是用户从服务器收取\n\nmax(f/us,nF(ustnu),F/d)=max(8ms,4.5,0.8s)",
+    "answer": null,
+    "reference_points": [],
+    "topic": "网络性能、网络性能、网络协议",
+    "sub_questions": [
+      {
+        "label": "第1题(选择题)",
+        "answer": "A",
+        "q_num": 1,
+        "type": "选择题"
+      },
+      {
+        "label": "第2题(选择题)",
+        "answer": "B",
+        "q_num": 2,
+        "type": "选择题"
+      },
+      {
+        "label": "第3题(选择题)",
+        "answer": "D",
+        "q_num": 3,
+        "type": "选择题"
+      },
+      {
+        "label": "第4题(选择题)",
+        "answer": "C",
+        "q_num": 4,
+        "type": "选择题"
+      },
+      {
+        "label": "第5题(选择题)",
+        "answer": "C",
+        "q_num": 5,
+        "type": "选择题"
+      },
+      {
+        "label": "第6题(选择题)",
+        "answer": "C",
+        "q_num": 6,
+        "type": "选择题"
+      },
+      {
+        "label": "第7题(选择题)",
+        "answer": "A",
+        "q_num": 7,
+        "type": "选择题"
+      },
+      {
+        "label": "第8题(选择题)",
+        "answer": "D",
+        "q_num": 8,
+        "type": "选择题"
+      },
+      {
+        "label": "第9题(选择题)",
+        "answer": "C",
+        "q_num": 9,
+        "type": "选择题"
+      }
+    ],
+    "section": "整页综合",
+    "source": "2020秋本部计算机网络期末考试回忆版",
+    "source_file": "2020秋本部计算机网络期末考试回忆版.pdf",
+    "needs_review": false,
+    "review_reason": ""
+  },
+  {
+    "qid": "S3",
+    "q_num": 3,
+    "display_num": 3,
+    "type": "整页综合",
+    "course": "计算机网络",
+    "page": 3,
+    "image": "2020秋本部计算机网络期末考试回忆版_S3_p3.png",
+    "text": "15.若主机甲主动发起一个与主机乙的TCP连接，甲、乙选定的初始序列号分别为2019和2046，则第三次握手TCP段的确认序号是（D）\nA. 2019 B. 2020 C. 2046 D. 2047\n\n16.在路由器体系结构中，完成路由表(或转发表)检索与匹配，并决策转发路径的是（D）\nA. 输入端口 B. 输出端口 C. 交换结构 D. 路由处理器\n\n17.提供NAT服务的路由器在向Internet转发一个具有IP地址为192.168.2.11，且封装IP包为2012.3.5的IP数据报时，路由器一定会修改的IP数据报首字段是（C）\nI. 源IP地址 II. 目的IP地址 III. Checksum IV. TTL\nA. 仅I, II B. 仅III, IV C. 仅I, III, IV D. I, II, III, IV\n\n18.在下列选项中，当网络负载特别轻时，信道利用率最高的MAC协议是（A）\nA. CSMA B. CDMA C. TDMA D. FDMA\n\n19.在划分VLAN的以太网交换机的Trunk端口同传输的帧头是（D）\nA. 标准以太网帧 B. 802.1q帧 C. 802.3帧 D. 802.1q帧\n\n20.通过协商可以省略的PPP帧的字段是（B）\nI. 地址(address) II. 控制(control) III. 协议(protocol) IV. 校验(check)\nA. 仅I B. 仅I, II C. 仅II, III D. I, II, III, IV\n\n21.在IEEE802.11无线局域网中，无线主机关闭AP关联时，发送的帧数是（B）\nA. 1 B. 2 C. 3 D. 4\n\n22.在IEEE802.11无线局域网中，若忽略帧的传输时延，则一个无线主基于CSMA/CA协议，从开始侦听信道到确认信道预约成功，所需时间至少是（B）\nA. DIFS B. DIFS+SIFS C. DIFS+2SIFS D. DIFS+3SIFS\n\n23.若某无噪声链路的带宽是2MHz，采用QAM64调制，则该链路理论最大数据速率是（B）\nA. 12Mbps B. 24Mbps C. 128Mbps D. 256Mbps\n\n24.二进制数字调制中，频带利用率最低的是（A）\nA. 2ASK B. 2FSK C. 2PSK D. 2DPSK\n\n25.在移动IP网络中，某主机向移动主机M发送的IP分组的目的是IP地址是（C）\nA. 家代理IP地址 B. 外代理的IP地址 C. M的永久地址 D. M的转交地址",
+    "answer": null,
+    "reference_points": [],
+    "topic": "TCP连接建立过程、路由器体系结构、NAT服务",
+    "sub_questions": [
+      {
+        "label": "第15题(选择题)",
+        "answer": "D",
+        "q_num": 15,
+        "type": "选择题"
+      },
+      {
+        "label": "第16题(选择题)",
+        "answer": "D",
+        "q_num": 16,
+        "type": "选择题"
+      },
+      {
+        "label": "第17题(选择题)",
+        "answer": "C",
+        "q_num": 17,
+        "type": "选择题"
+      },
+      {
+        "label": "第18题(选择题)",
+        "answer": "A",
+        "q_num": 18,
+        "type": "选择题"
+      },
+      {
+        "label": "第19题(选择题)",
+        "answer": "D",
+        "q_num": 19,
+        "type": "选择题"
+      },
+      {
+        "label": "第20题(选择题)",
+        "answer": "B",
+        "q_num": 20,
+        "type": "选择题"
+      },
+      {
+        "label": "第21题(选择题)",
+        "answer": "B",
+        "q_num": 21,
+        "type": "选择题"
+      },
+      {
+        "label": "第22题(选择题)",
+        "answer": "B",
+        "q_num": 22,
+        "type": "选择题"
+      },
+      {
+        "label": "第23题(选择题)",
+        "answer": "B",
+        "q_num": 23,
+        "type": "选择题"
+      },
+      {
+        "label": "第24题(选择题)",
+        "answer": "A",
+        "q_num": 24,
+        "type": "选择题"
+      },
+      {
+        "label": "第25题(选择题)",
+        "answer": "C",
+        "q_num": 25,
+        "type": "选择题"
+      }
+    ],
+    "section": "整页综合",
+    "source": "2020秋本部计算机网络期末考试回忆版",
+    "source_file": "2020秋本部计算机网络期末考试回忆版.pdf",
+    "needs_review": false,
+    "review_reason": ""
+  },
+  {
+    "qid": "S4",
+    "q_num": 4,
+    "display_num": 4,
+    "type": "整页综合",
+    "course": "计算机网络",
+    "page": 4,
+    "image": "2020秋本部计算机网络期末考试回忆版_S4_p4.png",
+    "text": "四、综合应用题（共60分）（本题得分：________）\n\n1. （10分）假设Internet局部区域网络如下图所示，其中自治系统AS1规模很小，AS2规模适中，AS3规模很大。现需要从候选的路由协议RIP、OSPF和BGP中，为该局部网络优选内部网关协议和外部网关协议。请回答下列问题。\n\n(1) 自治系统 AS3 应该选择哪个内部网关协议？该路由协议主要有哪些优点？\n\n(2) AS3 所选择的内部网关协议基于什么路由算法优选手？请给出该路由算法的计算路由部分的算法描述，并分析其时间复杂度。\n\n(3) 在自治系统间交换路由信息时，应该选择哪个路由协议？该协议的报文直接封装到什么协议的数据包中进行传输？\n\n(1) OSPF: 安全，多径，可分层\n\n(2) OSPF 基于链路状态(LS)路由算法，使用 Dijkstra 算法，描述略；时间复杂度：简单实现 O(n^2)，最小堆 O((n+m)logn)，要波那契堆 O(nlogn)\n\n(3) BGP; TCP\n\nCS 扫描全能王 3亿人都在用的扫描App",
+    "answer": null,
+    "reference_points": [],
+    "topic": "路由协议选择",
+    "sub_questions": [
+      {
+        "label": "第1题(综合题)",
+        "answer": {
+          "1": "OSPF",
+          "1_answer": "OSPF: 安全，多径，可分层",
+          "2": "链路状态(LS)路由算法，使用 Dijkstra 算法，描述略；时间复杂度：简单实现 O(n^2)，最小堆 O((n+m)logn)，要波那契堆 O(nlogn)",
+          "3": "BGP",
+          "3_answer": "TCP"
+        },
+        "q_num": 1,
+        "type": "综合题"
+      }
+    ],
+    "section": "整页综合",
+    "source": "2020秋本部计算机网络期末考试回忆版",
+    "source_file": "2020秋本部计算机网络期末考试回忆版.pdf",
+    "needs_review": false,
+    "review_reason": ""
+  },
+  {
+    "qid": "S5",
+    "q_num": 5,
+    "display_num": 5,
+    "type": "整页综合",
+    "course": "计算机网络",
+    "page": 5,
+    "image": "2020秋本部计算机网络期末考试回忆版_S5_p5.png",
+    "text": "2. (10分)如下图所示网络，R为路由器，S1和S2为快速以太网100Base-T交换机，Hub为100Base-T集线器，主机H1上运行网络嗅探程序（sniffer），接收物理层可接收到的所有帧，\n\n请回答下列问题：\n\n(1) 若交换机S1和S2均已学习到所有主机的MAC地址信息，则H1可以嗅探到的帧中，可能的目 的MAC是什么？\n\n(2) 若主机H3发送一个目的IP地址为255.255.255.255的IP数据报，哪些主机或接口会接收到该IP数据报？本网广播地址，路由器不转发\n\n(3) 若主机H1尝试发送一个帧时，连续发生了2次冲突，则H1的网卡立即检测信道载波，再次尝试重发该帧的概率是多少？\n\n(4) 若Hub再生比特流过程中，会产生1.535μs延时，信号传播速度为200m/μs，不考虑以太网帧的前导码，则H1与H2之间理论上可以相距的最远距离是多少？给出必要的计算过程。(注：以太网最小帧长为64B)\n\n[1] 广播，H1,H2的MAC\n\n[2] H7.E2\n\n[3] 1/4\n\n[4]\n\nL/R>=RTT=2*d_prop+2*t_delay=2*d/200+2*1.535(us)\n\nR=100Mbps\n\nd<=64^8-307=205",
+    "answer": null,
+    "reference_points": [],
+    "topic": "交换机MAC地址学习、IP广播地址和路由器转发、CSMA/CD协议",
+    "sub_questions": [
+      {
+        "label": "第1题(选择题)",
+        "answer": "广播，H1，H2的MAC",
+        "q_num": 1,
+        "type": "选择题"
+      },
+      {
+        "label": "第2题(选择题)",
+        "answer": "H7.E2",
+        "q_num": 2,
+        "type": "选择题"
+      },
+      {
+        "label": "第3题(选择题)",
+        "answer": "1/4",
+        "q_num": 3,
+        "type": "选择题"
+      },
+      {
+        "label": "第4题(综合题)",
+        "answer": "L/R>=RTT=2*d_prop+2*t_delay=2*d/200+2*1.535(us)\nR=100Mbps\n\nd<=64^8-307=205",
+        "q_num": 4,
+        "type": "综合题"
+      }
+    ],
+    "section": "整页综合",
+    "source": "2020秋本部计算机网络期末考试回忆版",
+    "source_file": "2020秋本部计算机网络期末考试回忆版.pdf",
+    "needs_review": false,
+    "review_reason": ""
+  },
+  {
+    "qid": "S6",
+    "q_num": 6,
+    "display_num": 6,
+    "type": "整页综合",
+    "course": "计算机网络",
+    "page": 6,
+    "image": "2020秋本部计算机网络期末考试回忆版_S6_p6.png",
+    "text": "4. (15分) 如下图所示网络拓扑中，R为路由器，S为快速以太网100Base-T交换机。假设主机H所在的本地网络访问Internet的往返时间RTT=10ms，本地网络主机之间的互访时间忽略不计，本地网络接入Internet的接入链路带宽为10Mbps，Internet网络带宽足够大；主机H通过在浏览器中输入URL：www.abc.edu.cn/index.html请求浏览ABC大学的主页，index.html引用3个JPEG图像文件，index.html文件大小为IMSS（最大段长），每个JPEG图像文件大小为2MSS，最大段长MSS=1000B，TCP拥塞窗口初始值为16MSS，Web服务器向H发送的TCP段长均为MSS，忽略各层协议的首部开销，H对Web服务器的每个段进行确认，并忽略确认段长；所有域名服务器无缓存，且除本地域名服务器只提供递归查询（recursive query）服务外，其他域名服务器均只提供迭代查询（iterated query）服务，（注：M=10^6）\n\n请回答下列问题：\n(1) 本地；UDP, IP, Ethernet\n(1) H在解析域名www.abc.edu.cn的IP地址时，首先查询的是哪个域名服务器？H发送的域名查询请求报文通过哪些协议逐层进行封装的（物理层除外）？\n(2) 主机H的浏览器从发出域名请求开始，到成功收到www.abc.edu.cn的域名解析结果为止，至少需要多少时间？画出域名解析过程示意图。（忽略域名解析过程中的报文传输延时）\n3) 主机H访问Internet的最大吞吐量是多少？（3）10Mbps\n4) 若主机H的浏览器已成功完成www.abc.edu.cn的域名解析，并通过非流水HTTP/1.1请求www.abc.edu.cn/index.html主页，则从请求建立TCP连接时刻起，到浏览器收到所有内容（即index.html和3个JPEG图像）为止，至少需要多少时间？给出必要的分析与计算过程，画出H的浏览器与www.abc.edu.cn服务器交互过程示意图。\n\n(2) H->本地(Ignore)\n【本地->根->本地】（图里没画域名服务器？\n本地->cn->本地(RTT)\n本地->edu.cn->本地(RTT)\n本地->abc.edu.cn->本地(RTT)\n\n扫描全能王\n3亿人都在用的扫描App",
+    "answer": null,
+    "reference_points": [],
+    "topic": "域名解析、网络协议、域名解析",
+    "sub_questions": [
+      {
+        "label": "第1题(填空题)",
+        "answer": "本地",
+        "q_num": 1,
+        "type": "填空题"
+      },
+      {
+        "label": "第1题(填空题)",
+        "answer": "UDP, IP, Ethernet",
+        "q_num": 1,
+        "type": "填空题"
+      },
+      {
+        "label": "第2题(综合题)",
+        "answer": "H在解析域名www.abc.edu.cn的IP地址时，首先查询的是本地域名服务器。H发送的域名查询请求报文通过UDP协议封装域名查询请求，然后通过IP协议封装UDP数据报，最后通过Ethernet协议封装IP数据报。",
+        "q_num": 2,
+        "type": "综合题"
+      },
+      {
+        "label": "第2题(综合题)",
+        "answer": "至少需要4个RTT时间。域名解析过程示意图如下：\n\n本地域名服务器 -> 根域名服务器 -> cn域名服务器 -> edu.cn域名服务器 -> abc.edu.cn域名服务器",
+        "q_num": 2,
+        "type": "综合题"
+      },
+      {
+        "label": "第3题(填空题)",
+        "answer": "10Mbps",
+        "q_num": 3,
+        "type": "填空题"
+      },
+      {
+        "label": "第4题(综合题)",
+        "answer": "至少需要的时间包括：建立TCP连接时间、发送index.html时间、发送3个JPEG图像时间、域名解析时间、确认时间。\n\n分析与计算过程：\n1. 建立TCP连接时间：假设最大段长MSS=1000B，TCP拥塞窗口初始值为16MSS，则建立连接需要2个RTT（SYN, ACK）。\n2. 发送index.html时间：1个MSS，需要1个RTT。\n3. 发送3个JPEG图像时间：3个MSS，需要3个RTT。\n4. 域名解析时间：根据前面的计算，至少需要4个RTT。\n5. 确认时间：每个段都需要一个确认，共5个段，需要5个RTT。\n\n总时间 = 2 + 1 + 3 + 4 + 5 = 15个RTT。\n\nH的浏览器与www.abc.edu.cn服务器交互过程示意图如下：\n\nH -> www.abc.edu.cn (建立连接) -> H (发送index.html) -> www.abc.edu.cn (发送index.html) -> H (发送确认) -> www.abc.edu.cn (发送JPEG图像1) -> H (发送确认) -> ... -> www.abc.edu.cn (发送JPEG图像3) -> H (发送确认)",
+        "q_num": 4,
+        "type": "综合题"
+      }
+    ],
+    "section": "整页综合",
+    "source": "2020秋本部计算机网络期末考试回忆版",
+    "source_file": "2020秋本部计算机网络期末考试回忆版.pdf",
+    "needs_review": false,
+    "review_reason": ""
+  },
+  {
+    "qid": "S7",
+    "q_num": 7,
+    "display_num": 7,
+    "type": "整页综合",
+    "course": "计算机网络",
+    "page": 7,
+    "image": "2020秋本部计算机网络期末考试回忆版_S7_p7.png",
+    "text": "10.在计算UDP校验和时，封装UDP报文的IP数据报首部某些字段也会参与计算，这些字段是（C）\n\nI.源IP地址 II.目的IP地址 III.协议 IV.TTL\n\nA.仅I、II B.仅III、IV C.仅I、II、III D.I、II、III、IV\n\n11.对于停等协议(rdt3.0)，若接收方在正确接收了1号分组，且发送了对1号分组的确认ack1之后又收到了1号分组，则接收方针对该分组的正确操作是（A）\n\nA.丢弃该分组，发送ack1 B.丢弃该分组，发送ack0 C.丢弃该分组，无需发送ack D.接收该分组，并向上层提交数据，发送ack1\n\n12.若主机甲采用GBN协议向主机乙发送链路层数据帧，帧长为500B，帧序号采用4比特编号，数据传输速率是10Mbps(M=106)，甲乙之间的单向传播延时是5.8ms，忽略确认帧的传输延时，则甲的最大信道利用率约为（B）\n\nA.25% B.50% C.75% D.100%\n\n13.如果SR协议的分组序号采用3比特编号，发送窗口大小为5，则接收窗口最大是（8）\n\nA.2 B.3 C.4 D.5\n\n14.某客户通过一个TCP连接向服务器发送数据的部分过程如下图所示。客户在t0时刻第一次收到确认序列号ack_seq=100的段，并发送序列号seq=100的段，但发生丢失。若TCP支持快速重传，则客户重新发送seq=100段的时刻是（13）\n\n发送窗口：Ws=15  \n一帧传输延时：500B/10Mbps=0.4ms  \nRTT=5.8*2=11.6ms  \n利用率=15*0.4/(11.6+0.4)=50%",
+    "answer": null,
+    "reference_points": [],
+    "topic": "UDP校验和、停等协议、GBN协议信道利用率",
+    "sub_questions": [
+      {
+        "label": "第10题(选择题)",
+        "answer": "C",
+        "q_num": 10,
+        "type": "选择题"
+      },
+      {
+        "label": "第11题(选择题)",
+        "answer": "A",
+        "q_num": 11,
+        "type": "选择题"
+      },
+      {
+        "label": "第12题(选择题)",
+        "answer": "B",
+        "q_num": 12,
+        "type": "选择题"
+      },
+      {
+        "label": "第13题(选择题)",
+        "answer": "B",
+        "q_num": 13,
+        "type": "选择题"
+      },
+      {
+        "label": "第14题(选择题)",
+        "answer": "13",
+        "q_num": 14,
+        "type": "选择题"
+      }
+    ],
+    "section": "整页综合",
+    "source": "2020秋本部计算机网络期末考试回忆版",
+    "source_file": "2020秋本部计算机网络期末考试回忆版.pdf",
+    "needs_review": false,
+    "review_reason": ""
+  }
+]

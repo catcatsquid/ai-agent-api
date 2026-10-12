@@ -22,7 +22,7 @@ from typing import Optional
 import pymupdf  # PyMuPDF
 from PIL import Image
 
-from knowledge_pipeline.image_understanding import describe_image_vlm
+from knowledge_pipeline.image_understanding import describe_image_vlm, is_worth_processing
 
 
 @dataclass
@@ -77,7 +77,11 @@ def _should_use_vlm(text: str, title: str, page_num: int) -> bool:
       - 处理: 标题含图表关键词（图、流程、状态、架构、模型等）
       - 处理: 文字很少（<150字）且不是封面/目录（可能是图表页）
       - 跳过: 文字多（>300字）且无图表关键词（大概率纯文字页）
-      - 处理: 其他情况（中等文字量，可能有图有文）
+      - 跳过: 中等文字量（150~300字）且标题无图表关键词
+
+    最后一档是**保守策略**：这类页面有图有文的概率不高，
+    而 VLM 调用要花钱花时间，所以默认跳过。
+    （原文档这里写成"处理: 其他情况"，与实现相反 —— 以实现为准。）
     """
     # 封面页
     if page_num == 1 and len(text) < 100:
@@ -98,11 +102,7 @@ def _should_use_vlm(text: str, title: str, page_num: int) -> bool:
     if len(text) < 150:
         return True
 
-    # 文字多且无图表关键词 → 大概率纯文字页，跳过
-    if len(text) > 300:
-        return False
-
-    # 中等文字量 → 保守处理（默认跳过，节省配额）
+    # 其余（含 150~300 字的中等页）都跳过，节省配额
     return False
 
 
@@ -137,65 +137,66 @@ def process_ppt_pdf(
     Returns:
         list[SlideContent]: 每页的结构化内容
     """
-    doc = pymupdf.open(pdf_path)
-    total_pages = min(doc.page_count, max_pages) if max_pages else doc.page_count
-    results = []
+    with pymupdf.open(pdf_path) as doc:
+        total_pages = min(doc.page_count, max_pages) if max_pages else doc.page_count
+        results = []
 
-    print(f"  处理 {Path(pdf_path).name}: 共 {doc.page_count} 页"
-          f"{'（测试模式，处理前' + str(total_pages) + '页）' if max_pages else ''}"
-          f"{'，VLM 启用' if use_vlm else '，纯文字模式'}")
+        print(f"  处理 {Path(pdf_path).name}: 共 {doc.page_count} 页"
+              f"{'（测试模式，处理前' + str(total_pages) + '页）' if max_pages else ''}"
+              f"{'，VLM 启用' if use_vlm else '，纯文字模式'}")
 
-    for i in range(total_pages):
-        page = doc[i]
-        page_num = i + 1
+        for i in range(total_pages):
+            page = doc[i]
+            page_num = i + 1
 
-        try:
-            text = page.get_text()
-        except Exception:
-            print(f"    [跳过] 第 {page_num} 页文字提取失败")
-            results.append(SlideContent(page_num=page_num, text=""))
-            continue
+            try:
+                text = page.get_text()
+            except Exception:
+                print(f"    [跳过] 第 {page_num} 页文字提取失败")
+                results.append(SlideContent(page_num=page_num, text=""))
+                continue
 
-        cleaned_text = _clean_page_text(text)
-        title = _extract_title(cleaned_text)
+            cleaned_text = _clean_page_text(text)
+            title = _extract_title(cleaned_text)
 
-        slide = SlideContent(
-            page_num=page_num,
-            title=title,
-            text=cleaned_text,
-        )
-
-        # 2. 整页渲染 + VLM 理解图文结构
-        if use_vlm and _should_use_vlm(cleaned_text, title, page_num):
-            # 渲染整页为图片
-            mat = pymupdf.Matrix(zoom, zoom)
-            pix = page.get_pixmap(matrix=mat)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-
-            context = (
-                f"这是第 {page_num} 页 PPT 幻灯片，标题可能是：{title}。"
-                f"页面提取到的文字如下：\n{cleaned_text[:500]}\n\n"
-                f"请重点描述页面中的图表、流程图、状态转换图、架构图等视觉内容，"
-                f"以及各元素之间的关系。不需要重复文字已经明确表达的内容。"
+            slide = SlideContent(
+                page_num=page_num,
+                title=title,
+                text=cleaned_text,
             )
-            desc = describe_image_vlm(img, context=context)
-            if desc:
-                slide.vlm_description = desc
-                slide.has_diagram = True
 
-            time.sleep(vlm_interval)
+            # 2. 整页渲染 + VLM 理解图文结构
+            if use_vlm and _should_use_vlm(cleaned_text, title, page_num):
+                # 渲染整页为图片
+                mat = pymupdf.Matrix(zoom, zoom)
+                pix = page.get_pixmap(matrix=mat)
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
-        results.append(slide)
+                # 图太小（空白页/装饰）或太大时不值得花一次 VLM 调用
+                if is_worth_processing(img):
+                    context = (
+                        f"这是第 {page_num} 页 PPT 幻灯片，标题可能是：{title}。"
+                        f"页面提取到的文字如下：\n{cleaned_text[:500]}\n\n"
+                        f"请重点描述页面中的图表、流程图、状态转换图、架构图等视觉内容，"
+                        f"以及各元素之间的关系。不需要重复文字已经明确表达的内容。"
+                    )
+                    desc = describe_image_vlm(img, context=context)
+                    if desc:
+                        slide.vlm_description = desc
+                        slide.has_diagram = True
 
-        # 进度
-        if page_num % 20 == 0 or page_num == total_pages:
-            total_chars = sum(s.char_count for s in results)
-            vlm_count = sum(1 for s in results if s.vlm_description)
-            print(f"    进度: {page_num}/{total_pages} 页, "
-                  f"VLM处理: {vlm_count} 页, "
-                  f"已生成 {total_chars} 字")
+                    time.sleep(vlm_interval)
 
-    doc.close()
+            results.append(slide)
+
+            # 进度
+            if page_num % 20 == 0 or page_num == total_pages:
+                total_chars = sum(s.char_count for s in results)
+                vlm_count = sum(1 for s in results if s.vlm_description)
+                print(f"    进度: {page_num}/{total_pages} 页, "
+                      f"VLM处理: {vlm_count} 页, "
+                      f"已生成 {total_chars} 字")
+
 
     total_chars = sum(s.char_count for s in results)
     vlm_pages = sum(1 for s in results if s.vlm_description)

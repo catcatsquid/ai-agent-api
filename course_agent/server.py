@@ -1,4 +1,4 @@
-﻿"""课程知识库问答 Agent API 服务 (端口 8003)
+"""课程知识库问答 Agent API 服务 (端口 8003)
 
 Week 5 升级：Plan-and-Execute + 多轮对话持久化
 Week 6 升级：SSE 流式接口
@@ -17,17 +17,75 @@ Week 10 升级：知识库管理接口（增量导入 + 检索测试）
 
 import json
 import uuid
+from datetime import datetime
 from pathlib import Path as FilePath
-from fastapi import FastAPI, Depends, UploadFile, File, Query
+from fastapi import FastAPI, Depends, Query
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage, ToolMessage, AIMessage
 from course_agent.graph import graph, react_graph
-from course_agent.auth import any_auth, create_jwt, api_key_auth
+from course_agent.auth import any_auth, create_jwt
 from course_agent.logger import logger
 from course_agent.middleware import setup_middlewares
-from rag_tool import get_knowledge_base, KnowledgeBase, ChunkConfig
+from course_agent import tutor_agent, qbank
+from rag_tool import get_knowledge_base
+
+# 项目根目录：一律基于文件位置解析，不依赖启动时的 CWD
+# （原来用 FilePath("data") 相对路径，从别处启动 uvicorn 会静默找不到图片/题库）
+PROJECT_ROOT = FilePath(__file__).resolve().parent.parent
+
+# 知识库的文件根目录：所有"按用户传入路径读文件"的接口都必须落在这个目录之下
+DATA_ROOT = (PROJECT_ROOT / "data").resolve()
+
+
+def resolve_within_data(user_path: str, *, must_exist: bool = True) -> FilePath:
+    """把用户传入的路径解析到 data/ 之下；越界就抛 ValueError
+
+    为什么需要它：`/kb/add` 与 `/kb/add-directory` 原来把 file_path / dir_path
+    **原样**交给 `rag_tool.add_document`，而那条路径只做 `Path(file_path).exists()`，
+    没有任何"必须在 data/ 之下"的校验。再加上 `_classify_doc` 的兜底行为
+    （路径不在 base 之下时退回按全路径判断，最终 `return "notes"`），
+    结果就是：data/ 之外的任意 md/txt/pdf/docx 都会被当成"笔记"收进知识库，
+    然后经（当时还无鉴权的）`/kb/search` 把全文读出去。
+
+    `/kb/browse` 一直是这么防的（resolve + relative_to），这里抽成同一个函数给三处复用 ——
+    校验放在 **API 边界**而不是 `add_document` 内部，因为 CLI 的 `--add-file`
+    确实支持传项目外的绝对路径，那是合理用法，不该被库层一刀切掉。
+    """
+    if not user_path or not str(user_path).strip():
+        raise ValueError("路径不能为空")
+    p = FilePath(str(user_path).strip())
+    candidate = (p if p.is_absolute() else PROJECT_ROOT / p).resolve()
+    try:
+        candidate.relative_to(DATA_ROOT)
+    except ValueError:
+        raise ValueError(f"路径必须位于 data/ 目录之下: {user_path}")
+    if must_exist and not candidate.exists():
+        raise ValueError(f"路径不存在: {user_path}")
+    return candidate
+
+
+def sse_content_event(msg_chunk) -> str | None:
+    """把一条 LangChain 消息转成 SSE content 事件；该跳过的返回 None
+
+    抽成函数是为了可测：这段逻辑原来内联在 /chat/stream 的生成器里，
+    只写了"跳过带 tool_calls 的消息"（本意是挡 tool-call JSON），
+    结果 **ToolMessage 的内容被原样当正文播给前端** ——
+    真实运行时吐的是检索原文 / 参考答案 / 批改 JSON，
+    直接打穿"出题不泄题面与答案"的设计意图。
+    """
+    # 工具结果绝不能当正文
+    if isinstance(msg_chunk, ToolMessage) or getattr(msg_chunk, "type", "") == "tool":
+        return None
+    # 带 tool_calls 的 AI 消息，content 里可能是原始 tool call JSON
+    if getattr(msg_chunk, "tool_calls", None):
+        return None
+    content = getattr(msg_chunk, "content", "") or ""
+    if not content:
+        return None
+    return f"data: {json.dumps({'type': 'content', 'content': content}, ensure_ascii=False)}\n\n"
+
 
 app = FastAPI(title="Course QA Agent API", version="3.0")
 
@@ -39,10 +97,10 @@ _static_dir = FilePath(__file__).parent / "static"
 if _static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
-# 题库图片服务
-_qb_image_dir = FilePath("data") / "question_bank" / "images"
+# 题库图片服务（独立路径，避免被 /static 挂载覆盖）
+_qb_image_dir = qbank.IMAGES_DIR
 if _qb_image_dir.exists():
-    app.mount("/static/qb_images", StaticFiles(directory=str(_qb_image_dir)), name="qb_images")
+    app.mount("/qb_images", StaticFiles(directory=str(_qb_image_dir)), name="qb_images")
 
 
 class QueryRequest(BaseModel):
@@ -61,6 +119,11 @@ class QueryResponse(BaseModel):
     turn_count: int = 0
 
 
+class TutorRequest(BaseModel):
+    query: str
+    session_id: str = None
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str = None  # 演示用，实际项目要校验密码
@@ -74,24 +137,61 @@ class LoginResponse(BaseModel):
     expires_in: int = 0
 
 
-@app.get("/")
+@app.get("/health")
 def health():
-    return {"code": 0, "msg": "ok", "data": "课程知识库问答 Agent v3.0 正在运行", "pages": {"chat": "/chat", "kb": "/kb", "docs": "/docs"}}
+    """健康检查（供 docker-compose / 负载均衡探活）
+
+    注意：不要用 "/" 做健康检查——"/" 现在会 302 跳到 /chat，
+    探活返回 307 在部分探针里会被判失败。（原 test_health_no_auth 就是因此挂掉的）
+    """
+    questions = qbank.load_questions()
+    try:
+        kb = get_knowledge_base()
+        chunks = kb.count()
+    except Exception as e:
+        logger.warning("健康检查读取知识库失败: %s", e)
+        chunks = -1
+    return {
+        "code": 0,
+        "msg": "ok",
+        "status": "healthy",
+        "knowledge_chunks": chunks,
+        "question_bank_size": len(questions),
+    }
+
+
+@app.get("/")
+def root():
+    return RedirectResponse(url="/chat")
 
 
 @app.post("/auth/login", response_model=LoginResponse)
 def login(req: LoginRequest):
-    """登录获取 JWT 令牌（演示用，实际项目需对接用户系统）
+    """登录换取 JWT 令牌
 
-    演示版：任意用户名都能登录，返回有效期 60 分钟的 JWT
+    注意：`req.password` 原来**从未被读取** —— 任意用户名 + 任意密码都能拿到 token，
+    等于"需要鉴权"的写接口（/kb/add 等）对匿名者不设防。
+    现在必须匹配 .env 里的 ADMIN_PASSWORD，未配置就直接拒绝签发（fail closed）。
     """
-    from config import JWT_EXPIRE_MINUTES
+    from config import JWT_EXPIRE_MINUTES, ADMIN_PASSWORD
+    from course_agent.auth import JWT_ENABLED, verify_admin_password
 
+    if not ADMIN_PASSWORD:
+        logger.warning("登录被拒：未配置 ADMIN_PASSWORD")
+        return LoginResponse(code=503, msg="未配置 ADMIN_PASSWORD，登录不可用；请在 .env 中设置")
+    if not JWT_ENABLED:
+        logger.warning("登录被拒：未配置 JWT_SECRET")
+        return LoginResponse(code=503, msg="未配置 JWT_SECRET，无法签发令牌")
     if not req.username:
         return LoginResponse(code=400, msg="用户名不能为空")
 
+    if not verify_admin_password(req.password):
+        # 不透露是用户名错还是密码错
+        logger.warning("登录失败：密码错误 (user=%s)", req.username)
+        return LoginResponse(code=401, msg="用户名或密码错误")
+
     token = create_jwt(user_id=req.username, extra={"username": req.username})
-    logger.info("用户登录: %s", req.username)
+    logger.info("用户登录成功: %s", req.username)
     return LoginResponse(
         code=0,
         msg="登录成功",
@@ -164,9 +264,28 @@ def _sse(data: dict) -> str:
     """把字典格式化成一条 SSE 事件"""
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
+def _tool_result_messages(msgs: list) -> list:
+    """只挑出**工具结果**消息（渲染步骤用）
+
+    executor / tools 节点的输出里除了 ToolMessage，还有一条带 `tool_calls` 的
+    AIMessage —— 它没有 `name` 属性，渲染时会兜底成「工具1」，于是前端多出一个
+    **不存在的步骤**，`total` 也多算 1。实测 trace：
+
+        步骤 1/3: 工具1   （调用了工具：list_papers、get_paper_questions）
+        步骤 2/3: list_papers
+        步骤 3/3: get_paper_questions
+
+    工具其实只有 2 个。所以这里按"有没有 tool_call_id / 是不是 ToolMessage"过滤。
+    """
+    out = []
+    for m in msgs or []:
+        if getattr(m, "tool_call_id", None) or type(m).__name__ == "ToolMessage":
+            out.append(m)
+    return out
+
 
 @app.post("/qa/stream")
-def qa_stream(req: QueryRequest, auth: dict = Depends(any_auth)):
+def qa_stream(req: QueryRequest):
     """SSE 流式问答接口
 
     返回 text/event-stream，逐步推送：
@@ -184,112 +303,88 @@ def qa_stream(req: QueryRequest, auth: dict = Depends(any_auth)):
         yield _sse({"type": "start", "thread_id": tid, "query": req.query})
 
         try:
-            # 双模式流：updates 捕获节点级事件，messages 捕获 LLM 逐 token 输出
-            for mode, chunk in active_graph.stream(
-                initial_state, config=config, stream_mode=["updates", "messages"]
-            ):
-                if mode == "updates":
-                    for node_name, node_output in chunk.items():
-                        event = {"type": "node", "node": node_name}
+            # 使用默认流式模式（values），逐个节点推送结果
+            for output in active_graph.stream(initial_state, config=config):
+                # output 是 {node_name: node_output} 的 dict
+                for node_name, node_output in output.items():
+                    event = {"type": "node", "node": node_name}
 
-                        if node_name == "planner":
-                            plan = node_output.get("plan", [])
-                            # 兼容两种格式：数组 或 {need_tools, steps}
-                            if isinstance(plan, dict):
-                                steps = plan.get("steps", [])
-                                need_tools = plan.get("need_tools", False)
-                            else:
-                                steps = plan if isinstance(plan, list) else []
-                                need_tools = len(steps) > 0
-                            event["plan"] = steps
-                            event["need_tools"] = need_tools
-                            event["message"] = f"规划完成，{len(steps)} 个步骤"
-                            yield _sse(event)
-
-                        elif node_name == "executor":
-                            msgs = node_output.get("messages", [])
-                            # 逐个推送每个工具调用的详情
-                            for i, msg in enumerate(msgs):
-                                content = msg.content if hasattr(msg, "content") else str(msg)
-                                # 提取结果摘要（前100字）
-                                summary = content[:120].replace("\n", " ")
-                                if len(content) > 120:
-                                    summary += "..."
-                                # 尝试从 plan 里获取工具名和查询词（用索引对应）
-                                tool_name = getattr(msg, "name", "") or f"工具{i+1}"
-                                detail_event = {
-                                    "type": "node",
-                                    "node": "executor_step",
-                                    "step": i + 1,
-                                    "total": len(msgs),
-                                    "tool": tool_name,
-                                    "summary": summary,
-                                    "message": f"[{tool_name}] {summary}",
-                                }
-                                yield _sse(detail_event)
-                            # 最后推送完成事件
-                            event["tool_count"] = len(msgs)
-                            event["message"] = f"执行完成，{len(msgs)} 个工具调用"
-                            yield _sse(event)
-
-                        elif node_name == "synthesizer":
-                            event["message"] = "回答生成完毕"
-                            yield _sse(event)
-
-                        elif node_name == "llm":
-                            event["message"] = "LLM 思考中"
-                            yield _sse(event)
-
-                        elif node_name == "tools":
-                            msgs = node_output.get("messages", [])
-                            # ReAct模式：逐个推送工具结果
-                            for i, msg in enumerate(msgs):
-                                content = msg.content if hasattr(msg, "content") else str(msg)
-                                summary = content[:120].replace("\n", " ")
-                                if len(content) > 120:
-                                    summary += "..."
-                                tool_name = getattr(msg, "name", "") or f"工具{i+1}"
-                                detail_event = {
-                                    "type": "node",
-                                    "node": "tool_step",
-                                    "step": i + 1,
-                                    "total": len(msgs),
-                                    "tool": tool_name,
-                                    "summary": summary,
-                                    "message": f"[{tool_name}] {summary}",
-                                }
-                                yield _sse(detail_event)
-                            event["tool_count"] = len(msgs)
-                            event["message"] = f"工具执行完成，{len(msgs)} 个结果"
-                            yield _sse(event)
-
-                        elif node_name == "force_search":
-                            event["message"] = "强制检索知识库"
-                            yield _sse(event)
-
+                    if node_name == "planner":
+                        plan = node_output.get("plan", [])
+                        if isinstance(plan, dict):
+                            steps = plan.get("steps", [])
+                            need_tools = plan.get("need_tools", False)
                         else:
-                            event["message"] = f"节点 {node_name} 执行完毕"
-                            yield _sse(event)
+                            steps = plan if isinstance(plan, list) else []
+                            need_tools = len(steps) > 0
+                        event["plan"] = steps
+                        event["need_tools"] = need_tools
+                        event["message"] = f"规划完成，{len(steps)} 个步骤"
+                        yield _sse(event)
 
-                elif mode == "messages":
-                    # LLM 逐 token 输出，过滤工具调用消息（防止 tool call JSON 被流式输出到气泡）
-                    msg_chunk, metadata = chunk
-                    content = ""
-                    if hasattr(msg_chunk, "content") and msg_chunk.content:
-                        content = msg_chunk.content
+                    elif node_name == "executor":
+                        msgs = _tool_result_messages(node_output.get("messages", []))
+                        for i, msg in enumerate(msgs):
+                            content = msg.content if hasattr(msg, "content") else str(msg)
+                            summary = content[:120].replace("\n", " ")
+                            if len(content) > 120:
+                                summary += "..."
+                            tool_name = getattr(msg, "name", "") or f"工具{i+1}"
+                            yield _sse({
+                                "type": "node",
+                                "node": "executor_step",
+                                "step": i + 1,
+                                "total": len(msgs),
+                                "tool": tool_name,
+                                "summary": summary,
+                                "message": f"[{tool_name}] {summary}",
+                            })
+                        event["tool_count"] = len(msgs)
+                        event["message"] = f"执行完成，{len(msgs)} 个工具调用"
+                        yield _sse(event)
 
-                    # 跳过工具调用消息，其 content 可能包含原始 tool call JSON
-                    if hasattr(msg_chunk, "tool_calls") and msg_chunk.tool_calls:
-                        continue
+                    elif node_name == "web_search_fallback":
+                        event["message"] = "知识库结果不足，已补充联网搜索"
+                        yield _sse(event)
 
-                    if content:
-                        node_name = metadata.get("langgraph_node", "")
-                        yield _sse({
-                            "type": "token",
-                            "content": content,
-                            "node": node_name,
-                        })
+                    elif node_name == "synthesizer":
+                        event["message"] = "回答生成完毕"
+                        yield _sse(event)
 
+                    elif node_name == "llm":
+                        event["message"] = "LLM 思考中"
+                        yield _sse(event)
+
+                    elif node_name == "tools":
+                        msgs = _tool_result_messages(node_output.get("messages", []))
+                        for i, msg in enumerate(msgs):
+                            content = msg.content if hasattr(msg, "content") else str(msg)
+                            summary = content[:120].replace("\n", " ")
+                            if len(content) > 120:
+                                summary += "..."
+                            tool_name = getattr(msg, "name", "") or f"工具{i+1}"
+                            yield _sse({
+                                "type": "node",
+                                "node": "tool_step",
+                                "step": i + 1,
+                                "total": len(msgs),
+                                "tool": tool_name,
+                                "summary": summary,
+                                "message": f"[{tool_name}] {summary}",
+                            })
+                        event["tool_count"] = len(msgs)
+                        event["message"] = f"工具执行完成，{len(msgs)} 个结果"
+                        yield _sse(event)
+
+                    elif node_name == "force_search":
+                        event["message"] = "强制检索知识库"
+                        yield _sse(event)
+
+                    else:
+                        event["message"] = f"节点 {node_name} 执行完毕"
+                        yield _sse(event)
+
+            # 获取最终回答
             final_state = active_graph.get_state(config)
             messages = final_state.values.get("messages", [])
             answer = messages[-1].content if messages else ""
@@ -297,7 +392,9 @@ def qa_stream(req: QueryRequest, auth: dict = Depends(any_auth)):
             yield _sse({"type": "done", "answer": answer, "thread_id": tid})
 
         except Exception as e:
-            yield _sse({"type": "error", "msg": str(e)[:200], "thread_id": tid})
+            import traceback
+            traceback.print_exc()
+            yield _sse({"type": "error", "msg": str(e)[:300], "thread_id": tid})
 
     return StreamingResponse(
         event_stream(),
@@ -314,7 +411,7 @@ def qa_stream(req: QueryRequest, auth: dict = Depends(any_auth)):
 # ============================================================
 
 @app.post("/chat/stream")
-async def chat_stream_frontend(req: QueryRequest, auth: dict = Depends(any_auth)):
+async def chat_stream_frontend(req: QueryRequest):
     """兼容前端聊天接口的SSE流式响应"""
     tid = req.thread_id or str(uuid.uuid4())
     config = {"configurable": {"thread_id": tid}}
@@ -343,7 +440,7 @@ async def chat_stream_frontend(req: QueryRequest, auth: dict = Depends(any_auth)
                             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
                         elif node_name == "executor":
-                            msgs = node_output.get("messages", [])
+                            msgs = _tool_result_messages(node_output.get("messages", []))
                             for i, msg in enumerate(msgs):
                                 content = msg.content if hasattr(msg, "content") else str(msg)
                                 summary = content[:120].replace("\n", " ")
@@ -370,7 +467,7 @@ async def chat_stream_frontend(req: QueryRequest, auth: dict = Depends(any_auth)
                             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
                         elif node_name == "tools":
-                            msgs = node_output.get("messages", [])
+                            msgs = _tool_result_messages(node_output.get("messages", []))
                             for i, msg in enumerate(msgs):
                                 content = msg.content if hasattr(msg, "content") else str(msg)
                                 summary = content[:120].replace("\n", " ")
@@ -398,16 +495,10 @@ async def chat_stream_frontend(req: QueryRequest, auth: dict = Depends(any_auth)
 
                 elif mode == "messages":
                     msg_chunk, metadata = chunk
-                    content = ""
-                    if hasattr(msg_chunk, "content") and msg_chunk.content:
-                        content = msg_chunk.content
-
-                    # 跳过工具调用消息，其 content 可能包含原始 tool call JSON
-                    if hasattr(msg_chunk, "tool_calls") and msg_chunk.tool_calls:
-                        continue
-
-                    if content:
-                        yield f"data: {json.dumps({'type': 'content', 'content': content}, ensure_ascii=False)}\n\n"
+                    # 工具产出/工具调用消息在这里被过滤掉，绝不会当正文发给前端
+                    event_line = sse_content_event(msg_chunk)
+                    if event_line:
+                        yield event_line
 
             yield f"data: [DONE]\n\n"
 
@@ -421,6 +512,28 @@ async def chat_stream_frontend(req: QueryRequest, auth: dict = Depends(any_auth)
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
         },
+    )
+
+
+@app.post("/tutor/stream")
+def tutor_stream(req: TutorRequest):
+    """LLM 主导的学习助手 SSE 流式接口
+
+    统一接口，自然语言对话，Agent 自己决定调用什么工具。
+    """
+    def event_stream():
+        try:
+            for event in tutor_agent.process_message(req.session_id, req.query):
+                yield _sse(event)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            yield _sse({"type": "error", "msg": str(e)[:300]})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
 
 
@@ -456,21 +569,21 @@ class SearchTestRequest(BaseModel):
 
 
 @app.get("/kb/stats")
-def kb_stats(auth: dict = Depends(any_auth)):
+def kb_stats():
     """知识库统计信息"""
     kb = get_knowledge_base()
     return {"code": 0, "msg": "ok", "data": kb.get_stats()}
 
 
 @app.get("/kb/documents")
-def kb_documents(auth: dict = Depends(any_auth)):
+def kb_documents():
     """知识库文档列表"""
     kb = get_knowledge_base()
     return {"code": 0, "msg": "ok", "data": kb.list_documents()}
 
 
 @app.post("/kb/search")
-def kb_search(req: SearchTestRequest, auth: dict = Depends(any_auth)):
+def kb_search(req: SearchTestRequest):
     """检索测试 — 返回 chunk + score，方便调参"""
     kb = get_knowledge_base()
     results = kb.search(
@@ -484,15 +597,22 @@ def kb_search(req: SearchTestRequest, auth: dict = Depends(any_auth)):
 
 @app.post("/kb/add")
 def kb_add_document(
-    file_path: str = Query(..., description="文件路径（相对项目根目录）"),
+    file_path: str = Query(..., description="文件路径（必须位于 data/ 目录下）"),
     doc_type: str = Query(None, description="文档类型：ppt/notes/textbook，留空自动判断"),
     chapter: str = Query(None, description="章节，留空自动从文件名提取"),
     auth: dict = Depends(any_auth),
 ):
-    """增量导入单个文件"""
+    """增量导入单个文件（只允许 data/ 目录下的文件）"""
+    try:
+        resolved = resolve_within_data(file_path, must_exist=False)
+    except ValueError as e:
+        logger.warning("拒绝导入越界路径: %s", file_path)
+        return {"code": 403, "msg": str(e)}
+    if not resolved.is_file():
+        return {"code": 404, "msg": f"文件不存在: {file_path}"}
     kb = get_knowledge_base()
     try:
-        added = kb.add_document(file_path, doc_type=doc_type, chapter=chapter)
+        added = kb.add_document(str(resolved), doc_type=doc_type, chapter=chapter)
         return {"code": 0, "msg": "ok", "added_chunks": added}
     except Exception as e:
         return {"code": 500, "msg": f"导入失败: {str(e)[:200]}"}
@@ -500,14 +620,21 @@ def kb_add_document(
 
 @app.post("/kb/add-directory")
 def kb_add_directory(
-    dir_path: str = Query(..., description="目录路径"),
+    dir_path: str = Query(..., description="目录路径（必须位于 data/ 目录下）"),
     skip_textbook: bool = Query(False, description="是否跳过课本"),
     auth: dict = Depends(any_auth),
 ):
-    """增量导入目录下所有新文件"""
+    """增量导入目录下所有新文件（只允许 data/ 目录下的目录）"""
+    try:
+        resolved = resolve_within_data(dir_path, must_exist=False)
+    except ValueError as e:
+        logger.warning("拒绝导入越界目录: %s", dir_path)
+        return {"code": 403, "msg": str(e)}
+    if not resolved.is_dir():
+        return {"code": 404, "msg": f"目录不存在: {dir_path}"}
     kb = get_knowledge_base()
     try:
-        result = kb.add_directory(dir_path, skip_textbook=skip_textbook)
+        result = kb.add_directory(str(resolved), skip_textbook=skip_textbook)
         return {"code": 0, "msg": "ok", "data": result}
     except Exception as e:
         return {"code": 500, "msg": f"导入失败: {str(e)[:200]}"}
@@ -523,13 +650,93 @@ def kb_remove_document(source: str, auth: dict = Depends(any_auth)):
     return {"code": 404, "msg": f"文档不在知识库中: {source}"}
 
 
+# ---------------------------------------------------------------- 对话导出
+#
+# 为什么要有服务端导出：前端原来只做 `Blob` + `<a download>`，
+# 然后**无条件**弹"对话已导出"。但下载是异步的，还可能被浏览器/iframe 拦掉，
+# 前端根本无从得知结果 —— 实测点完提示成功，下载目录里却一个文件都没有。
+#
+# 所以改成：**先在服务端落盘**（这一步的成败前端一定拿得到），
+# 把真实路径显示给用户；浏览器下载降级为"顺带触发一下"。
+EXPORT_ROOT = (PROJECT_ROOT / "exports").resolve()
+
+
+class ChatExportRequest(BaseModel):
+    title: str = ""
+    markdown: str = ""
+    messages: list[dict] = []
+
+
+def _safe_export_name(title: str) -> str:
+    """把对话标题变成安全的文件名（去掉路径分隔符与 Windows 非法字符）"""
+    name = (title or "对话").strip()
+    for ch in '\\/:*?"<>|\r\n\t':
+        name = name.replace(ch, "_")
+    name = name.strip(". ") or "对话"
+    return name[:60]
+
+
+def _render_chat_markdown(title: str, messages: list[dict]) -> str:
+    """把 messages 渲染成 Markdown（与前端保持同一份格式）"""
+    lines = [f"# {title or '对话'}", "",
+             f"> 导出时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+             f"> 消息数: {len(messages)}", "", "---", ""]
+    for m in messages:
+        role = "👤 用户" if m.get("role") == "user" else "🤖 助手"
+        lines += [f"## {role}", "", str(m.get("content") or ""), ""]
+    return "\n".join(lines)
+
+
+@app.post("/chat/export")
+def chat_export(req: ChatExportRequest, auth: dict = Depends(any_auth)):
+    """把当前对话导出成 Markdown，落在项目的 exports/ 目录下
+
+    返回里带**真实路径**，前端会显示出来 —— 这样"导出到哪了"永远有答案，
+    不依赖浏览器的下载行为。
+    """
+    md = req.markdown
+    if not md and req.messages:
+        md = _render_chat_markdown(req.title, req.messages)
+    if not md.strip():
+        return {"code": 400, "msg": "没有可导出的内容"}
+
+    EXPORT_ROOT.mkdir(parents=True, exist_ok=True)
+    # 时间戳只到秒 —— 同一秒内导出两次会算出同一个文件名，
+    # 后一次会把前一次**静默覆盖**掉（写测试时实测到了）。
+    # 所以这里保证不重名：撞了就往后加序号。
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    base = f"{_safe_export_name(req.title)}_{stamp}"
+    target = EXPORT_ROOT / f"{base}.md"
+    n = 2
+    while target.exists():
+        target = EXPORT_ROOT / f"{base}_{n}.md"
+        n += 1
+
+    # 文件名已过滤分隔符，这里再兜一道：必须仍落在 exports/ 之内
+    if EXPORT_ROOT != target.resolve().parent:
+        logger.warning("拒绝越界的导出文件名: %s", target.name)
+        return {"code": 403, "msg": "非法文件名"}
+    target = target.resolve()
+
+    try:
+        target.write_text(md, encoding="utf-8")
+    except OSError as e:
+        logger.warning("对话导出写入失败: %s", e)
+        return {"code": 500, "msg": f"写入失败: {str(e)[:120]}"}
+
+    rel = target.relative_to(PROJECT_ROOT).as_posix()
+    nbytes = len(md.encode("utf-8"))
+    logger.info("对话已导出: %s (%d 字节)", rel, nbytes)
+    return {"code": 0, "msg": "ok", "path": rel, "abs_path": str(target),
+            "filename": target.name, "bytes": nbytes}
+
+
 @app.get("/kb/browse")
 def kb_browse(path: str = Query("data", description="要浏览的目录路径")):
     """浏览目录结构，返回子目录和文件列表。最高只能到 data 目录。"""
-    base = (FilePath(".") / path).resolve()
-    data_root = FilePath("data").resolve()
+    data_root = DATA_ROOT
     try:
-        base.relative_to(data_root)
+        base = resolve_within_data(path, must_exist=False)
     except ValueError:
         return {"code": 403, "msg": "只能浏览 data 目录下的内容"}
 
@@ -558,7 +765,7 @@ def kb_browse(path: str = Query("data", description="要浏览的目录路径"))
         rel_parent = base.parent
         try:
             rel_parent.relative_to(data_root)
-            parent = str(rel_parent).replace("\\", "/").replace("./", "")
+            parent = str(rel_parent.relative_to(PROJECT_ROOT)).replace("\\", "/")
         except ValueError:
             parent = None
     return {
@@ -577,7 +784,33 @@ def kb_browse(path: str = Query("data", description="要浏览的目录路径"))
 # 题库检索接口
 # ============================================================
 
-QUESTION_BANK_DIR = FilePath("data") / "question_bank"
+QUESTION_BANK_DIR = qbank.QUESTION_BANK_DIR
+
+# 前端下拉里的"全部题库（合并）"就是这个文件名。
+# 注意它**不是**真的"全部"：question_bank.json 只有 125 题，而 questions_*.json
+# 去重后合计 191 题（这文件漏了 66 题，因为有两份卷子没有对应的源 PDF）。
+# 所以凡是要"全部"的地方都必须走 qbank.load_questions()，不能直接读这个文件。
+ALL_PAPERS_SENTINEL = "question_bank.json"
+
+
+def _load_questions_for_request(filename: str):
+    """题库取数的唯一入口
+
+    Returns:
+        (questions, error_response) —— error_response 非 None 时直接返回给客户端
+    """
+    if not filename or filename == ALL_PAPERS_SENTINEL:
+        # 走题库访问层，它会合并所有 questions_*.json
+        return qbank.load_questions(), None
+
+    target = QUESTION_BANK_DIR / filename
+    if not target.exists():
+        return None, {"code": 404, "msg": f"题库文件不存在: {filename}"}
+    try:
+        with open(target, "r", encoding="utf-8-sig") as fh:
+            return json.load(fh), None
+    except Exception as e:
+        return None, {"code": 500, "msg": f"读取题库失败: {str(e)[:100]}"}
 
 
 @app.get("/qb/list")
@@ -586,7 +819,6 @@ def qb_list():
     if not QUESTION_BANK_DIR.exists():
         return {"code": 0, "msg": "ok", "data": []}
     json_files = sorted(QUESTION_BANK_DIR.glob("questions_*.json"))
-    combined = QUESTION_BANK_DIR / "question_bank.json"
     files = []
     for f in json_files:
         try:
@@ -599,17 +831,15 @@ def qb_list():
             })
         except Exception:
             files.append({"name": f.stem, "filename": f.name, "count": 0})
-    if combined.exists():
-        try:
-            with open(combined, "r", encoding="utf-8-sig") as fh:
-                data = json.load(fh)
-            files.insert(0, {
-                "name": "全部题库（合并）",
-                "filename": combined.name,
-                "count": len(data),
-            })
-        except Exception:
-            pass
+    # "全部题库（合并）"现在是**虚拟条目**：数据来自 qbank.load_questions()，
+    # 不再依赖 question_bank.json 这个文件。
+    # 那个文件只装了 125 题（单卷合计 191），是"看着像权威、其实漏 66 题"的陷阱，
+    # 已经删掉了。保留这个下拉项只是为了不破坏前端的选择体验。
+    files.insert(0, {
+        "name": "全部题库（合并）",
+        "filename": ALL_PAPERS_SENTINEL,
+        "count": len(qbank.load_questions()),
+    })
     return {"code": 0, "msg": "ok", "data": files}
 
 
@@ -618,7 +848,7 @@ class QBSearchRequest(BaseModel):
     q_type: str = ""
     topic: str = ""
     source: str = ""
-    filename: str = "question_bank.json"
+    filename: str = ALL_PAPERS_SENTINEL
 
 
 @app.post("/qb/search")
@@ -627,29 +857,11 @@ def qb_search(req: QBSearchRequest):
     if not QUESTION_BANK_DIR.exists():
         return {"code": 0, "msg": "ok", "count": 0, "data": []}
 
-    target = QUESTION_BANK_DIR / req.filename
-    if not target.exists():
-        if req.filename == "question_bank.json":
-            json_files = list(QUESTION_BANK_DIR.glob("questions_*.json"))
-            if json_files:
-                all_questions = []
-                for f in json_files:
-                    try:
-                        with open(f, "r", encoding="utf-8-sig") as fh:
-                            all_questions.extend(json.load(fh))
-                    except Exception:
-                        pass
-                questions = all_questions
-            else:
-                return {"code": 0, "msg": "ok", "count": 0, "data": []}
-        else:
-            return {"code": 404, "msg": f"题库文件不存在: {req.filename}"}
-    else:
-        try:
-            with open(target, "r", encoding="utf-8-sig") as fh:
-                questions = json.load(fh)
-        except Exception as e:
-            return {"code": 500, "msg": f"读取题库失败: {str(e)[:100]}"}
+    questions, err = _load_questions_for_request(req.filename)
+    if err is not None:
+        return err
+    if not questions:
+        return {"code": 0, "msg": "ok", "count": 0, "data": []}
 
     results = []
     kw = req.keyword.lower().strip()
@@ -687,25 +899,14 @@ def qb_search(req: QBSearchRequest):
 
 @app.get("/qb/topics")
 def qb_topics():
-    """获取所有题目知识点列表（用于筛选项）"""
-    if not QUESTION_BANK_DIR.exists():
-        return {"code": 0, "msg": "ok", "data": []}
-    combined = QUESTION_BANK_DIR / "question_bank.json"
-    questions = []
-    if combined.exists():
-        try:
-            with open(combined, "r", encoding="utf-8-sig") as fh:
-                questions = json.load(fh)
-        except Exception:
-            pass
-    else:
-        for f in QUESTION_BANK_DIR.glob("questions_*.json"):
-            try:
-                with open(f, "r", encoding="utf-8-sig") as fh:
-                    questions.extend(json.load(fh))
-            except Exception:
-                pass
+    """获取所有题目知识点列表（用于筛选项）
 
-    topics = sorted(set(q.get("topic", "") for q in questions if q.get("topic")))
-    sources = sorted(set(q.get("source", "") for q in questions if q.get("source")))
-    return {"code": 0, "msg": "ok", "data": {"topics": topics, "sources": sources}}
+    走 qbank 而不是直接读 question_bank.json —— 后者只是"某次批量构建"的产物，
+    并不包含全部试卷（漏了 2019 计网期末和 2018 OS WuuTang 共 66 题），
+    直接读它会让筛选项和助教实际能出的卷子对不上。
+    """
+    questions = qbank.load_questions()
+    topics = sorted({q.get("topic", "") for q in questions if q.get("topic")})
+    sources = sorted({q.get("source", "") for q in questions if q.get("source")})
+    return {"code": 0, "msg": "ok",
+            "data": {"topics": topics, "sources": sources, "total": len(questions)}}

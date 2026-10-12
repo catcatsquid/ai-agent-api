@@ -21,8 +21,23 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 
-from config import RATE_LIMIT_PER_MINUTE
+from config import RATE_LIMIT_PER_MINUTE, AUTH_ENFORCE, API_KEY, ADMIN_PASSWORD
 from course_agent.logger import logger, set_trace_id, clear_trace_id
+from course_agent.auth import check_credentials
+
+
+# 噪声路径：探活、文档、图标。**两处都要用同一份**：
+#   · 请求日志跳过它们（太频繁）
+#   · 限流放过它们（否则探活会被 429 判死）
+#
+# 原来这两处各自硬编码了一份，而且**都漏了 /health**（放的是没意义的 "/"）：
+# 真实健康检查端点会被限流拦成 429，而我自己的测试恰好断言的是 "/" ——
+# 测试绿了、线上探活会挂。这是"测试测了错误的对象"的典型案例。
+# 现在合成一个常量，谁也不许再各写一份。
+QUIET_PATHS = frozenset({
+    "/", "/health", "/favicon.ico",
+    "/docs", "/redoc", "/openapi.json",
+})
 
 
 # ============================================================
@@ -54,8 +69,8 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
             method = request.method
             path = request.url.path
 
-            # 跳过健康检查的日志（太频繁了）
-            skip_log = path in ["/", "/favicon.ico", "/docs", "/openapi.json"]
+            # 跳过噪声路径的日志（探活/文档/图标太频繁）
+            skip_log = path in QUIET_PATHS
 
             try:
                 # 交给下一层（路由函数）处理
@@ -134,6 +149,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         current_minute = self._get_current_minute()
 
         with self._lock:
+            # 顺手清理过期的 IP 条目：原来每个新 IP 都会永久留下一条记录，
+            # 计数器只增不减，长期运行内存单调增长
+            if len(self._counters) > 1024:
+                stale = [k for k, v in self._counters.items() if v["minute"] != current_minute]
+                for k in stale:
+                    self._counters.pop(k, None)
+
             counter = self._counters[ip]
 
             # 新的一分钟，重置计数器
@@ -155,8 +177,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         client_ip = request.client.host if request.client else "unknown"
         path = request.url.path
 
-        # 健康检查和文档页面不限流
-        if path in ["/", "/favicon.ico", "/docs", "/openapi.json"]:
+        # 探活与文档页不限流（/health 必须在里面，否则健康检查会被 429 判死）
+        if path in QUIET_PATHS:
             return await call_next(request)
 
         if not self._check_rate_limit(client_ip):
@@ -227,7 +249,68 @@ def register_exception_handlers(app):
 
 
 # ============================================================
-# 4. CORS 中间件配置
+# 4. 鉴权守卫中间件（默认拒绝）
+# ============================================================
+
+# 公开路径：页面本体、健康检查、接口文档、登录端点。
+# 这些必须匿名可访问，否则页面自己都打不开、也就没法带凭证去登录。
+PUBLIC_PATHS = {
+    "/", "/chat", "/kb", "/health",
+    "/docs", "/redoc", "/openapi.json", "/favicon.ico",
+    "/auth/login",
+}
+
+# 图片与静态资源一律公开：<img src> 天生带不了 Authorization 头，
+# 若把 /qb_images 也拦下来，出题时题目图片会全部裂图。
+# （题目图片本身不是机密；真正要挡的是"任意文件入库 + 检索外泄"那条链。）
+PUBLIC_PREFIXES = ("/static", "/qb_images")
+
+
+class AuthGuardMiddleware(BaseHTTPMiddleware):
+    """默认拒绝的鉴权守卫
+
+    原来鉴权是**逐个路由手写** `Depends(any_auth)` 的：`/qa/ask` 加了、
+    第 6 周写的 `/qa/stream` 忘了加 —— 而前端实际调的就是 `/qa/stream`。
+    于是"加了鉴权"挡住的恰好是没人用的接口，而会烧 LLM 额度的流式接口、
+    会触发 embedding 的 `/kb/search`、能列出全部语料的 `/kb/documents`
+    以及能任意文件入库的 `/kb/add` 全都可以匿名访问。
+
+    这里改成**默认拒绝 + 显式白名单**：除 PUBLIC_PATHS/PUBLIC_PREFIXES 之外，
+    所有请求都必须带有效凭据。新增路由会自动受保护，不会再"忘加"。
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        if not AUTH_ENFORCE:
+            return await call_next(request)
+
+        # CORS 预检不携带凭据，必须放行（本中间件在 CORS 之外层）
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
+        path = request.url.path
+        if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
+            return await call_next(request)
+
+        auth_header = request.headers.get("authorization", "") or ""
+        bearer = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else None
+        info = check_credentials(request.headers.get("x-api-key"), bearer)
+
+        if info is None:
+            logger.warning("鉴权拦截: %s %s", request.method, path)
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={
+                    "code": 401,
+                    "msg": "认证失败，请提供有效的 X-API-Key 或 Authorization Bearer 令牌",
+                },
+            )
+
+        request.state.auth = info
+        return await call_next(request)
+
+
+# ============================================================
+# 5. CORS 中间件配置
 # ============================================================
 
 def setup_cors(app):
@@ -247,21 +330,25 @@ def setup_cors(app):
 
 
 # ============================================================
-# 5. 一键注册所有中间件
+# 6. 一键注册所有中间件
 # ============================================================
 
 def setup_middlewares(app):
     """一键注册所有中间件
 
-    注意：中间件的顺序很重要！
-    先注册的在外层（请求时最后经过，响应时最先经过）
+    注意：中间件的顺序很重要。Starlette 的 add_middleware 是 insert(0)，
+    也就是**最后注册的在最外层**；所以要得到"请求日志 → 限流 → 鉴权 → CORS → 路由"
+    这个顺序，注册顺序必须是 CORS → 鉴权 → 限流 → 请求日志。
 
     当前顺序:
-      请求 → 请求日志 → 限流 → CORS → 路由
-      响应 ← 请求日志 ← 限流 ← CORS ← 路由
+      请求 → 请求日志 → 限流 → 鉴权 → CORS → 路由
+      响应 ← 请求日志 ← 限流 ← 鉴权 ← CORS ← 路由
     """
     # CORS 应该在最内层（最先处理请求，最后处理响应）
     setup_cors(app)
+
+    # 鉴权守卫：默认拒绝，白名单放行
+    app.add_middleware(AuthGuardMiddleware)
 
     # 限流中间件
     app.add_middleware(RateLimitMiddleware)
@@ -273,4 +360,21 @@ def setup_middlewares(app):
     register_exception_handlers(app)
 
     rate_limit_info = f"{RATE_LIMIT_PER_MINUTE}/min" if RATE_LIMIT_PER_MINUTE > 0 else "关闭"
-    logger.info("中间件已加载: 请求日志 | 限流(%s) | CORS | 全局异常处理", rate_limit_info)
+    if AUTH_ENFORCE:
+        auth_info = "开启(默认拒绝)"
+        if not API_KEY and not ADMIN_PASSWORD:
+            logger.warning(
+                "AUTH_ENFORCE=true 但 API_KEY 与 ADMIN_PASSWORD 都未配置："
+                "所有需鉴权的接口都会 401，且无法登录。"
+                "请在 .env 里设置 ADMIN_PASSWORD（登录用）或 API_KEY（服务间调用用）；"
+                "临时本地调试可设 AUTH_ENFORCE=false"
+            )
+    else:
+        auth_info = "关闭(本地模式)"
+        logger.info(
+            "AUTH_ENFORCE=false：接口无需凭据即可调用。"
+            "文件路径校验(resolve_within_data)仍然生效，data/ 之外的文件依旧会被拒绝；"
+            "对外部署前请设 AUTH_ENFORCE=true"
+        )
+    logger.info("中间件已加载: 请求日志 | 限流(%s) | 鉴权(%s) | CORS | 全局异常处理",
+                rate_limit_info, auth_info)

@@ -63,13 +63,45 @@ LOG_FILE = _optional("LOG_FILE", "")
 # API Key（为空则不开启认证，开发模式）
 API_KEY = _optional("API_KEY", "")
 
-# JWT 配置（JWT_SECRET 为空则不开启 JWT 认证）
-# 注意: /auth/login 会签发 token, 若 JWT_SECRET 为空则自动生成进程级随机密钥,
-#       重启后旧 token 失效。生产环境务必在 .env 中配置固定强密钥。
-import secrets as _secrets
-JWT_SECRET = _optional("JWT_SECRET", "") or _secrets.token_hex(32)
+# 管理密码：/auth/login 用它换取 JWT。
+#
+# 原来 /auth/login 完全不看 password —— 任意用户名 + 任意密码都能换到 token，
+# 于是"需要鉴权"的写接口（/kb/add 等）对匿名者等于不设防：
+# 先换一个 JWT，再拿它去打任意路径入库。
+# 现在：未配置 ADMIN_PASSWORD 时登录返回 503（fail closed），不再无条件签发。
+ADMIN_PASSWORD = _optional("ADMIN_PASSWORD", "")
+
+# 是否强制鉴权。
+#
+# 默认 **false** —— 这是本地学习项目的真实用法：服务只绑 127.0.0.1，
+# 外面访问不到，日常每次输密码的摩擦换不来实际安全增益。
+#
+# 关掉它并不等于"裸奔"：真正危险的那条链（/kb/add 任意文件入库 → /kb/search 外泄）
+# 靠的是**处理函数内部的路径校验** `resolve_within_data()`，与鉴权完全解耦，
+# 关掉鉴权后仍然会 403 拒绝 data/ 之外的文件（tests/test_server_security.py 有守卫）。
+#
+# 对外部署前请设 AUTH_ENFORCE=true，并配置 ADMIN_PASSWORD（登录用）或 API_KEY（服务间调用）。
+AUTH_ENFORCE = _optional("AUTH_ENFORCE", "false").lower() == "true"
+
+# JWT 配置
+# 说明: 这里保留"未配置"和"已配置"的区别，供 auth.py 判断是否开启 JWT 认证。
+#       原来写成 `_optional("JWT_SECRET", "") or _secrets.token_hex(32)`，
+#       空值时自动生成随机密钥，导致 auth.py 里 `if not JWT_SECRET: 跳过认证`
+#       永远是 False —— 文档说"为空则不开启"，实际是所有鉴权接口 401。
+#       现在: 显式配置才开启 JWT；未配置时由 auth.py 走"仅 API Key"模式。
+JWT_SECRET = _optional("JWT_SECRET", "")
+JWT_SECRET_IS_CONFIGURED = bool(JWT_SECRET)
 JWT_ALGORITHM = _optional("JWT_ALGORITHM", "HS256")
 JWT_EXPIRE_MINUTES = int(_optional("JWT_EXPIRE_MINUTES", "60"))
+
+if not JWT_SECRET:
+    # 开发环境仍可签发/校验 token（用进程级随机密钥），但会明确告知
+    import secrets as _secrets
+
+    JWT_SECRET = _secrets.token_hex(32)
+    JWT_SECRET_IS_EPHEMERAL = True
+else:
+    JWT_SECRET_IS_EPHEMERAL = False
 
 # ============================================================
 # 限流
@@ -93,3 +125,18 @@ SUMMARY_THRESHOLD = int(_optional("SUMMARY_THRESHOLD", "30"))
 
 # 摘要后保留最近几轮对话（不被摘要掉）
 SUMMARY_KEEP_LAST_N = int(_optional("SUMMARY_KEEP_LAST_N", "10"))
+
+# ============================================================
+# 检索相关度阈值
+# ============================================================
+
+# 判定"知识库是否有相关内容"的绝对余弦相似度阈值。
+# 用途: rag_tool.search_knowledge 决定是否补充搜课本 / 是否提示调用 web_search。
+#
+# 这个值必须作用在**绝对**相似度上，不能作用在混合检索的归一化融合分上 ——
+# 融合分是按最大值归一化的，排名第一的结果恒 ≥ 0.6，拿它比 0.3 永远不成立。
+#
+# 取值依据（debug/check_threshold.py，域内/域外各 12 条查询实测）:
+#   换算成余弦相似度后  域内最低 0.665，域外最高 0.524
+#   0.55 可把 24 条样本 100% 分开
+RELEVANCE_THRESHOLD = float(_optional("RELEVANCE_THRESHOLD", "0.55"))

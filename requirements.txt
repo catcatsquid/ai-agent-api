@@ -1,21 +1,26 @@
-fastapi>=0.104.0
-uvicorn>=0.24.0
-requests>=2.31.0
-python-dotenv>=1.0.0
-pydantic>=2.5.0
-langgraph>=1.0.0
-langchain-community>=0.3.0
-langchain-core>=0.3.0
+# 依赖版本已锁定为当前开发环境的实际版本（可复现安装）。
+# 升级依赖时请连同 tests/ 一起跑一遍：python -m pytest tests/ -q
+fastapi==0.141.1
+uvicorn==0.52.4
+requests==2.34.2
+python-dotenv==1.2.3
+pydantic==2.13.5
+langgraph==1.2.11
+langchain-community==0.4.2
+langchain-core==1.6.2
 langchain>=0.3.0
-pyjwt>=2.8.0
-pypdf>=4.0.0
-pymupdf>=1.24.0
-Pillow>=10.0.0
-chromadb>=0.5.0
-python-multipart>=0.0.7
-numpy>=1.24.0
-rank_bm25>=0.2.2
+pyjwt==2.13.0
+pypdf==6.18.0
+pymupdf==1.28.2
+# rag_tool._load_docx 用 python-docx 读 .docx（课程资料里有 docx），
+# 之前漏声明了：全新环境处理 .docx 时会 ImportError
+python-docx==1.2.0
+Pillow==12.3.0
+chromadb==1.5.9
+python-multipart==0.0.32
+numpy==2.5.3
+rank_bm25==0.2.2
 
 # 开发依赖（测试、压测）
-pytest>=8.0.0
-locust>=2.30.0
+pytest==9.1.1
+locust==2.46.6
