@@ -23,6 +23,14 @@ jobs:
       # （这也是"config 导入期硬校验"那条架构债的具体代价。）
       ZHIPU_API_KEY: dummy-key-for-ci
       AUTH_ENFORCE: "false"
+      # /auth/login 在未配置 ADMIN_PASSWORD 时**故意 fail closed 返回 503**，
+      # 而 course_agent.auth.JWT_ENABLED 是在**导入期**由 JWT_SECRET 求值的
+      # （见 config.py: JWT_SECRET_IS_CONFIGURED → auth.JWT_ENABLED），
+      # 测试里再 patch JWT_SECRET 也改不动它。
+      # 这两项不配，test_auth.py 里"密码错了要 401""用户名为空要 400""登录要成功"
+      # 就会统统变成 503 —— 本地因为 .env 里配了才看不出来。
+      ADMIN_PASSWORD: ci-admin-password
+      JWT_SECRET: ci-jwt-secret-for-tests-only
 
     steps:
       - uses: actions/checkout@v4
