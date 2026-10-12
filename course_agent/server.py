@@ -29,6 +29,7 @@ from course_agent.auth import any_auth, create_jwt
 from course_agent.logger import logger
 from course_agent.middleware import setup_middlewares
 from course_agent import tutor_agent, qbank
+from config import APP_VERSION
 from rag_tool import get_knowledge_base
 
 # 项目根目录：一律基于文件位置解析，不依赖启动时的 CWD
@@ -87,7 +88,7 @@ def sse_content_event(msg_chunk) -> str | None:
     return f"data: {json.dumps({'type': 'content', 'content': content}, ensure_ascii=False)}\n\n"
 
 
-app = FastAPI(title="Course QA Agent API", version="3.0")
+app = FastAPI(title="Course QA Agent API", version=APP_VERSION)
 
 # 注册所有中间件（请求日志、限流、CORS、全局异常处理）
 setup_middlewares(app)
