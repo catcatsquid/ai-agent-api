@@ -4,11 +4,15 @@
   · /kb/add、/kb/add-directory 的路径包含性校验（任意文件入库链）
   · /kb/browse 仍然只允许 data/
   · 工具产出不再被当作正文流式播给前端（泄题通道）
+  · 进度事件（"思维过程"面板）只给语义标签，不回显工具返回内容
 """
+import json
+
 import pytest
 from unittest.mock import patch
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from course_agent import quiz_service
 from course_agent.server import resolve_within_data, sse_content_event, DATA_ROOT, app
 from fastapi.testclient import TestClient
 
@@ -171,3 +175,66 @@ class TestSseContentEvent:
 
     def test_empty_content_is_skipped(self):
         assert sse_content_event(AIMessage(content="")) is None
+
+
+class TestProgressSummaryIsALabelNotThePayload:
+    """"思维过程"面板的进度摘要只能是**语义标签**，不能回显工具返回内容
+
+    三条产品约束同时要求这一点：
+      1. 课件是从 PDF 抽出来的，文字很乱，不适合直接给学生看；
+      2. 出题阶段的题面与答案要藏到学生答完再核对；
+      3. 批改 / 讲题的结果里带参考答案。
+
+    原来两个 BOT 端点都是 `content[:120]` 原样截断 —— 上面三类都会出现在面板里。
+    手写助教侧本来就是按工具名给标签，现在两处统一走 quiz_service.tool_summary。
+    """
+
+    _SECRETS = ("题干原文", "参考答案是D", "题面原文")
+
+    @pytest.mark.parametrize("tool,payload", [
+        ("explain_question",
+         {"questions": [{"text": "题干原文", "answer": "参考答案是D"}]}),
+        ("grade_answers",
+         {"total": 1, "accuracy": "0/1", "correct_answer": "参考答案是D"}),
+        ("get_paper_questions",
+         {"paper": "2025OS", "progress": "第1组",
+          "questions": [{"text": "题面原文", "answer": "D"}]}),
+    ])
+    def test_label_never_echoes_the_payload(self, tool, payload):
+        label = quiz_service.tool_summary(tool, json.dumps(payload, ensure_ascii=False))
+        for secret in self._SECRETS:
+            assert secret not in label, f"{tool} 的摘要回显了内容：{label!r}"
+
+    def test_accepts_both_dict_and_json_string(self):
+        """助教侧传 dict，BOT 侧传 ToolMessage.content（JSON 字符串）—— 两种都要支持"""
+        assert quiz_service.tool_summary("list_papers", {"total_papers": 3}) == "3 份试卷"
+        assert quiz_service.tool_summary("list_papers", '{"total_papers": 3}') == "3 份试卷"
+
+    def test_plain_text_result_degrades_to_a_fixed_label(self):
+        """拿不到结构化计数时给固定标签，也**不许**截断原文"""
+        text = "[05-死锁.pdf · 相关度=0.9]\n死锁的四个必要条件……"
+        label = quiz_service.tool_summary("search_knowledge", text)
+        assert "死锁的四个必要条件" not in label
+        assert label == "检索完成"
+
+    def test_unknown_tool_degrades_to_a_plain_label(self):
+        """不认识的工具退化成"完成"——不能为了信息量退回成回显内容"""
+        assert quiz_service.tool_summary("some_new_tool", {"secret": "别播我"}) == "完成"
+
+    def test_both_stream_endpoints_use_the_shared_label(self):
+        """接线也要守住：4 处进度事件都得走共享实现
+
+        写这个测试时才发现自己**数漏了一处** —— /qa/stream 的 react 分支
+        （node == "tools"）也有一份一模一样的 content[:120] 截断。
+        断言写成"不许出现任何 content 截断"而不是"数够 3 处"，
+        就是为了让下一个漏掉的写法无处藏身。
+        """
+        import inspect
+
+        from course_agent import server
+
+        src = inspect.getsource(server)
+        for bad in ("content[:120]", "content[:100]", "content_preview"):
+            assert bad not in src, f"又出现了「原样截断工具返回内容」的写法：{bad}"
+        assert src.count("quiz_service.tool_summary") >= 4, \
+            "4 处进度事件（/qa/ask、/qa/stream 的 executor 与 tools、/chat/stream 的两处）都应走它"

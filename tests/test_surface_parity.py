@@ -9,6 +9,7 @@
   2. 同名能力必须走**同一份实现**（用同一个 quiz_service 函数，而不是各写一份）。
 """
 import inspect
+import json
 import re
 from pathlib import Path
 
@@ -22,6 +23,24 @@ ROOT = Path(__file__).resolve().parent.parent
 INTENTIONAL_BOT_ONLY = {"web_search", "get_course_info"}
 # 同一个能力在两个面上叫不同名字
 ALIASES = {"search_knowledge": "search_knowledge_base"}
+
+# 造假数据的课程结构（验证"两头走同一份实现"用；必须**按课程隔离**，
+# 否则 section_index("操作系统") 也能查到计网课件，纠偏结果会失真）
+_FAKE_PPTS_BY_COURSE = {
+    "操作系统": [
+        {"source": "05-死锁.pdf", "chapter": "死锁", "chunks": 20},
+    ],
+    "计算机网络": [
+        {"source": "Chapter5-Transport Layer.pdf", "chapter": "Transport Layer", "chunks": 30},
+        {"source": "Chapter4-Network Layer.pdf", "chapter": "Network Layer", "chunks": 25},
+    ],
+}
+
+
+def _patch_section_index(monkeypatch):
+    monkeypatch.setattr(
+        quiz_service, "section_index",
+        lambda course="": {"ppt": list(_FAKE_PPTS_BY_COURSE.get(course, []))})
 
 
 def _bot_tools() -> set:
@@ -72,8 +91,40 @@ class TestSharedImplementation:
         # 关键：两头都不许自己再写一套"按章找课件 / 分段读"的逻辑
         for mod in (tools, tutor_agent):
             src = inspect.getsource(mod)
-            assert "def find_chapter" not in src, f"{mod.__name__} 自己写了章节查找"
-            assert "def section_chunks" not in src, f"{mod.__name__} 自己写了分段读取"
+            for bad in ("find_chapter", "section_chunks"):
+                # 两个名字都要查：`def _find_chapter` 这种**加下划线的变体**曾经
+                # 躲过了这里（原来只判 "def find_chapter"，字符串不匹配），
+                # 于是 tools.py 里一份不带中英对照表的旧副本长期没被发现，
+                # BOT 侧对计网章节（传输层→Chapter5）纠偏失效。
+                assert f"def {bad}" not in src and f"def _{bad}" not in src, \
+                    f"{mod.__name__} 自己写了 {bad}（应走 quiz_service 的共享实现）"
+
+    @pytest.mark.parametrize("chapter_in_course, expected", [
+        ("传输层", "计算机网络"),
+        ("网络层", "计算机网络"),
+        ("死锁", "操作系统"),
+    ])
+    def test_chapter_in_course_field_is_corrected_identically(
+            self, monkeypatch, chapter_in_course, expected):
+        """模型把**章名**填进 course 时，两头必须纠成同一个课程名
+
+        实测：计网课件是英文名（Chapter5-Transport Layer.pdf），学生说的是中文
+        （传输层）。quiz_service.find_chapter 为此带了一张中英对照表，
+        而 tools.py 里那份不带表的旧副本让 BOT 侧纠不过来 ——
+        书签的 course 字段会留成"传输层"，于是两头的学习记录对不上。
+        """
+        _patch_section_index(monkeypatch)
+        args = {"course": chapter_in_course, "section": "测试小节", "mode": "学习"}
+
+        bot = json.loads(tools.record_study_position.invoke(dict(args)))["recorded"]
+        tutor = tutor_agent.TOOL_HANDLERS["record_study_position"](
+            dict(args), {})["recorded"]
+
+        assert bot["course"] == tutor["course"], (
+            f"两头纠偏结果不一致（输入 course={chapter_in_course!r}）："
+            f"BOT={bot['course']!r}  助教={tutor['course']!r}")
+        assert bot["course"] == expected
+        assert bot["chapter"] == chapter_in_course, "章名应落到 chapter 字段"
 
     def test_study_contract_comes_from_the_shared_layer(self):
         """学习/复习的呈现契约（含模式差异）只能是 quiz_service 那一份"""

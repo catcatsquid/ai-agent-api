@@ -160,6 +160,41 @@ class TestDrillCursorSurvivesRestart:
         isolated_cursor_file.write_text("{ 坏掉的 json", encoding="utf-8")
         assert nodes._load_cursor("thread-a") == {}
 
+    def test_study_only_turn_after_restart_keeps_the_drill_cursor(
+            self, isolated_cursor_file, monkeypatch):
+        """重启后只更新学习书签，不能把磁盘上的刷题游标抹掉
+
+        两个真源（state["session"] + 落盘 cursor）的**读写口径必须一致**。
+        原来写入时的合并基线只取 state：重启后 state 是空的，这一轮若只调了
+        read_section（没有 get_paper_questions），新 session 里就只剩 study ——
+        而 _save_cursor 是整条替换，磁盘上的 paper / next_group_index 被抹掉，
+        "继续下一组"随即失效（正是这套落盘机制本来要修的那个症状）。
+        """
+        before = {"paper": "2025年秋操作系统期末试题（回忆版）", "type": "选择题",
+                  "group_index": 3, "next_group_index": 4, "qids": ["Q1", "Q2"]}
+        nodes._save_cursor("thread-restart", before)
+
+        study_line = ("[study-state] course=操作系统 source=05-死锁.pdf "
+                      "read=3 next_offset=15")
+        monkeypatch.setattr(
+            nodes, "safe_tool_invoke",
+            lambda tool, args, tool_name=None: study_line)
+
+        state = {
+            "messages": [nodes.HumanMessage(content="继续讲")],
+            "plan": [{"tool": "read_section",
+                      "args": {"course": "操作系统", "section": 1}}],
+            "session": {},          # 重启后 state 里没有游标
+        }
+        nodes.executor_node(state, {"configurable": {"thread_id": "thread-restart"}})
+
+        after = nodes._load_cursor("thread-restart")
+        assert after.get("paper") == before["paper"], (
+            f"刷题游标被抹掉了：重启前 {before}，这一轮之后 {after}")
+        assert after.get("next_group_index") == 4
+        assert (after.get("study") or {}).get("course") == "操作系统", \
+            "学习书签本身也要记下来"
+
     def test_planner_recovers_cursor_after_restart(self, isolated_cursor_file, monkeypatch):
         """核心用例：state 里没有游标（=刚重启），planner 必须从磁盘恢复它
 

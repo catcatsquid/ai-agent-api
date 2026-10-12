@@ -1213,7 +1213,8 @@ def process_message(session_id: str | None, user_input: str):
                 except Exception as e:
                     result = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
 
-            yield {"type": "tool", "tool": name, "result": _tool_summary(name, result)}
+            yield {"type": "tool", "tool": name,
+                   "result": quiz_service.tool_summary(name, result)}
 
             session["messages"].append({
                 "role": "tool",
@@ -1265,26 +1266,3 @@ def _tool_label(name: str, args: dict) -> str:
     if name == "record_practice":
         return "记录练习"
     return name
-
-
-def _tool_summary(name: str, result) -> str:
-    """给前端"思维过程"面板用的一句话摘要（不暴露答案）"""
-    if not isinstance(result, dict):
-        return "完成"
-    if result.get("error"):
-        return f"出错：{str(result['error'])[:60]}"
-    if name == "list_papers":
-        return f"{result.get('total_papers', 0)} 份试卷"
-    if name == "get_paper_questions":
-        return f"{result.get('paper', '')} {result.get('progress', '')}"
-    if name == "prepare_custom_quiz":
-        n = len(result.get("material") or [])
-        return f"出题素材 {n} 段（{result.get('topic', '')}）"
-    if name == "explain_question":
-        n = len(result.get("questions") or [])
-        return f"取出 {n} 道题的题面与参考要点"
-    if name == "grade_answers":
-        return f"批改 {result.get('total', 0)} 题，正确 {result.get('accuracy', '-')}"
-    if name == "search_knowledge_base":
-        return f"命中 {result.get('count', 0)} 个片段"
-    return "完成"
