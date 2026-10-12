@@ -51,6 +51,9 @@ node_modules/
 # 题库预览（生成物；内容随题库变化，不入库。当前那份已随两份卷子的删除一起删掉）
 docs/题目库预览.html
 
+# 压测报告（生成物，每次跑 locust 都会重写 —— README 里的命令就输出到这里）
+docs/benchmark_report.html
+
 # 对话导出（/chat/export 落地目录，用户自己的对话记录，不入库）
 exports/
 
