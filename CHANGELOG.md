@@ -12,6 +12,32 @@
 
 ## [未发布]
 
+（下一次改动先写在这里，发版时移到下面并补上版本号与日期）
+
+## [1.0.1] - 2026-10-12
+
+一轮代码审查后的修复：4 个真实缺陷 + 一处重复实现清理。都不改变对外接口。
+
+### 修复
+
+- **进度事件不再回显工具返回内容**（共 5 处：`/qa/ask`、`/qa/stream` 的 executor 与
+  tools 两个分支、`/chat/stream` 的同两处）。原来都是 `content[:120]` 原样截断，
+  会把三类不该出现在「思维过程」面板里的东西播出去：课件原文（PDF 抽出来的乱文字）、
+  出题阶段的题面、批改结果里的参考答案。现在统一走 `quiz_service.tool_summary`，
+  只给语义标签 —— 手写助教侧本来就是这么做的，这次是把它下沉成共享实现。
+  顺带修掉 `/qa/ask` 里连工具名都丢了（写死 `"tool": "executed"`）的问题。
+- **BOT 侧章节纠偏失效**：`tools.py` 里 `find_chapter` 有一份旧副本，
+  不带中英对照表（`传输层 → transportlayer`）。模型把章名填进 `course` 时
+  （实测会发生），BOT 侧纠不回「计算机网络」而助教侧能纠 ——
+  书签的课程字段留错，两头的学习记录对不上。改为调用 `quiz_service.find_chapter`。
+- **重启后只更新学习书签会抹掉磁盘上的刷题游标**：`executor_node` 组装新 session 时
+  合并基线只取 `state["session"]`（重启后为空），而 `_save_cursor` 是整条替换 ——
+  于是磁盘上的卷名/组号被清掉，「继续下一组」随即失效（正是这套落盘机制本来要修的症状）。
+  改为与读取口径一致：state 优先、磁盘兜底。
+- **前端不持久化 `thread_id`**：刷新页面或切换对话再切回来，前端历史还在，
+  但请求不带 `thread_id`，后端开新会话 —— 界面上有上下文、模型却一无所知。
+  现在 `thread_id` 存在对话对象里并随 `localStorage` 持久化，`loadChat` 时恢复。
+
 ### 变更
 
 - **文档移出仓库**：`docs/` 原有的文档与报告（项目总览、架构审查与代码阅读地图、
@@ -19,6 +45,19 @@
   已移到仓库外暂存，不再随仓库分发。原因：这批文档多为 **AI 辅助整理成稿**，
   需要逐篇核实结论与措辞后再决定哪些放回。已核实的内容会逐步迁回；
   期间**以代码与测试为准**（见 [docs/README.md](docs/README.md)）。
+- **清掉 `tools.py` 里的重复实现与死代码**：`_as_int`（零引用）、
+  `_course_of`（零引用）、`_course_ppt_list`（只被那份旧副本用）、`_find_chapter`。
+  该文件 619 → 490 行，回到它自己 docstring 里写的"只做薄适配"。
+- **删掉前端 `case 'token'` 死分支**：全仓库没有任何地方发出 `type: "token"`，
+  而且它和 `case 'content'` 的代码逐行相同。
+
+### 测试
+
+- 新增 11 条守卫：两头纠偏一致性（参数化 3 例）、"tools.py 不许自己实现章节查找"、
+  重启后游标不被抹掉、进度摘要不回显内容（参数化 3 例 + 三种降级路径）、
+  以及两个端点的接线检查。
+- 加固一条**本来失效的守卫**：`assert "def find_chapter" not in src` 挡不住
+  `def _find_chapter`（多一个下划线字符串就不匹配），正是它让上面那条分叉长期没被发现。
 
 ## [1.0.0] - 2026-10-12
 
@@ -117,5 +156,6 @@
 
 ---
 
-[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.0.0...HEAD
+[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.0.1
 [1.0.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.0.0

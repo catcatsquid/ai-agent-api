@@ -28,7 +28,7 @@ from course_agent.graph import graph, react_graph
 from course_agent.auth import any_auth, create_jwt
 from course_agent.logger import logger
 from course_agent.middleware import setup_middlewares
-from course_agent import tutor_agent, qbank
+from course_agent import tutor_agent, qbank, quiz_service
 from config import APP_VERSION
 from rag_tool import get_knowledge_base
 
@@ -237,7 +237,13 @@ def qa_ask(req: QueryRequest, auth: dict = Depends(any_auth)):
     tool_calls = []
     for msg in messages:
         if isinstance(msg, ToolMessage):
-            tool_calls.append({"tool": "executed", "content_preview": msg.content[:100]})
+            # 只给语义标签，不回显工具返回内容（同 /qa/stream 的进度事件）。
+            # 原来这里连工具名都没了（写死 "tool": "executed"），只剩一段原文预览。
+            tool_name = getattr(msg, "name", "") or "工具"
+            tool_calls.append({
+                "tool": tool_name,
+                "summary": quiz_service.tool_summary(tool_name, msg.content),
+            })
         elif isinstance(msg, AIMessage) and msg.tool_calls:
             for tc in msg.tool_calls:
                 tool_calls.append({"tool": tc["name"], "args": tc["args"]})
@@ -326,11 +332,10 @@ def qa_stream(req: QueryRequest):
                     elif node_name == "executor":
                         msgs = _tool_result_messages(node_output.get("messages", []))
                         for i, msg in enumerate(msgs):
-                            content = msg.content if hasattr(msg, "content") else str(msg)
-                            summary = content[:120].replace("\n", " ")
-                            if len(content) > 120:
-                                summary += "..."
                             tool_name = getattr(msg, "name", "") or f"工具{i+1}"
+                            # 只给"干了什么"的语义标签，**不回显工具返回内容**：
+                            # 课件是 PDF 抽出来的乱文字，出题/批改结果还带答案
+                            summary = quiz_service.tool_summary(tool_name, msg.content)
                             yield _sse({
                                 "type": "node",
                                 "node": "executor_step",
@@ -359,11 +364,8 @@ def qa_stream(req: QueryRequest):
                     elif node_name == "tools":
                         msgs = _tool_result_messages(node_output.get("messages", []))
                         for i, msg in enumerate(msgs):
-                            content = msg.content if hasattr(msg, "content") else str(msg)
-                            summary = content[:120].replace("\n", " ")
-                            if len(content) > 120:
-                                summary += "..."
                             tool_name = getattr(msg, "name", "") or f"工具{i+1}"
+                            summary = quiz_service.tool_summary(tool_name, msg.content)
                             yield _sse({
                                 "type": "node",
                                 "node": "tool_step",
@@ -443,11 +445,8 @@ async def chat_stream_frontend(req: QueryRequest):
                         elif node_name == "executor":
                             msgs = _tool_result_messages(node_output.get("messages", []))
                             for i, msg in enumerate(msgs):
-                                content = msg.content if hasattr(msg, "content") else str(msg)
-                                summary = content[:120].replace("\n", " ")
-                                if len(content) > 120:
-                                    summary += "..."
                                 tool_name = getattr(msg, "name", "") or f"工具{i+1}"
+                                summary = quiz_service.tool_summary(tool_name, msg.content)
                                 detail_event = {
                                     "type": "node", "node": "executor_step",
                                     "step": i + 1, "total": len(msgs),
@@ -470,11 +469,8 @@ async def chat_stream_frontend(req: QueryRequest):
                         elif node_name == "tools":
                             msgs = _tool_result_messages(node_output.get("messages", []))
                             for i, msg in enumerate(msgs):
-                                content = msg.content if hasattr(msg, "content") else str(msg)
-                                summary = content[:120].replace("\n", " ")
-                                if len(content) > 120:
-                                    summary += "..."
                                 tool_name = getattr(msg, "name", "") or f"工具{i+1}"
+                                summary = quiz_service.tool_summary(tool_name, msg.content)
                                 detail_event = {
                                     "type": "node", "node": "tool_step",
                                     "step": i + 1, "total": len(msgs),

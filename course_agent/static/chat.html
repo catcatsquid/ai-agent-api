@@ -399,6 +399,7 @@ id,
 title: '新对话',
 messages: [],
 appMode: currentAppMode,
+threadId: null,   // 后端会话 id（收到 start 事件时写入并持久化）
 createdAt: Date.now(),
 };
 chats.unshift(chat);
@@ -410,11 +411,16 @@ function loadChat(id) {
 const chat = getChat(id);
 if (!chat) return;
 currentChatId = id;
-currentThreadId = null;
+// 恢复这条对话自己的 thread —— 否则切回来/刷新后，前端还显示着历史消息，
+// 但请求不带 thread_id，后端会开一个新会话：界面上有上下文、模型却一无所知。
+// （react 会话的 thread 在刷新后无法复用：模式回到默认 plan，而后端两张图
+//   各有独立 checkpointer —— 找不到就退化成新会话，不会报错。既有限制。）
+currentThreadId = chat.threadId || null;
 currentTutorSessionId = null;
 renderMessages(chat.messages);
 document.getElementById('chat-title').textContent = chat.title;
-document.getElementById('thread-id-display').textContent = '';
+document.getElementById('thread-id-display').textContent =
+currentThreadId ? ` #${currentThreadId.substring(0, 8)}` : '';
 updateStatus('idle', '就绪');
 renderChatList();
 document.getElementById('input').focus();
@@ -799,13 +805,22 @@ isStreaming = false;
 document.getElementById('btn-send').disabled = false;
 }
 }
+// 收到后端给的 thread/session 后，除了记住在内存里，还要**持久化到这条对话上** ——
+// 否则刷新页面或切到别的对话再切回来，前端历史还在、后端上下文却断了。
+function rememberThreadId(tid) {
+if (!tid) return;
+currentThreadId = tid;
+document.getElementById('thread-id-display').textContent = ` #${tid.substring(0, 8)}`;
+const chat = currentChatId ? getChat(currentChatId) : null;
+if (chat && chat.threadId !== tid) {
+chat.threadId = tid;
+saveChats();
+}
+}
 function handleSSEEvent(evt, currentAnswer, setAnswer) {
 switch (evt.type) {
 case 'start':
-if (evt.thread_id) {
-currentThreadId = evt.thread_id;
-document.getElementById('thread-id-display').textContent = ` #${evt.thread_id.substring(0, 8)}`;
-}
+rememberThreadId(evt.thread_id);
 if (evt.session_id) {
 if (currentAppMode === 'tutor') currentTutorSessionId = evt.session_id;
 }
@@ -848,10 +863,6 @@ if (evt.message) {
 addThinkingStep('planned', evt.message);
 }
 break;
-case 'token':
-appendToBubble(evt.content);
-setAnswer(currentAnswer + evt.content);
-break;
 case 'content':
 appendToBubble(evt.content);
 setAnswer(currentAnswer + evt.content);
@@ -866,10 +877,7 @@ if (evt.result) addThinkingStep('tool', `   ${evt.result}`);
 break;
 case 'done':
 if (evt.answer) setAnswer(evt.answer);
-if (evt.thread_id) {
-currentThreadId = evt.thread_id;
-document.getElementById('thread-id-display').textContent = ` #${evt.thread_id.substring(0, 8)}`;
-}
+rememberThreadId(evt.thread_id);
 if (evt.session_id) {
 if (currentAppMode === 'tutor') currentTutorSessionId = evt.session_id;
 }

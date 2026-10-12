@@ -834,6 +834,77 @@ def study_guide(mode: str = "学习") -> str:
     )
 
 
+def tool_summary(name: str, result) -> str:
+    """某次工具调用"干了什么"的一句话说明 —— 给前端的「思维过程」面板用
+
+    ## 只许返回**语义标签**，绝不许回显工具返回的内容
+
+    这是两个运行面共用的实现，而且它守着一个明确的产品约束。回显内容会同时踩三条：
+
+      1. 课件是从 PDF 抽出来的，**文字很乱**，不适合直接给学生看；
+      2. **出题阶段**的题面与答案要对学生隐藏（答完再核对）；
+      3. **批改 / 讲题**的结果里带参考答案。
+
+    原来 BOT 侧是 `content[:120]` 原样截断，上面三类都会出现在"思维过程"里；
+    手写助教侧的这份是按工具名给标签，才是对的。现在统一走这里。
+
+    新增工具时**只加标签分支**；不认识的工具退化成"完成"，
+    不要为了"信息量"退回成回显内容。
+
+    Args:
+        name: 工具名（两个运行面的名字都在这里归一化，如 search_knowledge /
+              search_knowledge_base）
+        result: 工具返回值。可能是 dict（助教侧的 handler），
+                也可能是 JSON 字符串或纯文本（BOT 侧 ToolMessage.content）
+    """
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except (TypeError, ValueError):
+            result = None
+
+    if isinstance(result, dict) and result.get("error"):
+        return f"出错：{str(result['error'])[:60]}"
+
+    if not isinstance(result, dict):
+        # 这类工具返回的是"给人读的文本"而不是 JSON（如 search_knowledge
+        # 返回格式化后的片段），拿不到结构化计数 —— 只给固定标签，不复述内容
+        return {
+            "search_knowledge": "检索完成",
+            "search_knowledge_base": "检索完成",
+            "web_search": "联网搜索完成",
+        }.get(name, "完成")
+
+    if name in ("search_knowledge", "search_knowledge_base"):
+        # 助教侧的 handler 返回带 count 的 dict；BOT 侧的 search_knowledge 返回
+        # 格式化文本，会在下面那个非 dict 分支里退化成固定标签
+        return f"命中 {result.get('count', 0)} 个片段"
+    if name == "list_papers":
+        return f"{result.get('total_papers', 0)} 份试卷"
+    if name == "get_paper_questions":
+        return f"{result.get('paper', '')} {result.get('progress', '')}".strip() or "取题完成"
+    if name == "prepare_custom_quiz":
+        n = len(result.get("material") or [])
+        return f"出题素材 {n} 段（{result.get('topic', '')}）"
+    if name == "explain_question":
+        return f"取出 {len(result.get('questions') or [])} 道题的题面与参考要点"
+    if name == "grade_answers":
+        return f"批改 {result.get('total', 0)} 题，正确 {result.get('accuracy', '-')}"
+    if name == "get_practice_stats":
+        return "练习统计已取出"
+    if name == "record_practice":
+        return "已记录一次练习"
+    if name == "list_course_sections":
+        return "资料地图已取出"
+    if name == "read_section":
+        return "已读取课件原文"
+    if name == "record_study_position":
+        return "已记下学习位置"
+    if name == "get_course_info":
+        return "知识库统计已取出"
+    return "完成"
+
+
 def study_read(course: str = "", chapter: str = "", section=0, source: str = "",
                offset=0, limit=15, mode: str = "学习") -> dict:
     """按课件原始顺序读一节 —— 两个运行面共用的实现

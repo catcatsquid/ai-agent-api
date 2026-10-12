@@ -21,7 +21,6 @@ Week 4 工具调用能力 + 刷题扩展能力。
 """
 
 import json
-import re
 
 import requests
 from langchain_core.tools import tool
@@ -149,56 +148,6 @@ def _format_hits(hits: list) -> str:
         rel = h.get("sim") if h.get("sim") is not None else h.get("score", 0)
         parts.append(f"[{h.get('source', '?')} · 相关度={rel:.3f}]\n{h.get('text', '')}")
     return "\n\n".join(parts)
-
-
-def _as_int(v, default: int) -> int:
-    """容错取整数（模型常传字符串、负数、甚至"2节"这种）"""
-    if isinstance(v, bool):
-        return default
-    if isinstance(v, (int, float)):
-        return int(v)
-    m = re.search(r"-?\d+", str(v or ""))
-    return int(m.group(0)) if m else default
-
-
-def _course_ppt_list(course: str) -> list:
-    idx = quiz_service.section_index(course)
-    return idx.get("ppt") or []
-
-
-def _course_of(source: str) -> str:
-    """反查某份资料属于哪门课（知识库 metadata 里没有课程字段，只能按目录反查）"""
-    for c in ("操作系统", "计算机网络"):
-        try:
-            if source in set(quiz_service.course_sources(c)):
-                return c
-        except Exception:
-            continue
-    return ""
-
-
-def _find_chapter(course: str, chapter: str):
-    """按章名找课件（学生说"死锁那一章"时用）
-
-    匹配优先级：章节名完全相等 → 互相包含 → 出现在文件名里。
-    """
-    want = (chapter or "").strip()
-    if not want:
-        return None
-    ppts = _course_ppt_list(course)
-    norm = lambda s: re.sub(r"[\s\-_·、,，。()（）]", "", str(s or "")).lower()
-    w = norm(want)
-    for p in ppts:
-        if norm(p["chapter"]) == w:
-            return p
-    for p in ppts:
-        c = norm(p["chapter"])
-        if w and (w in c or c in w):
-            return p
-    for p in ppts:
-        if w and w in norm(p["source"]):
-            return p
-    return None
 
 
 @tool
@@ -541,11 +490,13 @@ def record_study_position(course: str, section: "str | int" = "", mode: str = "�
     """
     # 纠偏：实测模型会把**章名**填进 course（course="死锁"）。
     # 课程名是有限集合，不是就直接当章名处理，避免污染书签里的课程字段。
+    # 走 quiz_service 的共享实现 —— 它带中英对照表（传输层→transportlayer），
+    # 这里原来有一份不带表的副本，导致 BOT 侧对计网章节纠不过来（已修，见 test_surface_parity）。
     known = ("操作系统", "计算机网络")
     course = (course or "").strip()
     if course and course not in known:
         for c in known:
-            if _find_chapter(c, course):
+            if quiz_service.find_chapter(c, course):
                 chapter = chapter or course
                 course = c
                 break

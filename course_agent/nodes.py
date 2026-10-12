@@ -724,10 +724,17 @@ def executor_node(state: AgentState, config=None) -> dict:
 
     # 从工具结果里抽出"刷题进度"存进 state —— 这是 Plan 图里游标唯一的落脚点
     # （planner 会把 ToolMessage 从历史里剔掉，所以游标没法"在带内"传递）。
-    new_session = _extract_drill_session(state.get("session") or {},
+    #
+    # 合并基线必须**和 planner 的读取口径一致**（state 优先、磁盘兜底，见 planner_node）。
+    # 原来这里只取 state：重启后 state 是空的，这一轮若只更新了学习书签，
+    # 新 session 里就只有 study —— 而 _save_cursor 是整条替换，
+    # 磁盘上原来的 paper / next_group_index 会被抹掉，"继续下一组"随即失效
+    # （正是这套落盘机制本来要修的那个症状）。
+    base_session = state.get("session") or _load_cursor(_thread_id(config))
+    new_session = _extract_drill_session(base_session,
                                         state.get("plan") or [], results)
     study = _extract_study_session(new_session if new_session is not None
-                                   else (state.get("session") or {}),
+                                   else base_session,
                                    state.get("plan") or [], results)
     if study is not None:
         new_session = study
