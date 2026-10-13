@@ -10,6 +10,58 @@
   （原因见 [docs/README.md](docs/README.md)）。
   两者刻意不重复 —— 同一个事实写两遍，最后必然有一处过期。
 
+## [未发布]
+
+（下一次改动先写在这里，发版时移到下面并补上版本号与日期）
+
+## [1.3.0] - 2026-10-13
+
+**把服务端会话真正用起来**：前端现在能取回"服务端存着、本地没有"的会话 ——
+换设备、清缓存之后不再等于会话全丢。
+
+### 变更
+
+- 新增 **`GET /chat/conversations/{thread_id}?mode=plan|react`**：取回一个会话里
+  **适合展示**的消息，供前端恢复历史。只返回"学生问的"和"模型答的"，
+  三类一律过滤：
+  - `SystemMessage`（含压缩摘要 `SUMMARY_MARK`）—— 内部产物，不是谁的原话；
+  - `ToolMessage` —— 检索原文 / 参考答案 / 批改 JSON，**正是要藏起来的东西**；
+  - 带 `tool_calls` 的 `AIMessage` —— 内部协议声明（ReAct 的中间轮也是）。
+
+  `mode` 必须传对：读错图返回 **404**，而不是静默给一份空历史
+  （1.0.2 修的就是这类"静默失忆"）。
+
+- 前端启动时导入服务端会话（`importServerConversations`）：把"服务端有、本地没有"的
+  补进 `chats`，之后就走原来的 `loadChat` 路径（threadId 与 reasoningMode 都在，
+  能直接接着聊）。刻意做得很保守：
+  - 拿不到就静默放弃 —— 离线时本地功能必须照旧可用；
+  - 单条详情失败不影响其它会话；
+  - 本地已有同 thread 的跳过（连详情都不请求）；
+  - 没有可展示消息的不导入（避免导入出一条空对话）；
+  - 正在流式回答时不发任何请求。
+
+- 侧栏用 `☁` 标出从服务端导入的会话。
+- **删掉的会话不再被导回来**：`dismissed_threads` 记一笔 thread_id ——
+  否则用户删了它、下次加载又出现，看起来像"删不掉"。
+
+### 测试
+
+- `tests/test_conversations.py` 增加详情端点的 7 条，其中最关键的一条是
+  **工具结果绝不通过这个接口回传**（检索原文 / 参考答案 / 批改 JSON）。
+- 新增 `tests/js/server_conversations_test.mjs`（18 条）：读**真实页面**抽函数进 vm，
+  桩 `fetch`/`localStorage`，覆盖正常导入、不重复导、删过的不再导、网络失败静默放弃、
+  单条失败不影响其它、空消息跳过、流式中不打扰。
+  **变异验证**：把导入时的 `threadId` 去掉 → 2 条断言变红。
+- `test_frontend_auth.py` 接入这个 node 测试，CI 会自动跑到。
+- 全量 **625 passed**（原 617）；JS：auth_block 52/0、chat_context 14/0、新增 18/0。
+
+### 顺手修掉测试工具里的一个坑
+
+`tests/js/*.mjs` 里"按花括号抽函数"的辅助函数**会把 `async` 丢掉** ——
+抽出来的函数体里有 `await`，于是直接
+`SyntaxError: await is only valid in async functions`。
+改成保留 `async` 前缀。（另外两个文件抽的都是同步函数，所以之前一直没暴露。）
+
 ## [1.2.0] - 2026-10-13
 
 把 checkpointer 换成落盘的 SQLite —— **会话状态第一次活过进程重启**，
@@ -302,7 +354,8 @@ Python **605 passed**（原 595 + 新契约测试 3 条 + 契约/守卫相关新
 
 ---
 
-[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.2.0...HEAD
+[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.3.0
 [1.2.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.2.0
 [1.1.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.1.0
 [1.0.2]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.0.2

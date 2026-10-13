@@ -54,6 +54,17 @@ def test_frontend_chat_context_persistence():
     _run_node(SCRIPT_CONTEXT, "前端对话上下文测试")
 
 
+def test_frontend_imports_server_conversations():
+    """服务端保存的会话要被导入本地，且**带全恢复所需的信息**
+
+    导入的每条必须带 threadId 与 reasoningMode：少了任一个，点进去都恢复不了
+    （模式错了 thread 就落在另一张图上，后端 404 或静默新开）。
+    另外要守住的：本地已有的不重复导、用户删过的不再导回来、拿不到就静默放弃。
+    """
+    _run_node(ROOT / "tests" / "js" / "server_conversations_test.mjs",
+              "前端服务端会话导入测试")
+
+
 def test_frontend_never_uses_native_dialogs():
     """再独立断言一次：页面里不得出现 prompt/alert/confirm 调用
 
