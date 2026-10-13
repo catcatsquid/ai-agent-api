@@ -32,7 +32,7 @@ def _optional(name: str, default: str = "") -> str:
 # 原来版本号只硬编码在 course_agent/server.py 的 FastAPI(version="3.0") 里，
 # 周围没有一句说明，也没有对应的 tag 或释出记录 —— 一个自称 3.0 的 API
 # 却查不到任何版本历史。现在收到这里，发版只改一处。
-APP_VERSION = _optional("APP_VERSION", "1.4.1")
+APP_VERSION = _optional("APP_VERSION", "1.5.0")
 
 
 # ============================================================

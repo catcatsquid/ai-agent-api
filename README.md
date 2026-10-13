@@ -134,10 +134,24 @@ ai-agent-learning/
 ### 1. 环境配置
 
 ```bash
+# 安装依赖 —— 用**锁文件**，与 CI、开发机完全一致
+pip install -r requirements.lock
+
 # 配置 .env 文件
 # 需要：智谱 GLM-4-Flash API Key + Embedding-3
 cp .env.example .env
 ```
+
+> `requirements.txt` 是人改的**直接依赖**声明；`requirements.lock` 是 uv 生成的**完整锁定**
+> （含所有传递依赖、版本精确、并带环境标记 —— 所以**同一份文件在 Windows 与 Linux 上都对**：
+> `uvloop` 带 `sys_platform != "win32"`、`pywin32` 带 `sys_platform == "win32"`）。
+>
+> 改了 `requirements.txt` 之后必须重新生成锁文件：
+> ```bash
+> pip install uv          # uv 只用于生成锁文件，本身不进锁文件（CI / 镜像里不需要它）
+> uv pip compile --universal --python-version 3.12 requirements.txt -o requirements.lock
+> ```
+> 忘了生成会被 `tests/test_lockfile.py` 直接测出来。
 
 ### 2. 构建知识库
 

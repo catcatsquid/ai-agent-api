@@ -1,5 +1,14 @@
-# 依赖版本已锁定为当前开发环境的实际版本（可复现安装）。
-# 升级依赖时请连同 tests/ 一起跑一遍：python -m pytest tests/ -q
+# 这个文件写的是我们**直接**声明/约束的依赖（人改这个）。
+#
+# 真正用于安装的是 requirements.lock —— 由 uv 生成的**完整**锁定：
+# 含所有传递依赖、版本精确、并带环境标记（所以一份文件在 Windows 与 Linux 上都对）。
+#
+#   重新生成（改完本文件后必须跑，否则会与锁文件不一致）：
+#     uv pip compile --universal --python-version 3.12 requirements.txt -o requirements.lock
+#   安装：
+#     pip install -r requirements.lock
+#
+# tests/test_lockfile.py 会检查本文件的直接依赖与锁文件一致 —— 忘了重新生成会被测出来。
 fastapi==0.141.1
 uvicorn==0.52.4
 requests==2.34.2
@@ -14,7 +23,6 @@ langgraph==1.2.11
 langgraph-checkpoint-sqlite==3.0.3
 langchain-community==0.4.2
 langchain-core==1.6.2
-langchain>=0.3.0
 pyjwt==2.13.0
 pypdf==6.18.0
 pymupdf==1.28.2
