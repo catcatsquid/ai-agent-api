@@ -418,11 +418,37 @@ class TestPromptContracts:
             assert bad not in p
 
     def test_no_state_machine_in_the_study_flow(self):
-        """用户明确说不要状态机 —— 书签是记忆，流程仍由模型决定"""
-        src = (ROOT / "course_agent/nodes.py").read_text(encoding="utf-8")
-        i = src.index("def _extract_study_session")
-        body = src[i:i + 1200]
-        # 只做"记录位置"，不做任何"第几步必须做什么"的强制推进
-        assert "recorded" in body
-        for bad in ("stage", "step_index", "must_be", "state_machine"):
-            assert bad not in body
+        """用户明确说不要状态机 —— 书签是记忆，流程仍由模型决定
+
+        这条原来截取 `_extract_study_session` 的**前 1200 字符**再做字符串匹配。
+        实测：该函数现在有 3400+ 字符，在**距函数头 3000 字符处**塞进
+        `stage` / `step_index`，全量 594 条测试依然全绿 —— 它有 65% 的内容
+        从来没被这条守卫看过。（同一个目录里另一条测试的注释就警告过
+        "别用字符数窗口当函数边界，那就是一种数据快照"，这条当时漏改了。）
+
+        现在改成按 **AST** 取该函数的标识符与字符串常量：
+        注释不参与 AST，所以既骗不过，也不受函数长度影响。
+        """
+        import ast
+
+        tree = ast.parse((ROOT / "course_agent/nodes.py").read_text(encoding="utf-8"))
+        func = next((n for n in ast.walk(tree)
+                     if isinstance(n, ast.FunctionDef)
+                     and n.name == "_extract_study_session"), None)
+        assert func is not None, "找不到 _extract_study_session"
+
+        idents, strings = set(), set()
+        for n in ast.walk(func):
+            if isinstance(n, ast.Name):
+                idents.add(n.id)
+            elif isinstance(n, ast.Attribute):
+                idents.add(n.attr)
+            elif isinstance(n, ast.arg):
+                idents.add(n.arg)
+            elif isinstance(n, ast.Constant) and isinstance(n.value, str):
+                strings.add(n.value)
+
+        assert "recorded" in strings, "函数没在读工具返回的 recorded 字段"
+        forbidden = {"stage", "step_index", "must_be", "state_machine"}
+        hit = forbidden & (idents | strings)
+        assert not hit, f"学习流程里出现了状态机味道的东西: {sorted(hit)}"

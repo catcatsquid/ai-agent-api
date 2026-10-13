@@ -17,6 +17,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "tests" / "js" / "auth_block_test.mjs"
+SCRIPT_CONTEXT = ROOT / "tests" / "js" / "chat_context_test.mjs"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("node") is None,
@@ -24,17 +25,33 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_frontend_auth_block_behaviour():
-    """两个页面的登录链路必须可用，且不依赖任何原生弹窗"""
-    assert SCRIPT.exists(), f"测试脚本不存在: {SCRIPT}"
+def _run_node(script: Path, label: str) -> str:
+    assert script.exists(), f"测试脚本不存在: {script}"
     proc = subprocess.run(
-        ["node", str(SCRIPT)],
+        ["node", str(script)],
         cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     out = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
-        pytest.fail("前端认证块测试失败：\n" + "\n".join(out.strip().splitlines()[-40:]))
+        pytest.fail(f"{label} 失败：\n" + "\n".join(out.strip().splitlines()[-40:]))
     assert "0 失败" in out, out
+    return out
+
+
+def test_frontend_auth_block_behaviour():
+    """两个页面的登录链路必须可用，且不依赖任何原生弹窗"""
+    _run_node(SCRIPT, "前端认证块测试")
+
+
+def test_frontend_chat_context_persistence():
+    """thread_id **和推理模式**都要持久化到对话上（刷新后能接着聊）
+
+    只存 thread_id 是不够的：模式决定那个 thread 属于哪张图（后端两张图各有
+    独立 checkpointer）。模式不恢复的话，刷新后模式回到默认 plan，
+    react 会话的 thread_id 在 plan 图里根本不存在 —— 后端静默当成新会话，
+    界面显示着历史、模型却一无所知。
+    """
+    _run_node(SCRIPT_CONTEXT, "前端对话上下文测试")
 
 
 def test_frontend_never_uses_native_dialogs():
@@ -62,21 +79,41 @@ def test_frontend_never_uses_native_dialogs():
             assert not re.search(pattern, stripped), f"{page} 出现了裸 {label} 调用"
 
 
+def _js_function_body(html: str, signature: str) -> str:
+    """按花括号配对切出一个完整函数体
+
+    原来用正则 `\\{(.*?)\\n\\}` —— 它假设"函数体在第一个顶格的 } 结束"，
+    而函数里只要有一个顶格的内层 `}`（比如 `if (changed) { ... }`）就会提前截断，
+    守卫的检查范围会随代码格式漂移。花括号配对不依赖缩进。
+    """
+    i = html.index(signature)
+    start = html.index("{", i)
+    depth = 0
+    for j in range(start, len(html)):
+        if html[j] == "{":
+            depth += 1
+        elif html[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return html[start:j + 1]
+    raise AssertionError(f"找不到 {signature} 的结尾花括号")
+
+
 def test_switching_reasoning_mode_resets_thread():
     """切换 Plan/ReAct 必须开新 thread
 
     两张图各用独立 checkpointer（后端已修），但如果前端切模式还沿用同一个
     thread_id，界面显示的旧历史和后端上下文就对不上 —— 用户会以为"它记得"，
     实际后端是空的。
-    """
-    import re
 
+    （模式的**持久化**由 tests/js/chat_context_test.mjs 做行为测试；
+      这里守的是"切模式要重置 thread"这条只存在于源码结构里的不变量。）
+    """
     html = (ROOT / "course_agent/static/chat.html").read_text(encoding="utf-8")
-    m = re.search(r"function setReasoningMode\([^)]*\)\s*\{(.*?)\n\}", html, re.S)
-    assert m, "找不到 setReasoningMode"
-    body = m.group(1)
+    body = _js_function_body(html, "function setReasoningMode(")
     assert "currentThreadId = null" in body, "切换推理模式没有重置 thread_id"
-    assert "currentReasoningMode = mode" in body, "没记录新的模式"
+    assert "applyReasoningMode(" in body, \
+        "没有走 applyReasoningMode（状态 / 按钮高亮 / 持久化 都在那里）"
 
 
 if __name__ == "__main__":

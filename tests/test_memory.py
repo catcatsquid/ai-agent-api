@@ -233,18 +233,49 @@ class TestCompressHistory:
         system_prompt = captured["messages"][0].content
         assert "更早聊过进程与线程" in system_prompt
 
-    def test_planner_and_synthesizer_use_the_same_history_scope(self):
-        """两个节点的历史口径要一致，摘要缓存才能命中（否则一轮调两次摘要 LLM）"""
-        import inspect
+    def test_planner_and_synthesizer_use_the_same_history_scope(self, monkeypatch):
+        """两个节点的历史口径要一致，摘要缓存才能命中（否则一轮调两次摘要 LLM）
 
+        这条原来断言的是"函数源码里出现 `not isinstance(m, ToolMessage)` 这段字符串"。
+        实测**能被注释骗过**：把真实的过滤删掉、只在注释里留下那句话，
+        全量 594 条测试依然全绿。所以改成**行为断言** —— 直接看
+        compress_history 实际收到的是哪些消息。
+        """
         from course_agent import nodes
 
-        planner_src = inspect.getsource(nodes.planner_node)
-        synth_src = inspect.getsource(nodes.synthesizer_node)
-        for src in (planner_src, synth_src):
-            assert "not isinstance(m, SystemMessage)" in src
-            assert "not isinstance(m, ToolMessage)" in src
-            assert "compress_history(" in src
+        scopes = []
+
+        def fake_compress(msgs, llm):
+            scopes.append(list(msgs))
+            return "", list(msgs)
+
+        monkeypatch.setattr(nodes, "compress_history", fake_compress)
+        monkeypatch.setattr(nodes, "safe_llm_invoke",
+                            lambda fn, messages, context=None: nodes.AIMessage(content=""))
+
+        state = {
+            "messages": [
+                nodes.SystemMessage(content="系统提示"),
+                nodes.HumanMessage(content="第一个问题"),
+                nodes.AIMessage(content="回答"),
+                nodes.ToolMessage(content="工具结果", tool_call_id="c1",
+                                  name="search_knowledge"),
+                nodes.HumanMessage(content="第二个问题"),
+            ],
+            "plan": [], "tool_rounds": 0,
+        }
+        nodes.planner_node(state, {"configurable": {"thread_id": "t-scope"}})
+        nodes.synthesizer_node(state)
+
+        assert len(scopes) == 2, f"两个节点都该调 compress_history，实际 {len(scopes)} 次"
+        for i, msgs in enumerate(scopes, 1):
+            kinds = [type(m).__name__ for m in msgs]
+            assert "SystemMessage" not in kinds, f"第 {i} 次调用没排除系统提示: {kinds}"
+            assert "ToolMessage" not in kinds, f"第 {i} 次调用没排除工具结果: {kinds}"
+        assert ([type(m).__name__ for m in scopes[0]]
+                == [type(m).__name__ for m in scopes[1]]), (
+            "planner 与 synthesizer 的历史口径不一致 —— 摘要缓存会 miss，"
+            "每轮要多跑一次摘要 LLM")
 
 
 # ============================================================
