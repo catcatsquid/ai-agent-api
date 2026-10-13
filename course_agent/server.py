@@ -623,6 +623,35 @@ def chat_conversation_detail(thread_id: str,
     }}
 
 
+@app.delete("/chat/conversations/{thread_id}")
+def delete_conversation(thread_id: str,
+                        mode: str = Query("plan", pattern="^(plan|react)$")):
+    """删除服务端保存的这个会话（连同它的全部 checkpoint）
+
+    为什么必须由前端显式调用：本地从 localStorage 删掉**不等于**服务端也没了 ——
+    下次加载又会被导入回来，用户看到的是"删不掉"。
+
+    顺带就是清理策略：checkpoint 是 append-only（每轮对话多一行），
+    `SqliteSaver.delete_thread` 按 thread 整条清掉（checkpoints 与 writes 两张表），
+    所以"用户删掉不要的会话"本身就完成了回收 —— 这个个人项目不需要再加定时任务。
+
+    已经不存在时返回 404（而不是假装成功）：前端把 404 也当"已经干净了"处理，
+    因为它真正关心的是"服务端别再还回来"。
+    """
+    saver = react_checkpointer if mode == "react" else plan_checkpointer
+    if not _thread_exists(saver, thread_id):
+        raise HTTPException(status_code=404, detail=f"没有这个会话（mode={mode}）")
+    try:
+        saver.delete_thread(thread_id)
+    except Exception as e:
+        logger.warning("会话删除失败 %s: %s", thread_id, e)
+        raise HTTPException(status_code=503, detail="会话暂时删不掉")
+    logger.info("已删除会话 %s (mode=%s)", thread_id, mode)
+    return {"code": 0, "msg": "ok", "data": {
+        "thread_id": thread_id, "mode": mode, "deleted": True,
+    }}
+
+
 # ============================================================
 # 知识库管理页面 + 接口（Week 10 新增）
 # ============================================================

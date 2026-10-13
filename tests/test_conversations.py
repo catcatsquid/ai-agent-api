@@ -200,3 +200,61 @@ class TestConversationDetail:
         body = TestClient(app).get("/chat/conversations/r1?mode=react").json()
         assert body["data"]["mode"] == "react"
         assert len(body["data"]["messages"]) == 2
+
+
+class TestConversationDeletion:
+    """删除会话（DELETE /chat/conversations/{thread_id}）
+
+    这是会话生命周期的另一半：本地从 localStorage 删掉**不等于**服务端也没了 ——
+    下次加载会被导回来，用户看到的是「删不掉」。
+    它同时就是清理策略：checkpoint 是 append-only（每轮多一行），
+    delete_thread 按 thread 整条清（checkpoints 与 writes 两张表）。
+    """
+
+    def _write(self, tid, mode="plan", n=3):
+        target = server.react_graph if mode == "react" else server.graph
+        for i in range(n):
+            target.update_state({"configurable": {"thread_id": tid}},
+                                {"messages": [HumanMessage(content=f"第{i}问",
+                                                           id=f"{tid}{i}")]})
+
+    def _count(self, saver):
+        return saver.conn.execute("SELECT COUNT(*) FROM checkpoints").fetchone()[0]
+
+    def test_delete_removes_the_thread_and_its_checkpoints(self, tmp_checkpointers):
+        plan, _ = tmp_checkpointers
+        self._write("gone")
+        assert self._count(plan) == 3, "前置条件：应该有 3 条 checkpoint"
+        resp = TestClient(app).delete("/chat/conversations/gone")
+        assert resp.status_code == 200
+        assert resp.json()["data"]["deleted"] is True
+        assert self._count(plan) == 0, "checkpoint 没被清掉（append-only 会一直涨）"
+        assert server.list_server_conversations(10) == [], "列表里还留着"
+        assert TestClient(app).get("/chat/conversations/gone").status_code == 404
+
+    def test_delete_does_not_touch_other_conversations(self, tmp_checkpointers):
+        self._write("keep-me")
+        self._write("delete-me")
+        TestClient(app).delete("/chat/conversations/delete-me")
+        rows = [r["thread_id"] for r in server.list_server_conversations(10)]
+        assert rows == ["keep-me"], f"误删了别的会话：{rows}"
+
+    def test_deleting_an_unknown_thread_is_404(self, tmp_checkpointers):
+        assert TestClient(app).delete("/chat/conversations/nope").status_code == 404
+
+    def test_delete_respects_mode(self, tmp_checkpointers):
+        """thread 在 plan 库里，用 react 去删必须 404，而且**不能真把它删了**"""
+        plan, _ = tmp_checkpointers
+        self._write("only-plan")
+        client = TestClient(app)
+        assert client.delete("/chat/conversations/only-plan?mode=react").status_code == 404
+        assert self._count(plan) == 3, "用错模式竟然把会话删掉了"
+        assert client.delete("/chat/conversations/only-plan?mode=plan").status_code == 200
+        assert self._count(plan) == 0
+
+    def test_second_delete_is_404(self, tmp_checkpointers):
+        """删两次：第二次 404 —— 前端把 404 也当「服务端已经干净了」处理"""
+        self._write("once")
+        client = TestClient(app)
+        assert client.delete("/chat/conversations/once").status_code == 200
+        assert client.delete("/chat/conversations/once").status_code == 404

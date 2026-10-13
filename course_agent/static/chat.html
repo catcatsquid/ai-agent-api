@@ -447,6 +447,8 @@ try { localStorage.setItem('dismissed_threads', JSON.stringify(dismissedThreads)
 }
 chats.splice(idx, 1);
 saveChats();
+// 服务端那份也要删掉 —— 不等它返回：删会话不该被网络卡住
+if (removed.threadId) deleteServerConversation(removed.threadId, removed.reasoningMode);
 if (currentChatId === id) {
 currentChatId = null;
 currentThreadId = null;
@@ -509,6 +511,19 @@ if (added > 0) {
 chats.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 saveChats();
 renderChatList();
+}
+}
+// 本地删掉**不等于**服务端也没了：不告诉后端的话，下次加载又会把它导回来。
+// 返回 true 表示"服务端已经干净了" —— 404 也算（本来就没有）。
+async function deleteServerConversation(threadId, mode) {
+if (!threadId) return true;
+try {
+const url = '/chat/conversations/' + encodeURIComponent(threadId)
++ '?mode=' + encodeURIComponent(mode || 'plan');
+const r = await fetch(url, { method: 'DELETE' });
+return r.ok || r.status === 404;
+} catch (e) {
+return false;   // 网络失败：本地照删，靠 dismissedThreads 兜住不再导回来
 }
 }
 async function exportChat() {

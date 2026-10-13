@@ -14,6 +14,41 @@
 
 （下一次改动先写在这里，发版时移到下面并补上版本号与日期）
 
+## [1.4.0] - 2026-10-13
+
+**会话删除做成端到端的**：前端删掉一条会话，服务端那份也真的清掉 ——
+这同时补上了 checkpoint 的清理策略（它是 append-only 的）。
+
+### 变更
+
+- 新增 **`DELETE /chat/conversations/{thread_id}?mode=plan|react`**：按 thread
+  整条清掉 `checkpoints` 与 `writes` 两张表（用 `SqliteSaver.delete_thread`，
+  实测 6 行 → 3 行）。已不存在时返回 404。
+
+  **为什么这就算清理策略**：checkpoint 每轮对话都会多一行，长期用下去库会一直涨。
+  `delete_thread` 让"用户删掉不要的会话"本身就完成回收 —— 这个个人项目
+  不必再加定时清理任务。
+
+- 前端 `deleteChat` 会**同时**删服务端，但**不等它返回**（删会话不该被网络卡住）：
+  - 先把 thread_id 记进 `dismissedThreads` —— 万一服务端删失败，下次加载也不会导回来；
+  - 网络失败静默降级：本地照删；
+  - 404 视为"服务端已经干净了"（本来就没有）；
+  - 没有 thread 的本地对话（还没聊过）不发请求。
+
+### 测试
+
+- `test_conversations.py` 增加删除端点 5 条：删干净（checkpoint 归零 + 列表消失 +
+  详情 404）、**不误删别的会话**、未知 thread 是 404、**模式不对必须 404 且不能真删**、
+  重复删除是 404。
+- `tests/js/server_conversations_test.mjs` 扩到 31 条，新增删除路径：本地删 +
+  发出 DELETE + 带对 mode、网络失败仍本地删掉且记进 dismissed、没有 thread 不发请求、
+  404 视为已干净。
+  **变异验证**：去掉 `deleteChat` 里的服务端删除调用 → 2 条断言变红；
+  把导入的 `reasoningMode` 写死成 plan → 1 条变红。
+- `test_auth.py` 的"必须鉴权"清单加上 DELETE。
+- 全量 **631 passed**（原 625）；JS：auth_block 52/0、chat_context 14/0、
+  server_conversations 31/0。
+
 ## [1.3.0] - 2026-10-13
 
 **把服务端会话真正用起来**：前端现在能取回"服务端存着、本地没有"的会话 ——
@@ -354,7 +389,8 @@ Python **605 passed**（原 595 + 新契约测试 3 条 + 契约/守卫相关新
 
 ---
 
-[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.3.0...HEAD
+[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.4.0
 [1.3.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.3.0
 [1.2.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.2.0
 [1.1.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.1.0
