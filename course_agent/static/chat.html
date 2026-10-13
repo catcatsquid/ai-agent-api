@@ -447,8 +447,14 @@ try { localStorage.setItem('dismissed_threads', JSON.stringify(dismissedThreads)
 }
 chats.splice(idx, 1);
 saveChats();
-// 服务端那份也要删掉 —— 不等它返回：删会话不该被网络卡住
-if (removed.threadId) deleteServerConversation(removed.threadId, removed.reasoningMode);
+// 服务端那份也要删掉 —— 不等它返回：删会话不该被网络卡住。
+// 删成功后把黑名单记录收回来（见 forgetDismissed）；删失败就留着当保险。
+if (removed.threadId) {
+const tid = removed.threadId;
+deleteServerConversation(tid, removed.reasoningMode).then((done) => {
+if (done) forgetDismissed(tid);
+});
+}
 if (currentChatId === id) {
 currentChatId = null;
 currentThreadId = null;
@@ -512,6 +518,15 @@ chats.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 saveChats();
 renderChatList();
 }
+}
+// 服务端**确认**删掉之后，这条"黑名单"记录就没意义了 —— 那个 thread 已经不存在，
+// 不可能再被导回来。所以把它移掉，让这个数组只保留"服务端没能确认删除的"。
+// （不这么做的话它只增不减，虽然每条只有几十字节，但没有存在的理由。）
+function forgetDismissed(threadId) {
+const i = dismissedThreads.indexOf(threadId);
+if (i === -1) return;
+dismissedThreads.splice(i, 1);
+try { localStorage.setItem('dismissed_threads', JSON.stringify(dismissedThreads)); } catch (e) {}
 }
 // 本地删掉**不等于**服务端也没了：不告诉后端的话，下次加载又会把它导回来。
 // 返回 true 表示"服务端已经干净了" —— 404 也算（本来就没有）。

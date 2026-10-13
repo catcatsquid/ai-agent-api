@@ -14,6 +14,41 @@
 
 （下一次改动先写在这里，发版时移到下面并补上版本号与日期）
 
+## [1.4.1] - 2026-10-13
+
+一轮"自我清洁"：清掉 1.2.0 把 checkpointer 换成落盘 SQLite 时带出来的两处遗留。
+
+### 修复
+
+- **测试会往真实会话库里写垃圾**（1.2.0 引入的）。`test_graph_isolation.py` 那两条
+  "写入再读回"的测试用的是**模块级** `graph` / `react_graph` —— 也就是真实的库文件。
+  于是每跑一次测试，用户的会话列表里就多两条 `isolation-test-plan-write` 这种会话。
+  还是 `MemorySaver` 的年代，这些写入只落在进程内存里、重启就没了；**落盘之后就持久化了**，
+  而这一点当时没被意识到。
+  → 改成注入临时库 saver（`tmp_graphs` 夹具），覆盖不变。
+
+- **加了一条会话级守卫**（`tests/conftest.py`）：整轮测试跑完时，真实的
+  `runtime/checkpoints_*.sqlite3` 里**不能多出任何 thread**，否则报错并列出泄漏的
+  thread_id。变异验证：把那两条测试改回用模块级图 → 守卫立刻报出泄漏的两条。
+  守卫**只读**打开被观察的库 —— 它自己不改动它观察的东西。
+
+### 变更
+
+- **黑名单自我清洁**：删会话时先记 `dismissedThreads`（万一服务端删失败，这是保险），
+  等服务端**确认**删掉后把这条收回去 —— 那个 thread 已经不存在，不可能再被导回来。
+  之前它只增不减。反例也守住：服务端没删成功时，这条记录**必须留着**。
+
+### 清理
+
+- 删掉 `runtime/plan_cursors.json`（1.0.x 的游标落盘副本；1.2.0 之后已无任何代码读写它）。
+- 用 `DELETE /chat/conversations/...` 清掉会话库里已有的两条测试垃圾。
+
+### 验证
+
+- Python **631 passed**（含新守卫）；前端 auth_block 52/0、chat_context 14/0、
+  server_conversations **35/0**（原 31，新增自我清洁 4 条）。
+- 两处变异验证：测试污染守卫、自我清洁回收，都正确变红。
+
 ## [1.4.0] - 2026-10-13
 
 **会话删除做成端到端的**：前端删掉一条会话，服务端那份也真的清掉 ——
@@ -389,7 +424,8 @@ Python **605 passed**（原 595 + 新契约测试 3 条 + 契约/守卫相关新
 
 ---
 
-[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.4.0...HEAD
+[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.4.1
 [1.4.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.4.0
 [1.3.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.3.0
 [1.2.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.2.0

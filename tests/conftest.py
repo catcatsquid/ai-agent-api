@@ -225,3 +225,58 @@ def pytest_report_header(config):
     """在测试开头声明哪些数据可用 —— 免得有人看到 skip 就以为测试坏了"""
     parts = [f"{k}={'有' if v else '无'}" for k, v in AVAILABLE.items()]
     return "数据集: " + ", ".join(parts)
+
+
+# ============================================================
+# 守卫：整轮测试不许往**真实**的会话库里写
+# ============================================================
+
+_REAL_CKPT_FILES = ("checkpoints_plan.sqlite3", "checkpoints_react.sqlite3")
+
+
+def _real_thread_ids() -> dict:
+    """真实 runtime/checkpoints_*.sqlite3 里现存的 thread 集合（只读）"""
+    import sqlite3
+
+    out = {}
+    for name in _REAL_CKPT_FILES:
+        path = ROOT / "runtime" / name
+        ids: set = set()
+        if path.exists():
+            try:
+                # 只读模式：守卫本身绝不能改动被观察的东西
+                con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+                try:
+                    ids = {r[0] for r in con.execute(
+                        "SELECT DISTINCT thread_id FROM checkpoints")}
+                except sqlite3.OperationalError:
+                    ids = set()          # 表还没建（= 从没写过）
+                finally:
+                    con.close()
+            except sqlite3.Error:
+                ids = set()
+        out[name] = ids
+    return out
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _real_conversation_store_stays_clean():
+    """跑完测试后，真实的会话库里不能多出任何 thread
+
+    为什么需要：1.2.0 把 checkpointer 换成了落盘 SQLite。在那之前，测试里对
+    模块级 graph / react_graph 的 `update_state` 只写进程内存、重启就没了；
+    现在它们会**持久化**成真实会话 —— 用户会在会话列表里看到
+    `isolation-test-plan-write` 这种垃圾（实测发生过）。
+
+    这条守卫让"下次再有人这么写"立刻暴露，而不是等用户发现侧栏里多了几条怪会话。
+    写会话的测试应当注入临时库 saver（见 test_graph_isolation.py 的 tmp_graphs）。
+    """
+    before = _real_thread_ids()
+    yield
+    after = _real_thread_ids()
+    added = {name: sorted(after[name] - before[name])
+             for name in before if after[name] - before[name]}
+    assert not added, (
+        "测试往**真实的** runtime/checkpoints_*.sqlite3 里写了会话，"
+        f"用户会在会话列表里看到这些垃圾：{added}。"
+        "请给写入型测试注入临时库 saver（别用模块级的 graph / react_graph 写状态）。")

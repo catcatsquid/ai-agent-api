@@ -94,7 +94,8 @@ function makeCtx({ responses = {}, chats = [], dismissed = [], isStreaming = fal
   };
   vm.createContext(ctx);
   vm.runInContext(
-    ['importServerConversations', 'deleteServerConversation', 'deleteChat']
+    ['importServerConversations', 'deleteServerConversation', 'forgetDismissed',
+     'deleteChat']
       .map((n) => extractFn(html, n)).join('\n')
     + '\nglobalThis.__import = importServerConversations;'
     + '\nglobalThis.__deleteChat = deleteChat;'
@@ -276,6 +277,42 @@ console.log(`\n前端服务端会话导入（读真实页面：${PAGE}）\n`);
   const before = calls.length;
   check('没有 thread 时直接返回 true', (await ctx.__deleteServer(null, 'plan')) === true);
   check('没有 thread 时不发请求', calls.length === before, JSON.stringify(calls));
+}
+
+// ---- 12. 自我清洁：服务端确认删掉后，黑名单记录就该被收回去 ----
+{
+  const store = {};
+  const { ctx } = makeCtx({
+    store,
+    responses: { '/chat/conversations/T-7?mode=plan': { code: 0, data: { deleted: true } } },
+  });
+  ctx.chats.push({ id: 'c7', threadId: 'T-7', reasoningMode: 'plan',
+                   title: 'z', messages: [] });
+  ctx.currentChatId = null;
+  ctx.__deleteChat('c7');
+
+  check('删除的瞬间**先**记进黑名单（服务端万一步失败，这是保险）',
+        ctx.dismissedThreads.includes('T-7'), JSON.stringify(ctx.dismissedThreads));
+  await new Promise((r) => setTimeout(r, 0));      // 等服务端确认
+  check('服务端确认删掉后，黑名单自我清洁掉（那个 thread 已不可能再出现）',
+        !ctx.dismissedThreads.includes('T-7'), JSON.stringify(ctx.dismissedThreads));
+  check('清洁后的状态也落了盘',
+        !JSON.parse(store.dismissed_threads || '[]').includes('T-7'),
+        store.dismissed_threads);
+}
+
+// ---- 13. 反例：服务端**没**删掉时，黑名单必须留着 ----
+{
+  const { ctx } = makeCtx({
+    responses: { '/chat/conversations/T-6?mode=plan': 'throw' },
+  });
+  ctx.chats.push({ id: 'c6', threadId: 'T-6', reasoningMode: 'plan',
+                   title: 'w', messages: [] });
+  ctx.currentChatId = null;
+  ctx.__deleteChat('c6');
+  await new Promise((r) => setTimeout(r, 0));
+  check('服务端删失败时黑名单必须留着（否则下次加载又导回来）',
+        ctx.dismissedThreads.includes('T-6'), JSON.stringify(ctx.dismissedThreads));
 }
 
 console.log(`\n${'='.repeat(70)}`);
