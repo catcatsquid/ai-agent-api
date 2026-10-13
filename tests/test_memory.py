@@ -18,6 +18,7 @@ from course_agent.memory import (
     get_last_human_message,
     _format_conversation,
     SUMMARY_MARK,
+    INTERNAL_LLM_TAG,
 )
 
 
@@ -28,6 +29,17 @@ class _FakeLLM:
         self.content = content
         self.raise_exc = raise_exc
         self.calls = 0
+        self.config_tags = []      # 记录 with_config 收到过哪些 tags
+
+    def with_config(self, **kwargs):
+        """真 llm 是 Runnable，带 with_config —— 摘要调用靠它打"内部调用"标签
+
+        这个 tag 不是装饰：LangGraph 的 messages 模式会把图内每一次 LLM 调用都
+        推给前端，包括本模块在节点内部跑的摘要。流层靠这个 tag 把它挡掉
+        （见 server.sse_content_event 与 tests/test_stream_contract.py）。
+        """
+        self.config_tags.append(kwargs.get("tags"))
+        return self
 
     def invoke(self, messages, config=None):
         self.calls += 1
@@ -82,6 +94,19 @@ class TestCompressHistory:
         assert summary == "用户问了死锁的四个必要条件。"
         assert len(recent) == 6
         assert llm.calls == 1
+
+    def test_summary_call_is_tagged_as_internal(self):
+        """摘要那次 LLM 调用必须打上"内部调用"标签
+
+        没有这个标签，它会被 LangGraph 的 messages 模式当成正常输出播给用户 ——
+        实测确认：它带着**同一个** langgraph_node 流出去，所以按节点做白名单挡不住；
+        给这次调用加 stream=False 也没用（只是从 token 流变成一条整消息，照样在流里）。
+        流层靠这个 tag 挡它，见 server.sse_content_event。
+        """
+        llm = _FakeLLM("摘要")
+        compress_history(self._msgs(25), llm, threshold=10, keep_last_n=6)
+        assert llm.config_tags == [[INTERNAL_LLM_TAG]], (
+            f"摘要调用没有打 tag，实际收到的 tags={llm.config_tags}")
 
     def test_no_llm_means_window_only(self):
         msgs = self._msgs(25)

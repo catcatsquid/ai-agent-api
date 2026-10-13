@@ -1,4 +1,4 @@
-# 变更日志
+﻿# 变更日志
 
 本文件记录每个**已发布版本**的面向使用者变更。
 
@@ -13,6 +13,62 @@
 ## [未发布]
 
 （下一次改动先写在这里，发版时移到下面并补上版本号与日期）
+
+## [1.1.0] - 2026-10-13
+
+合并两个重复的流式端点，并把正文事件的判据从"类型黑名单"改成"来源白名单"。
+**顺带堵住两个实测确认的泄漏** —— 它们本来就要在合并之后才变成线上行为。
+
+### 变更
+
+- **合并两个流式端点**：`/chat/stream` 是 `/qa/stream` 的逐行复制品（约 100 行），
+  已删除。live 前端本来调的就是 `/qa/stream`（`chat.html`），所以**前端一行没改**；
+  而 `/qa/stream` 换成 `updates + messages` 之后，live 路径**白得了逐字流式** ——
+  原来它用默认的 `values` 模式，答案只在 `done` 里一次性给出。
+  进度事件抽出成 `_node_progress_events` 一份实现（原来两个端点各写一份）。
+- `/qa/stream` 的 `content`（逐字）与 `done.answer`（权威值）分工写进 docstring：
+  前者是打字机效果，后者保证"模型不流式时答案也一定能到"。
+
+### 修复（两个实测确认的泄漏）
+
+正文事件的判据原来是**类型黑名单**（ToolMessage / 带 tool_calls / 空 content 之外
+一律放行）。实测发现它挡不住两件事：
+
+- **节点内部的 LLM 调用也会被推出去。** messages 模式会把图内**每一次** LLM 调用
+  都推给前端，包括 `compress_history` 在 planner/synthesizer **内部**跑的对话摘要。
+  它带着**同一个** `langgraph_node`，所以按节点做白名单也挡不住；给那次调用加
+  `stream=False` 也没用（只是从 token 流变成一条整消息，消息照样在流里）。
+  → 现在给那次摘要调用打 `INTERNAL_LLM_TAG`，流层据此丢弃。
+- **节点返回的完整 AIMessage 会被再推一遍。** `synthesizer_node` 返回的正是一条
+  完整 AIMessage，放行就会让**答案在气泡里出现两遍**（token 一遍 + 整条一遍）。
+  → 现在只放行 `AIMessageChunk`。
+
+⚠️ 这两个漏洞在旧的 `/chat/stream` 上**一直存在**，只是因为 live 前端调的是
+`values` 模式的 `/qa/stream` 而没暴露。合并端点会让它变成线上行为，所以必须先修。
+
+新的四层判据（顺序即优先级）：
+① 来源白名单 `metadata["langgraph_node"]`（未知来源**不放行**，fail closed）；
+② 内部 tag；③ 只放行 `AIMessageChunk`；④ content 非空。
+
+### 测试
+
+- 新增 `tests/test_stream_contract.py`：用假模型搭出「planner + synthesizer
+  （内部含一次打了 tag 的摘要调用）」的**真实 LangGraph 图**，把每个 chunk 喂给
+  过滤函数，端到端断言用户最终看到的正文**只有答案** —— 没有摘要、没有计划 JSON、
+  且答案只出现一次。含一条**反向验证**（关掉来源白名单则计划必然泄漏），
+  否则前面几条可能只是碰巧通过。
+- 新增：断言摘要调用**确实**打了 tag（用 `_FakeLLM.with_config` 做行为断言）。
+- `TestSseContentEvent` 按新契约重写：覆盖四层判据与"按图区分答案节点"。
+- 修正我自己 1.0.1 写的那条接线守卫（1.0.2 审计的遗留项）：改用 **AST** 只数真实
+  调用与切片 —— 原写法枚举 `content[:120]` / `content[:100]` 两个字面量，
+  换成 `content[:150]` 就漏。**改完当场翻车一次**：第一版用 `src.count(...)`，
+  被我自己在注释里提了一句就撑到 3，正是刚审完的那个毛病。
+- `tests/locustfile.py` 的压测目标从 `/chat/stream` 改为 `/qa/stream`。
+
+### 验证
+
+Python **605 passed**（原 595 + 新契约测试 3 条 + 契约/守卫相关新增）；
+前端 auth_block 52/0、chat_context 14/0。
 
 ## [1.0.2] - 2026-10-13
 
@@ -197,7 +253,8 @@
 
 ---
 
-[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.0.2...HEAD
+[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.1.0
 [1.0.2]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.0.2
 [1.0.1]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.0.1
 [1.0.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.0.0

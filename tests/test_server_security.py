@@ -10,9 +10,10 @@ import json
 
 import pytest
 from unittest.mock import patch
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 from course_agent import quiz_service
+from course_agent.memory import INTERNAL_LLM_TAG
 from course_agent.server import resolve_within_data, sse_content_event, DATA_ROOT, app
 from fastapi.testclient import TestClient
 
@@ -143,38 +144,76 @@ class TestPathValidationSurvivesAuthOff:
 
 
 class TestSseContentEvent:
-    """工具产出不得进入正文事件（原实现会把 ToolMessage 当正文播出去）"""
+    """正文事件（content）的四层判据
+
+    契约在 1.1.0 变过：**判据从"类型黑名单"改成"来源白名单 + 只放行 LLM 分片"**。
+    旧契约是"ToolMessage / 带 tool_calls / 空 content 之外一律放行"——默认放行，
+    而且挡不住两件实测确认的事（见 tests/test_stream_contract.py）：
+      · 节点**内部**的 LLM 调用（对话摘要）会带着同一个节点名流出来；
+      · 节点**返回**的完整 AIMessage 也会被推一遍，放行就让答案在气泡里出现两遍。
+
+    这里只测过滤函数的四个层次；"这套判据套在真实 LangGraph 流上是否有效"
+    由 tests/test_stream_contract.py 用假模型图端到端验证。
+    """
+
+    def _chunk(self, content, **meta):
+        return AIMessageChunk(content=content), meta
+
+    def test_chunk_from_the_answer_node_passes(self):
+        msg, meta = self._chunk("这是答案", langgraph_node="synthesizer")
+        line = sse_content_event(msg, meta, {"synthesizer"})
+        assert line is not None
+        assert line.startswith("data: ")
+        assert '"type": "content"' in line
+        assert "这是答案" in line
+
+    @pytest.mark.parametrize("node", ["planner", "executor", "tools", "web_search_fallback"])
+    def test_chunk_from_a_non_answer_node_is_dropped(self, node):
+        """① 来源白名单：计划 JSON / 工具轮都不该进正文"""
+        msg, meta = self._chunk('{"steps": []}', langgraph_node=node)
+        assert sse_content_event(msg, meta, {"synthesizer"}) is None
+
+    def test_unknown_source_fails_closed(self):
+        """① 的默认值是"拦住"—— 图里新增节点不会被自动播出去"""
+        msg, meta = self._chunk("将来新加的东西", langgraph_node="some_new_node")
+        assert sse_content_event(msg, meta, {"synthesizer"}) is None
+
+    def test_internal_tagged_call_is_dropped(self):
+        """② 内部工具型调用（对话摘要）即便来自允许的节点也不播"""
+        msg, meta = self._chunk("【摘要】用户问过死锁", langgraph_node="synthesizer",
+                                tags=[INTERNAL_LLM_TAG])
+        assert sse_content_event(msg, meta, {"synthesizer"}) is None
+
+    def test_full_message_from_the_node_is_dropped(self):
+        """③ 节点返回的完整 AIMessage 不放行 —— 否则答案会被发两遍"""
+        msg = AIMessage(content="这是答案")
+        assert sse_content_event(msg, {"langgraph_node": "synthesizer"},
+                                 {"synthesizer"}) is None
 
     def test_tool_message_is_dropped(self):
         msg = ToolMessage(content='{"answer": "D", "reference_points": ["因为..."]}',
                           tool_call_id="c1", name="grade_answers")
-        assert sse_content_event(msg) is None
+        assert sse_content_event(msg, {"langgraph_node": "synthesizer"},
+                                 {"synthesizer"}) is None
 
-    def test_message_with_type_tool_is_dropped(self):
-        class FakeToolMsg:
-            type = "tool"
-            content = "检索原文"
-        assert sse_content_event(FakeToolMsg()) is None
+    def test_empty_content_is_dropped(self):
+        """④ ReAct 的工具决策轮通常 content 为空"""
+        msg, meta = self._chunk("", langgraph_node="llm")
+        assert sse_content_event(msg, meta, {"llm"}) is None
 
-    def test_ai_message_with_tool_calls_is_dropped(self):
-        msg = AIMessage(content="", tool_calls=[
-            {"id": "c1", "name": "search_knowledge", "args": {"query": "x"}}
-        ])
-        assert sse_content_event(msg) is None
+    def test_react_graph_uses_its_own_answer_node(self):
+        """同一个函数要按图区分：llm 在 react 图里是答案节点、在 plan 图里不是"""
+        msg = AIMessageChunk(content="答案")
+        assert sse_content_event(msg, {"langgraph_node": "llm"}, {"llm"}) is not None
+        assert sse_content_event(msg, {"langgraph_node": "llm"}, {"synthesizer"}) is None
 
-    def test_plain_ai_message_becomes_content_event(self):
-        line = sse_content_event(AIMessage(content="这是最终答案"))
-        assert line is not None
-        assert line.startswith("data: ")
-        assert '"type": "content"' in line
-        assert "这是最终答案" in line
-
-    def test_human_message_also_passes(self):
-        """用户消息本来就该显示，不该被过滤（区别于工具消息）"""
-        assert sse_content_event(HumanMessage(content="你好")) is not None
-
-    def test_empty_content_is_skipped(self):
-        assert sse_content_event(AIMessage(content="")) is None
+    def test_without_answer_nodes_only_the_later_layers_apply(self):
+        """不传 answer_nodes 时跳过①，②③④ 仍然生效（给不按图区分的调用方）"""
+        assert sse_content_event(AIMessageChunk(content="x")) is not None
+        assert sse_content_event(AIMessageChunk(content=""),
+                                 {"langgraph_node": "anything"}) is None
+        assert sse_content_event(AIMessageChunk(content="x"),
+                                 {"tags": [INTERNAL_LLM_TAG]}) is None
 
 
 class TestProgressSummaryIsALabelNotThePayload:
@@ -221,20 +260,44 @@ class TestProgressSummaryIsALabelNotThePayload:
         """不认识的工具退化成"完成"——不能为了信息量退回成回显内容"""
         assert quiz_service.tool_summary("some_new_tool", {"secret": "别播我"}) == "完成"
 
-    def test_both_stream_endpoints_use_the_shared_label(self):
-        """接线也要守住：4 处进度事件都得走共享实现
+    def test_progress_events_go_through_the_shared_label(self):
+        """接线守卫：进度摘要只允许走 quiz_service.tool_summary
 
-        写这个测试时才发现自己**数漏了一处** —— /qa/stream 的 react 分支
-        （node == "tools"）也有一份一模一样的 content[:120] 截断。
-        断言写成"不许出现任何 content 截断"而不是"数够 3 处"，
-        就是为了让下一个漏掉的写法无处藏身。
+        这条原来枚举了 `content[:120]` / `content[:100]` 两个**字面量** —— 那是同一类
+        弱写法：换成 `content[:150]` 就漏了。（1.1.0 那次守卫审计里我自己审出来的，
+        就在这一条上，这次一并修掉。）
+
+        第一版改成 `src.count("quiz_service.tool_summary") == 2` 之后**当场就翻了车**：
+        我在 `_node_progress_events` 的**注释**里提了一句它，计数变成 3 —— 正是我
+        刚审完的那个"注释能把计数撑起来"的毛病。所以这里改用 **AST 只数真实调用**，
+        并顺带把"内容截断"也改成 AST 判据（注释同样骗不过）。
         """
+        import ast
         import inspect
 
         from course_agent import server
 
-        src = inspect.getsource(server)
-        for bad in ("content[:120]", "content[:100]", "content_preview"):
-            assert bad not in src, f"又出现了「原样截断工具返回内容」的写法：{bad}"
-        assert src.count("quiz_service.tool_summary") >= 4, \
-            "4 处进度事件（/qa/ask、/qa/stream 的 executor 与 tools、/chat/stream 的两处）都应走它"
+        tree = ast.parse(inspect.getsource(server))
+
+        calls = [n for n in ast.walk(tree)
+                 if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Attribute)
+                 and n.func.attr == "tool_summary"]
+        assert len(calls) == 2, (
+            f"tool_summary 应只有两处调用（/qa/ask 与 _node_progress_events），实际 {len(calls)} 处")
+
+        # 不许对 content 做切片（原样截断工具返回内容的老写法）
+        slices = [n for n in ast.walk(tree)
+                  if isinstance(n, ast.Subscript)
+                  and isinstance(n.value, ast.Attribute)
+                  and n.value.attr == "content"]
+        assert not slices, "又出现了「原样截断工具返回内容」的写法（对 content 取切片）"
+
+        # 唯一的进度事件产出点（原来 /qa/stream 与 /chat/stream 各写一份）
+        assert sum(1 for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef)
+                   and n.name == "_node_progress_events") == 1
+        decorators = [ast.unparse(d) for n in ast.walk(tree)
+                      if isinstance(n, ast.FunctionDef) for d in n.decorator_list]
+        assert not any("/chat/stream" in d for d in decorators), \
+            "重复的端点是删掉过的，不该回来"
