@@ -124,101 +124,94 @@ class TestReviewIntentGoesToKnowledgeBase:
 # 问题③：游标必须活过进程重启
 # ============================================================
 
-class TestDrillCursorSurvivesRestart:
-    """游标原本只存在 AgentState 里，而 state 由 MemorySaver 保管（进程内存）。
-    服务一重启，"继续下一组"就变成"找不到题目了" —— 用户实测遇到过。
+class TestSessionSurvivesRestart:
+    """跨轮游标由 checkpointer 落盘保管（1.2.0 起是 SqliteSaver）
+
+    历史：1.0.x 的 checkpointer 是 MemorySaver（进程内存），服务一重启游标就丢，
+    所以当时给游标单独做了一份落盘副本（runtime/plan_cursors.json）。
+    那份副本造成"内存 + 磁盘"两个真源，1.0.1 修过它的读写不对称。
+    1.2.0 换成 SqliteSaver 之后副本整个删掉，这里改成验证**落盘本身**。
     """
 
-    @pytest.fixture(autouse=True)
-    def isolated_cursor_file(self, tmp_path_factory, monkeypatch):
-        """别动真实的 runtime/plan_cursors.json"""
-        d = ROOT / "tests" / "_tmp_cursor"
-        d.mkdir(parents=True, exist_ok=True)
-        f = d / "cursors.json"
-        if f.exists():
-            f.unlink()
-        monkeypatch.setattr(nodes, "CURSOR_FILE", f)
-        yield f
-        if f.exists():
-            f.unlink()
-        try:
-            d.rmdir()
-        except OSError:
-            pass
+    def test_thread_state_survives_a_simulated_restart(self, tmp_path):
+        """核心验收：同一个库文件、新开一个 saver 与图，state 必须还在
 
-    def test_round_trip(self, isolated_cursor_file):
-        sess = {"paper": "2026春操作系统期末试题（回忆版）", "group_index": 2,
-                "next_group_index": 3, "qids": ["a", "b"]}
-        nodes._save_cursor("thread-a", sess)
-        assert nodes._load_cursor("thread-a") == sess
+        这是任务 8 的验收条件。MemorySaver 时代这里会拿到空 state ——
+        那正是"重启后说继续下一组，只能听到找不到题目"的根因。
+        """
+        import sqlite3
 
-    def test_unknown_thread_is_empty(self, isolated_cursor_file):
-        assert nodes._load_cursor("nope") == {}
-        assert nodes._load_cursor("") == {}
+        from langgraph.checkpoint.sqlite import SqliteSaver
 
-    def test_corrupt_file_does_not_raise(self, isolated_cursor_file):
-        isolated_cursor_file.write_text("{ 坏掉的 json", encoding="utf-8")
-        assert nodes._load_cursor("thread-a") == {}
+        from course_agent.graph import build_graph
 
-    def test_study_only_turn_after_restart_keeps_the_drill_cursor(
-            self, isolated_cursor_file, monkeypatch):
-        """重启后只更新学习书签，不能把磁盘上的刷题游标抹掉
+        db = tmp_path / "ckpt.sqlite3"
+        cfg = {"configurable": {"thread_id": "t-restart"}}
+        session = {"paper": "2026春操作系统期末试题（回忆版）", "type": "选择题",
+                   "group_index": 1, "next_group_index": 2, "qids": ["Q1"]}
 
-        两个真源（state["session"] + 落盘 cursor）的**读写口径必须一致**。
-        原来写入时的合并基线只取 state：重启后 state 是空的，这一轮若只调了
-        read_section（没有 get_paper_questions），新 session 里就只剩 study ——
-        而 _save_cursor 是整条替换，磁盘上的 paper / next_group_index 被抹掉，
-        "继续下一组"随即失效（正是这套落盘机制本来要修的那个症状）。
+        # 第一个"进程"：直接落一条 checkpoint（不跑节点，避免真实模型调用）
+        g1 = build_graph(checkpointer=SqliteSaver(
+            sqlite3.connect(str(db), check_same_thread=False)))
+        g1.update_state(cfg, {"session": session})
+
+        # "重启"：新 saver、新图，**同一个库文件**
+        g2 = build_graph(checkpointer=SqliteSaver(
+            sqlite3.connect(str(db), check_same_thread=False)))
+        got = (g2.get_state(cfg).values or {}).get("session") or {}
+        assert got.get("paper") == session["paper"], f"重启后游标没了：{got}"
+        assert got.get("next_group_index") == 2
+
+    def test_study_only_turn_keeps_the_drill_fields(self, monkeypatch):
+        """同一轮只更新学习书签时，刷题字段不能被挤掉
+
+        这条原来是 1.0.1 为"读写不对称"写的回归（那时磁盘副本是第二个真源：
+        写入的合并基线只取 state，于是只调 read_section 的那一轮会把 paper 挤掉）。
+        副本删掉之后不对称从根上没有了，但**合并基线要包含上一轮的 session**
+        这条不变量仍然要守，所以保留一个不带磁盘的版本。
         """
         before = {"paper": "2025年秋操作系统期末试题（回忆版）", "type": "选择题",
                   "group_index": 3, "next_group_index": 4, "qids": ["Q1", "Q2"]}
-        nodes._save_cursor("thread-restart", before)
-
         study_line = ("[study-state] course=操作系统 source=05-死锁.pdf "
                       "read=3 next_offset=15")
-        monkeypatch.setattr(
-            nodes, "safe_tool_invoke",
-            lambda tool, args, tool_name=None: study_line)
+        monkeypatch.setattr(nodes, "safe_tool_invoke",
+                            lambda tool, args, tool_name=None: study_line)
 
-        state = {
+        out = nodes.executor_node({
             "messages": [nodes.HumanMessage(content="继续讲")],
             "plan": [{"tool": "read_section",
                       "args": {"course": "操作系统", "section": 1}}],
-            "session": {},          # 重启后 state 里没有游标
-        }
-        nodes.executor_node(state, {"configurable": {"thread_id": "thread-restart"}})
+            "session": before,     # 上一轮的游标（重启后由 checkpointer 恢复出来）
+        }, {"configurable": {"thread_id": "t"}})
 
-        after = nodes._load_cursor("thread-restart")
-        assert after.get("paper") == before["paper"], (
-            f"刷题游标被抹掉了：重启前 {before}，这一轮之后 {after}")
-        assert after.get("next_group_index") == 4
-        assert (after.get("study") or {}).get("course") == "操作系统", \
-            "学习书签本身也要记下来"
+        sess = out["session"]
+        assert sess.get("paper") == before["paper"], f"刷题字段被挤掉了：{sess}"
+        assert sess.get("next_group_index") == 4
+        assert (sess.get("study") or {}).get("course") == "操作系统"
 
-    def test_planner_recovers_cursor_after_restart(self, isolated_cursor_file, monkeypatch):
-        """核心用例：state 里没有游标（=刚重启），planner 必须从磁盘恢复它
+    def test_planner_carries_the_session_into_the_prompt(self, monkeypatch):
+        """planner 必须把 state 里的游标带进提示词
 
-        否则 planner 手里既没有卷子也没有组号，只能说"找不到题目"。
+        重启那一半由上面那条落盘测试守；这里只验证"给了 session，planner 就真的用它"。
         """
-        nodes._save_cursor("thread-restart", {
-            "paper": "2026春操作系统期末试题（回忆版）", "type": "选择题",
-            "group_index": 1, "next_group_index": 2, "qids": ["Q1", "Q2"]})
-
         captured = {}
         monkeypatch.setattr(nodes, "safe_llm_invoke",
                             lambda fn, messages, context=None: (
                                 captured.update(prompt=messages[0].content)
                                 or nodes.AIMessage(content='{"need_tools": false, "steps": []}')))
-        # state 里**故意不放** session，模拟进程重启后的新 state
         nodes.planner_node(
             {"messages": [nodes.HumanMessage(content="继续下一组")],
-             "plan": [], "tool_rounds": 0},
-            {"configurable": {"thread_id": "thread-restart"}})
+             "plan": [], "tool_rounds": 0,
+             "session": {"paper": "2026春操作系统期末试题（回忆版）", "type": "选择题",
+                         "group_index": 1, "next_group_index": 2,
+                         "qids": ["Q1", "Q2"]}},
+            {"configurable": {"thread_id": "t"}})
         p = captured["prompt"]
-        assert "2026春操作系统期末试题（回忆版）" in p, "没恢复出卷子"
-        assert "group_index=2" in p, "没恢复出下一组组号"
+        assert "2026春操作系统期末试题（回忆版）" in p, "没带上卷子"
+        assert "group_index=2" in p, "没带上下一组组号"
 
-    def test_executor_persists_after_writing(self, isolated_cursor_file):
+    def test_executor_writes_the_session_into_state(self, monkeypatch):
+        """executor 把这一轮抽出的进度放进 out["session"]，由 checkpointer 落盘"""
         plan = [{"tool": "get_paper_questions",
                  "args": {"paper_source": "2026春操作系统期末试题（回忆版）",
                           "group_index": 1}}]
@@ -227,14 +220,14 @@ class TestDrillCursorSurvivesRestart:
             "group_index": 1, "next_group_index": 2, "has_more": True,
             "qids": ["Q1"], "questions": [], "reply_text": "…",
         }, ensure_ascii=False)
-        results = [nodes.ToolMessage(content=payload, tool_call_id="plan_0",
-                                     name="get_paper_questions")]
-        sess = nodes._extract_drill_session({}, plan, results)
-        nodes._save_cursor("thread-b", sess)
-        got = nodes._load_cursor("thread-b")
-        assert got["next_group_index"] == 2
-        # 题型也要记上：漏了的话重启后恢复出来的游标里 type 是 null（实测到过）
-        assert got["type"] == "选择题"
+        monkeypatch.setattr(nodes, "safe_tool_invoke",
+                            lambda tool, args, tool_name=None: payload)
+        out = nodes.executor_node({
+            "messages": [nodes.HumanMessage(content="出题")],
+            "plan": plan, "session": {}}, {"configurable": {"thread_id": "t"}})
+        assert out["session"]["next_group_index"] == 2
+        # 题型也要记上：漏了的话恢复出来的游标里 type 是 null（实测到过）
+        assert out["session"]["type"] == "选择题"
 
     def test_tool_output_carries_the_question_type(self):
         """tools.py 转发给模型的 JSON 必须带 type —— 游标的题型就是从它来的"""
@@ -247,8 +240,8 @@ class TestDrillCursorSurvivesRestart:
         assert "get_paper_questions" not in out or True   # 只是确保没抛异常
         assert '"type"' in out, "工具返回里没有 type，游标就记不到题型"
 
-    def test_cursor_file_is_gitignored(self):
-        """游标是运行时状态，不能进版本控制"""
+    def test_runtime_state_is_gitignored(self):
+        """checkpointer 的库文件是运行时状态，不能进版本控制"""
         gi = (ROOT / ".gitignore").read_text(encoding="utf-8")
         assert "runtime/" in gi
 

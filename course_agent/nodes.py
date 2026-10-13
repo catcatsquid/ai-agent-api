@@ -18,7 +18,6 @@ Week 7 升级：自适应规划层（check_results + web_search_fallback）
 
 import json
 import re
-from pathlib import Path
 from langchain_core.messages import SystemMessage, ToolMessage, AIMessage, HumanMessage
 from langgraph.graph import END
 from course_agent.state import AgentState
@@ -32,58 +31,18 @@ from course_agent import quiz_service
 llm_with_tools = llm.bind_tools(tools)
 
 # ============================================================
-# 刷题游标的落盘（让它活过一次进程重启）
+# 跨轮会话游标（AgentState["session"]）
 # ============================================================
 #
-# 游标原本只存在 AgentState["session"] 里，而 state 由 MemorySaver 保管 ——
-# **进程内存**。所以服务一重启，学生再说"继续下一组"，planner 手里既没有卷子也没有
-# 组号，只能回答"找不到题目了"（用户实测遇到过，而且当时确实是我重启了服务）。
+# 游标只存在 `AgentState["session"]` 里，而 state 由 checkpointer 保管 ——
+# 1.2.0 起是**落盘的** SqliteSaver（见 graph.py），所以它天然活得过进程重启。
 #
-# 真正的修法是把整个 checkpointer 换成持久化的（需要 langgraph-checkpoint-sqlite
-# 这个额外依赖，环境里装不上），所以这里先解决最影响体验的那一半：
-# **把游标单独落盘**。会话消息仍会随重启丢失（App 会显示成新对话），
-# 但"继续下一组"一定能工作。
-CURSOR_FILE = Path(__file__).resolve().parent.parent / "runtime" / "plan_cursors.json"
-
-
-def _thread_id(config) -> str:
-    """从 LangGraph 传入的 config 里取 thread_id"""
-    try:
-        return str((config or {}).get("configurable", {}).get("thread_id") or "")
-    except AttributeError:
-        return ""
-
-
-def _load_cursor(thread_id: str) -> dict:
-    if not thread_id or not CURSOR_FILE.exists():
-        return {}
-    try:
-        data = json.loads(CURSOR_FILE.read_text(encoding="utf-8"))
-        return data.get(thread_id) or {}
-    except (OSError, ValueError):
-        return {}
-
-
-def _save_cursor(thread_id: str, session: dict) -> None:
-    if not thread_id or not session:
-        return
-    try:
-        CURSOR_FILE.parent.mkdir(parents=True, exist_ok=True)
-        data = {}
-        if CURSOR_FILE.exists():
-            try:
-                data = json.loads(CURSOR_FILE.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                data = {}
-        data[thread_id] = session
-        # 只留最近 200 个会话，避免文件无限增长
-        if len(data) > 200:
-            for k in list(data)[:-200]:
-                data.pop(k, None)
-        CURSOR_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                               encoding="utf-8")
-    except OSError as e:
-        logger.warning("刷题游标落盘失败: %s", e)
+# 历史：1.0.x 时 checkpointer 还是 MemorySaver（进程内存），服务一重启游标就没了，
+# 学生说"继续下一组"只能听到"找不到题目"。当时给游标单独做了一份落盘副本
+# （runtime/plan_cursors.json + _save_cursor/_load_cursor）。那份副本带来了
+# "内存 + 磁盘"两个真源，还引出过读写不对称的 bug（1.0.1 修过、1.0.2 补了回归测试）。
+# 换成 SqliteSaver 之后 state 整体落盘，**那份副本连同一整套读写函数都删掉了** ——
+# 真源只剩 state 一个。
 
 
 # ============================================================
@@ -459,10 +418,10 @@ def planner_node(state: AgentState, config=None) -> dict:
     # 把跨轮会话游标显式交给 planner。
     # 不加这段的话，学生说"继续下一组"时 planner 手里既没有卷子也没有组号
     # （上一轮的工具结果被上面的 history_msgs 过滤掉了），实测会瞎猜卷子、甚至编题。
-    # 把跨轮会话游标显式交给 planner。
-    # 优先用 state 里的（同进程内的正常路径）；state 里没有说明进程重启过，
-    # 这时从落盘副本里恢复 —— 否则学生说"继续下一组"只能听到"找不到题目"。
-    drill = state.get("session") or _load_cursor(_thread_id(config))
+    #
+    # 游标就在 state 里，而 state 由落盘的 checkpointer 保管 —— 所以"进程重启后
+    # 还能继续"不再需要额外的副本（那份 runtime/plan_cursors.json 已随 1.2.0 删除）。
+    drill = state.get("session") or {}
     if drill.get("paper"):
         prog = [f"卷子：{drill['paper']}"]
         if drill.get("type"):
@@ -725,12 +684,11 @@ def executor_node(state: AgentState, config=None) -> dict:
     # 从工具结果里抽出"刷题进度"存进 state —— 这是 Plan 图里游标唯一的落脚点
     # （planner 会把 ToolMessage 从历史里剔掉，所以游标没法"在带内"传递）。
     #
-    # 合并基线必须**和 planner 的读取口径一致**（state 优先、磁盘兜底，见 planner_node）。
-    # 原来这里只取 state：重启后 state 是空的，这一轮若只更新了学习书签，
-    # 新 session 里就只有 study —— 而 _save_cursor 是整条替换，
-    # 磁盘上原来的 paper / next_group_index 会被抹掉，"继续下一组"随即失效
-    # （正是这套落盘机制本来要修的那个症状）。
-    base_session = state.get("session") or _load_cursor(_thread_id(config))
+    # 合并基线只能是 state：它由落盘的 checkpointer 保管，**不存在第二个副本**了。
+    # （1.0.1 修过一次"读写不对称" —— 那时还有 runtime/plan_cursors.json，
+    #   写入时不认它，于是重启后只更新书签的那一轮会把它抹掉。
+    #   1.2.0 换成 SqliteSaver 之后那份副本整个删了，这类不对称从根上没有了。）
+    base_session = state.get("session") or {}
     new_session = _extract_drill_session(base_session,
                                         state.get("plan") or [], results)
     study = _extract_study_session(new_session if new_session is not None
@@ -740,9 +698,6 @@ def executor_node(state: AgentState, config=None) -> dict:
         new_session = study
     if new_session is not None:
         out["session"] = new_session
-        # 同时落盘一份：进程重启后 MemorySaver 里的 state 会没，
-        # 但"学生在做哪份卷子、下一组是几、学到哪一节"必须活下来。
-        _save_cursor(_thread_id(config), new_session)
     return out
 
 
