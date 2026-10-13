@@ -14,6 +14,47 @@
 
 （下一次改动先写在这里，发版时移到下面并补上版本号与日期）
 
+## [1.0.2] - 2026-10-13
+
+补齐 1.0.1 那个只修了一半的缺陷；另做了一次"守卫本身失效"的审计并重写三条。
+
+### 修复
+
+- **刷新后 react 会话仍然失忆**（1.0.1 只修了一半）：`thread_id` 持久化了，但
+  **推理模式**没有。模式决定那个 thread 属于**哪张图**（plan / react 后端各有独立
+  checkpointer），刷新后模式回到默认 `plan`，react 会话的 `thread_id` 在 plan 图里
+  根本不存在 —— 后端**静默**当成新会话（不报错）：界面显示着历史，模型却一无所知。
+  现在模式随 `localStorage` 持久化，并记进每条对话（`chat.reasoningMode`）；
+  `loadChat` 时先恢复模式、再恢复 thread。
+
+### 测试 —— 一次"守卫自己失效"的审计
+
+起因：1.0.1 里发现 `assert "def find_chapter" not in src` 挡不住 `def _find_chapter`
+（多一个下划线，字符串就不匹配）。于是把仓库里所有"读源码做字符串断言"的守卫过了一遍，
+并用**变异测试**（故意植入它该拦住的违规，看它还绿不绿）逐条验证。
+
+三条**能被绕过**的，已重写：
+
+| 守卫 | 原来的写法 | 实测（全量测试） | 现在 |
+|---|---|---|---|
+| `test_memory.py` 历史口径一致 | 函数源码里找 `not isinstance(m, ToolMessage)` | 删掉真实过滤、只在注释里留那句话 → **594 条仍全绿** | 行为断言：看 `compress_history` 实际收到哪些消息 |
+| `test_study_mode.py` 无状态机 | 取函数**前 1200 字符**（函数实际 3415 字符） | 在距函数头 3000 字符处塞 `stage`/`step_index` → **仍全绿** | AST：取该函数的标识符与字符串常量（注释不参与 AST） |
+| `test_qb_single_source.py` 豁免表唯一 | 整文件 `count("QUIET_PATHS") >= 3` | 改回内联表（漏 `/health`，复现原始 bug）＋两句注释 → 单跑仍绿（整文件跑时被行为测试兜住） | AST：顶层赋值恰好一处 ＋ 两个消费方都引用它 |
+
+两条**方向相反**的脆弱点（只会假红、不会放过违规）评估后**保留不动**：
+`test_frontend_auth.py` 里那组禁用原生弹窗的断言查的是带注释的原文、
+`test_chat_export.py` 用了 3000 字符窗口 —— 两者的失败信息都会自己说明"测试需要更新"，
+改动它们的收益小于扰动风险。另确认 `test_dependency_direction.py`（用 `ast`）与
+`tests/js/auth_block_test.mjs`（真的执行抽出来的代码 + DOM 桩）本来就没问题。
+
+### 新增
+
+- `tests/js/chat_context_test.mjs`：前端对话上下文持久化的**行为测试**
+  （vm + 桩 `localStorage`/DOM，跑真实页面的 `rememberThreadId` / `loadChat` /
+  `createNewChat`），14 项断言。同样用变异验证过：把持久化那行删掉会红两条。
+- `test_frontend_auth.py` 里那条"切模式要重置 thread"的守卫改用**花括号配对**取函数体
+  （原来用正则 `\{(.*?)\n\}`，函数里出现顶格的内层 `}` 就会提前截断）。
+
 ## [1.0.1] - 2026-10-12
 
 一轮代码审查后的修复：4 个真实缺陷 + 一处重复实现清理。都不改变对外接口。
@@ -156,6 +197,7 @@
 
 ---
 
-[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.0.1...HEAD
+[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.0.2
 [1.0.1]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.0.1
 [1.0.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.0.0

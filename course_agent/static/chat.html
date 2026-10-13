@@ -144,8 +144,8 @@ body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #f0f2
 <div id="qa-options">
 <div style="font-size: 11px; color: #6b7280; margin-bottom: 4px;">推理模式</div>
 <div class="mode-selector">
-<button class="mode-btn active" onclick="setReasoningMode('plan', this)">Plan</button>
-<button class="mode-btn" onclick="setReasoningMode('react', this)">ReAct</button>
+<button class="mode-btn active" data-mode="plan" onclick="setReasoningMode('plan', this)">Plan</button>
+<button class="mode-btn" data-mode="react" onclick="setReasoningMode('react', this)">ReAct</button>
 </div>
 </div>
 <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.06);">
@@ -349,7 +349,13 @@ window.fetch = async function (input, init) {
 const API_KEY = (function () { try { return localStorage.getItem('api_key') || ''; } catch (e) { return ''; } })();
 let authToken = authHeaders();
 let currentAppMode = 'qa';
-let currentReasoningMode = 'plan';
+// 推理模式也要持久化：它决定当前 thread 属于哪张图（plan / react 各用独立 checkpointer）。
+// 只存 thread_id 不存模式的话，刷新后模式回到默认 plan，react 会话的 thread 就废了 ——
+// 界面显示着历史，后端却当成新会话（在 plan_memory 里找不到那个 thread_id）。
+function readStoredReasoningMode() {
+try { return localStorage.getItem('reasoning_mode') || 'plan'; } catch (e) { return 'plan'; }
+}
+let currentReasoningMode = readStoredReasoningMode();
 let currentThreadId = null;
 let currentTutorSessionId = null;
 let isStreaming = false;
@@ -400,6 +406,7 @@ title: '新对话',
 messages: [],
 appMode: currentAppMode,
 threadId: null,   // 后端会话 id（收到 start 事件时写入并持久化）
+reasoningMode: currentReasoningMode,   // 该 thread 属于哪张图
 createdAt: Date.now(),
 };
 chats.unshift(chat);
@@ -411,10 +418,11 @@ function loadChat(id) {
 const chat = getChat(id);
 if (!chat) return;
 currentChatId = id;
-// 恢复这条对话自己的 thread —— 否则切回来/刷新后，前端还显示着历史消息，
+// 恢复这条对话自己的 thread 与模式 —— 否则切回来/刷新后，前端还显示着历史消息，
 // 但请求不带 thread_id，后端会开一个新会话：界面上有上下文、模型却一无所知。
-// （react 会话的 thread 在刷新后无法复用：模式回到默认 plan，而后端两张图
-//   各有独立 checkpointer —— 找不到就退化成新会话，不会报错。既有限制。）
+// 模式必须先恢复：thread 是按图隔离的，react 会话的 thread_id 在 plan 图里根本不存在，
+// 模式不对的话恢复出来的 thread 等于没用（后端静默当成新会话，不报错）。
+if (chat.reasoningMode) applyReasoningMode(chat.reasoningMode);
 currentThreadId = chat.threadId || null;
 currentTutorSessionId = null;
 renderMessages(chat.messages);
@@ -590,11 +598,18 @@ function setAppMode(mode, el) {
   else if (mode === 'tutor') input.placeholder = '随便聊，想学什么、刷什么题都可以告诉我...';
   else input.placeholder = '输入消息...';
 }
+// 模式的"状态 + 按钮高亮 + 持久化"三件事集中在这里。
+// 单独抽出来是因为 loadChat 也要恢复模式，但**不该**弹下面那个"新对话"提示。
+function applyReasoningMode(mode) {
+currentReasoningMode = mode;
+document.querySelectorAll('#qa-options .mode-btn').forEach(function (b) {
+b.classList.toggle('active', b.getAttribute('data-mode') === mode);
+});
+try { localStorage.setItem('reasoning_mode', mode); } catch (e) { /* 隐私模式等，忽略 */ }
+}
 function setReasoningMode(mode, el) {
 const changed = currentReasoningMode !== mode;
-currentReasoningMode = mode;
-el.parentElement.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-el.classList.add('active');
+applyReasoningMode(mode);   // el 参数留着是为了不改动按钮上的 onclick；高亮统一在上面做
 if (changed) {
 // Plan 与 ReAct 是两张独立的图、两套独立的会话状态，后端各用独立 checkpointer。
 // 所以切换模式必须开一个新 thread，否则前端历史与后端上下文对不上。
@@ -812,8 +827,9 @@ if (!tid) return;
 currentThreadId = tid;
 document.getElementById('thread-id-display').textContent = ` #${tid.substring(0, 8)}`;
 const chat = currentChatId ? getChat(currentChatId) : null;
-if (chat && chat.threadId !== tid) {
+if (chat && (chat.threadId !== tid || chat.reasoningMode !== currentReasoningMode)) {
 chat.threadId = tid;
+chat.reasoningMode = currentReasoningMode;   // thread 属于哪张图，要一起记住
 saveChats();
 }
 }

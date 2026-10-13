@@ -9,12 +9,15 @@
    而我原来的测试恰好断言的是没意义的 "/"，所以测试是绿的。
 """
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from course_agent import middleware, qbank
 from course_agent.server import app, ALL_PAPERS_SENTINEL, _load_questions_for_request
+
+ROOT = Path(__file__).resolve().parent.parent
 
 client = TestClient(app, raise_server_exceptions=False)
 
@@ -96,18 +99,45 @@ class TestHealthIsRateLimitExempt:
         assert 429 in codes, f"业务接口没有被限流: {codes}"
 
     def test_only_one_exempt_list_exists(self):
-        """限流豁免表只允许有一份定义
+        """限流豁免表只允许有一份定义，且两个消费方都必须复用它
 
         原来请求日志和限流**各硬编码了一份**，而且两份都漏了 /health
         （放的是没意义的 "/"）—— 于是探活会被 429 判死，而我的测试恰好
-        断言的是 "/"，测试还是绿的。现在两处都复用 QUIET_PATHS。
+        断言的是 "/"，测试还是绿的。
+
+        这条守卫原来写的是 `src.count("QUIET_PATHS") >= 3`（整文件字符串计数）。
+        实测**能被骗过**：让 RateLimitMiddleware 改回内联豁免表（漏掉 /health，
+        把上面那个 bug 原样复现），只要补两句提到 QUIET_PATHS 的注释，
+        计数照样 ≥ 3、字符串断言也照样过 —— 单跑这条测试是绿的。
+        （整份文件一起跑时会被下面那条行为测试抓住，所以严重性不高；
+          但一条"自己不会失败"的守卫不该留着。）
+
+        现在改成按 **AST** 断言：
+          · QUIET_PATHS 顶层赋值**有且只有一处**；
+          · 两个消费方的类体里都**引用了**它。
+        注释不参与 AST，两类绕过都不成立。
         """
-        src = open("course_agent/middleware.py", encoding="utf-8").read()
-        # QUIET_PATHS 的定义 + 两处引用
-        assert src.count("QUIET_PATHS") >= 3, "QUIET_PATHS 没有被两处复用"
-        # 切出 RateLimitMiddleware 这个类体（到下一个顶层 class 为止）
-        chunks = src.split("\nclass ")
-        bodies = [c for c in chunks if c.startswith("RateLimitMiddleware")]
-        assert len(bodies) == 1, "找不到 RateLimitMiddleware"
-        assert '"openapi.json"' not in bodies[0], "限流里还留着硬编码的豁免路径"
-        assert '"favicon.ico"' not in bodies[0], "限流里还留着硬编码的豁免路径"
+        import ast
+
+        src = (ROOT / "course_agent/middleware.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+
+        defs = [n for n in tree.body
+                if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "QUIET_PATHS"
+                        for t in n.targets)]
+        assert len(defs) == 1, f"QUIET_PATHS 有 {len(defs)} 份定义，应只有一份"
+
+        classes = {n.name: n for n in tree.body if isinstance(n, ast.ClassDef)}
+        for cls_name in ("RequestLogMiddleware", "RateLimitMiddleware"):
+            cls = classes.get(cls_name)
+            assert cls is not None, f"找不到 {cls_name}"
+            used = {n.id for n in ast.walk(cls) if isinstance(n, ast.Name)}
+            assert "QUIET_PATHS" in used, \
+                f"{cls_name} 没有复用 QUIET_PATHS（自己又写了一份豁免表？）"
+
+        limiter = classes["RateLimitMiddleware"]
+        literals = {n.value for n in ast.walk(limiter)
+                    if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+        for bad in ("/openapi.json", "/favicon.ico"):
+            assert bad not in literals, f"限流里还留着硬编码的豁免路径: {bad}"
