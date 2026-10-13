@@ -56,13 +56,21 @@ function detailOf(thread_id, mode, messages) {
 /**
  * 造沙箱：responses 里的 key 是**完整 URL**，值是返回的 JSON；
  * 传 'throw' 表示这个请求抛异常；缺失的 key 视为 404。
+ * store 传进来的对象会被直接使用 —— 可以跨沙箱共用，模拟"同一个浏览器刷新"。
  */
-function makeCtx({ responses = {}, chats = [], dismissed = [], isStreaming = false } = {}) {
+function makeCtx({ responses = {}, chats = [], dismissed = [], isStreaming = false,
+                   store = {} } = {}) {
   const calls = [];
+  const opts = [];
   const ctx = {
-    localStorage: { getItem: () => null, setItem: () => {} },
-    fetch: async (url) => {
+    localStorage: {
+      getItem: (k) => (k in store ? store[k] : null),
+      setItem: (k, v) => { store[k] = String(v); },
+    },
+    document: { getElementById: () => ({ textContent: '', focus() {} }) },
+    fetch: async (url, init) => {
       calls.push(url);
+      opts.push(init || null);
       const hit = responses[url];
       if (hit === undefined) return { ok: false, status: 404, json: async () => ({}) };
       if (hit === 'throw') throw new Error('network down');
@@ -71,17 +79,28 @@ function makeCtx({ responses = {}, chats = [], dismissed = [], isStreaming = fal
     chats,
     dismissedThreads: dismissed,
     isStreaming,
+    currentChatId: null,
+    currentThreadId: null,
+    currentTutorSessionId: null,
+    currentAppMode: 'qa',
     saveCount: 0,
     renderCount: 0,
+    toastCount: 0,
     saveChats() { ctx.saveCount++; },
     renderChatList() { ctx.renderCount++; },
+    renderMessages() {},
+    updateStatus() {},
+    showToast() { ctx.toastCount++; },
   };
   vm.createContext(ctx);
   vm.runInContext(
-    extractFn(html, 'importServerConversations')
-    + '\nglobalThis.__import = importServerConversations;',
+    ['importServerConversations', 'deleteServerConversation', 'deleteChat']
+      .map((n) => extractFn(html, n)).join('\n')
+    + '\nglobalThis.__import = importServerConversations;'
+    + '\nglobalThis.__deleteChat = deleteChat;'
+    + '\nglobalThis.__deleteServer = deleteServerConversation;',
     ctx);
-  return { ctx, calls };
+  return { ctx, calls, opts, store };
 }
 
 const PLAN_CONV = { thread_id: 'T-1', mode: 'plan', title: '什么是死锁？',
@@ -196,6 +215,67 @@ console.log(`\n前端服务端会话导入（读真实页面：${PAGE}）\n`);
   });
   await ctx.__import();
   check('流式过程中一个请求都不发', calls.length === 0, JSON.stringify(calls));
+}
+
+// ---- 8. 删除会话要同步到服务端 ----
+{
+  const store = {};
+  const { ctx, calls, opts } = makeCtx({
+    store,
+    responses: { '/chat/conversations/T-9?mode=react': { code: 0, data: { deleted: true } } },
+  });
+  ctx.chats.push({ id: 'c1', threadId: 'T-9', reasoningMode: 'react',
+                   title: '要删掉的', messages: [] });
+  ctx.currentChatId = null;
+  ctx.__deleteChat('c1');
+
+  check('本地删掉了', ctx.chats.length === 0, `chats=${ctx.chats.length}`);
+  check('发出了 DELETE 请求（本地删 ≠ 服务端删）',
+        opts.some((o) => o && o.method === 'DELETE'),
+        JSON.stringify(opts));
+  check('请求带上了正确的 mode（两张图各有各的库）',
+        calls.some((u) => u.includes('/chat/conversations/T-9') && u.includes('mode=react')),
+        JSON.stringify(calls));
+  check('记进了 dismissed（服务端删失败也不会被导回来）',
+        ctx.dismissedThreads.includes('T-9'), JSON.stringify(ctx.dismissedThreads));
+  check('dismissed 落了盘', !!store.dismissed_threads, JSON.stringify(store));
+}
+
+// ---- 9. 服务端删失败（网络断）不能影响本地删除 ----
+{
+  const { ctx } = makeCtx({
+    responses: { '/chat/conversations/T-8?mode=plan': 'throw' },
+  });
+  ctx.chats.push({ id: 'c2', threadId: 'T-8', reasoningMode: 'plan',
+                   title: 'y', messages: [] });
+  ctx.currentChatId = null;
+  let threw = null;
+  try { ctx.__deleteChat('c2'); } catch (e) { threw = e; }
+  await new Promise((r) => setTimeout(r, 0));     // 让 fire-and-forget 的 promise 跑完
+  check('网络失败时本地照样删掉', ctx.chats.length === 0, `chats=${ctx.chats.length}`);
+  check('没有把异常抛给调用方', threw === null, `threw=${threw}`);
+  check('仍然记进 dismissed（下次加载不会再导回来）',
+        ctx.dismissedThreads.includes('T-8'), JSON.stringify(ctx.dismissedThreads));
+}
+
+// ---- 10. 还没聊过的本地对话不发删除请求 ----
+{
+  const { ctx, calls } = makeCtx();
+  ctx.chats.push({ id: 'c3', threadId: null, title: '还没聊过', messages: [] });
+  ctx.currentChatId = null;
+  ctx.__deleteChat('c3');
+  check('没有 thread 的对话不发删除请求', calls.length === 0, JSON.stringify(calls));
+  check('本地照删', ctx.chats.length === 0);
+}
+
+// ---- 11. deleteServerConversation 本身 ----
+{
+  const { ctx, calls } = makeCtx();     // 未定义的 URL → 桩返回 404
+  check('服务端本来就没有（404）也算"已经干净了"',
+        (await ctx.__deleteServer('T-X', 'plan')) === true);
+  const before = calls.length;
+  check('没有 thread 时直接返回 true', (await ctx.__deleteServer(null, 'plan')) === true);
+  check('没有 thread 时不发请求', calls.length === before, JSON.stringify(calls));
 }
 
 console.log(`\n${'='.repeat(70)}`);

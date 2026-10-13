@@ -212,6 +212,7 @@ class TestDefaultDenyGuard:
         ("POST", "/qb/search"),
         ("GET", "/qb/topics"),
         ("GET", "/chat/conversations"),
+        ("DELETE", "/chat/conversations/t1"),
     ])
     def test_sensitive_endpoints_require_auth(self, method, path):
         """这些接口原本全部匿名可用（能列出语料、能检索全文）
