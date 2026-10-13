@@ -176,7 +176,7 @@ class QAUser(HttpUser):
     def ask_question(self):
         q = random.choice(self.QUESTIONS)
         with self.client.post(
-            "/chat/stream",
+            "/qa/stream",
             json={
                 "query": q,
                 "thread_id": f"loadtest-{random.randint(1, 100)}",

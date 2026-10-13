@@ -159,6 +159,16 @@ def _cache_summary(key: str, covered: int, text: str):
         _SUMMARY_CACHE.pop(next(iter(_SUMMARY_CACHE)))
 
 
+# 内部工具型 LLM 调用打的 tag —— 流层据此把它们丢掉（见 server.sse_content_event）。
+#
+# 为什么必须有：LangGraph 的 messages 模式会把图内**每一次** LLM 调用都推出去，
+# 包括本模块在 planner / synthesizer **内部**跑的这次摘要调用。实测确认：
+#   · 它带着**同一个** langgraph_node 流出去 → 光按节点做白名单挡不住；
+#   · 给这次调用加 stream=False 也没用 —— 只是从 token 流变成一条整消息，消息照样在流里。
+# 摘要属于"内部工具调用"，从来不该出现在用户的对话流里，所以给它打个 tag。
+INTERNAL_LLM_TAG = "internal_llm"
+
+
 def compress_history(
     messages: list[BaseMessage],
     llm=None,
@@ -215,7 +225,8 @@ def compress_history(
         from course_agent.errors import safe_llm_invoke
 
         response = safe_llm_invoke(
-            llm,
+            # 打 tag：这次摘要调用是内部工具调用，不该流给用户
+            llm.with_config(tags=[INTERNAL_LLM_TAG]),
             [SystemMessage(content="你是一个简洁的摘要助手。"),
              HumanMessage(content=summary_prompt)],
             context="conversation_summary",

@@ -23,10 +23,11 @@ from fastapi import FastAPI, Depends, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
-from langchain_core.messages import HumanMessage, ToolMessage, AIMessage
+from langchain_core.messages import HumanMessage, ToolMessage, AIMessage, AIMessageChunk
 from course_agent.graph import graph, react_graph
 from course_agent.auth import any_auth, create_jwt
 from course_agent.logger import logger
+from course_agent.memory import INTERNAL_LLM_TAG
 from course_agent.middleware import setup_middlewares
 from course_agent import tutor_agent, qbank, quiz_service
 from config import APP_VERSION
@@ -67,21 +68,59 @@ def resolve_within_data(user_path: str, *, must_exist: bool = True) -> FilePath:
     return candidate
 
 
-def sse_content_event(msg_chunk) -> str | None:
-    """把一条 LangChain 消息转成 SSE content 事件；该跳过的返回 None
+# 只有"写答案的那个节点"有资格把内容推给用户（按图区分：plan 图是 synthesizer，
+# react 图是 llm）。用白名单而不是黑名单 —— 未知来源一律不放行（fail closed）。
+PLAN_ANSWER_NODES = frozenset({"synthesizer"})
+REACT_ANSWER_NODES = frozenset({"llm"})
 
-    抽成函数是为了可测：这段逻辑原来内联在 /chat/stream 的生成器里，
-    只写了"跳过带 tool_calls 的消息"（本意是挡 tool-call JSON），
-    结果 **ToolMessage 的内容被原样当正文播给前端** ——
-    真实运行时吐的是检索原文 / 参考答案 / 批改 JSON，
-    直接打穿"出题不泄题面与答案"的设计意图。
+
+def sse_content_event(msg_chunk, metadata=None, answer_nodes=None) -> str | None:
+    """把一条流式消息转成 SSE content 事件；该跳过的返回 None
+
+    ## 判据是"来源白名单"，不是"类型黑名单"
+
+    原来只判类型（ToolMessage / 带 tool_calls / 空 content）—— 那是个**黑名单**，
+    默认值是"放行"：图里新增任何消息类型都会直接被播出去。
+
+    更实际的问题：LangGraph 的 messages 模式会把图内**每一次** LLM 调用都推出来，
+    包括 `compress_history` 在 planner/synthesizer **内部**跑的那次摘要调用。
+    它是一条普通消息，类型黑名单拦不住。实测（见 tests/test_stream_contract.py）：
+      · 摘要 token 带着**同一个** langgraph_node 流出去 → 按节点也挡不住；
+      · 给那次调用加 `stream=False` 只把它从 token 流变成一条整消息，消息照样在流里。
+      所以 `memory.compress_history` 会给那次调用打 INTERNAL_LLM_TAG，这里再挡一道。
+
+    还有一条容易忽略的：messages 模式除了 LLM 的 token，还会把**节点返回的消息**
+    再发一遍。而 `synthesizer_node` 返回的正是一条完整 AIMessage —— 放行它，
+    答案会在气泡里出现两遍（token 一遍 + 整条一遍）。token 的类型是
+    `AIMessageChunk`、节点返回的是 `AIMessage`，用这个差来区分最省事。
+
+    四层判据，顺序即优先级：
+      ① 来源白名单：metadata["langgraph_node"] 必须在允许集合里；
+      ② 内部 tag：带 INTERNAL_LLM_TAG 的调用一律不播（如对话摘要）；
+      ③ 只放行 AIMessageChunk —— 顺带挡掉节点返回的消息与 ToolMessage；
+      ④ content 非空。
+
+    Args:
+        msg_chunk: LangGraph messages 模式给出的消息或消息片段
+        metadata: 同一条流给出的 metadata（含 langgraph_node / tags）
+        answer_nodes: 允许成为正文的节点名集合；None 表示跳过①（给不按图区分的调用方）
     """
-    # 工具结果绝不能当正文
-    if isinstance(msg_chunk, ToolMessage) or getattr(msg_chunk, "type", "") == "tool":
+    meta = metadata or {}
+
+    # ① 来源白名单 —— 未知来源不放行
+    if answer_nodes is not None and meta.get("langgraph_node") not in answer_nodes:
         return None
-    # 带 tool_calls 的 AI 消息，content 里可能是原始 tool call JSON
-    if getattr(msg_chunk, "tool_calls", None):
+
+    # ② 内部工具型调用（如对话摘要）打了 tag，即便来自允许的节点也不播
+    if INTERNAL_LLM_TAG in (meta.get("tags") or []):
         return None
+
+    # ③ 只放行"LLM 逐字产出"。节点返回的完整 AIMessage / ToolMessage / HumanMessage
+    #    都不是 chunk，一律不放行（否则答案会被发两遍）
+    if not isinstance(msg_chunk, AIMessageChunk):
+        return None
+
+    # ④ 没有正文可发（ReAct 中间轮的工具决策 chunk 通常 content 为空）
     content = getattr(msg_chunk, "content", "") or ""
     if not content:
         return None
@@ -290,108 +329,116 @@ def _tool_result_messages(msgs: list) -> list:
             out.append(m)
     return out
 
+def _node_progress_events(node_name: str, node_output: dict) -> list:
+    """把一个节点的产出翻译成若干条进度事件
+
+    两种图共用：plan 图有 planner / executor / web_search_fallback / synthesizer，
+    react 图有 llm / tools。前端对 executor_step 与 tool_step 的渲染是一样的，
+    保留两个名字只是沿用历史（前端两个 case 都在）。
+    """
+    event = {"type": "node", "node": node_name}
+    out = []
+
+    if node_name == "planner":
+        plan = node_output.get("plan", [])
+        if isinstance(plan, dict):
+            steps = plan.get("steps", [])
+            need_tools = plan.get("need_tools", False)
+        else:
+            steps = plan if isinstance(plan, list) else []
+            need_tools = len(steps) > 0
+        event["plan"] = steps
+        event["need_tools"] = need_tools
+        event["message"] = f"规划完成，{len(steps)} 个步骤"
+        out.append(event)
+
+    elif node_name in ("executor", "tools"):
+        step_kind = "executor_step" if node_name == "executor" else "tool_step"
+        msgs = _tool_result_messages(node_output.get("messages", []))
+        for i, msg in enumerate(msgs):
+            tool_name = getattr(msg, "name", "") or f"工具{i+1}"
+            # 只给语义标签，**不回显工具返回内容**（见 quiz_service.tool_summary）
+            summary = quiz_service.tool_summary(tool_name, msg.content)
+            out.append({
+                "type": "node", "node": step_kind,
+                "step": i + 1, "total": len(msgs),
+                "tool": tool_name, "summary": summary,
+                "message": f"[{tool_name}] {summary}",
+            })
+        event["tool_count"] = len(msgs)
+        event["message"] = (f"执行完成，{len(msgs)} 个工具调用" if node_name == "executor"
+                            else f"工具执行完成，{len(msgs)} 个结果")
+        out.append(event)
+
+    elif node_name == "web_search_fallback":
+        event["message"] = "知识库结果不足，已补充联网搜索"
+        out.append(event)
+
+    elif node_name == "synthesizer":
+        event["message"] = "回答生成完毕"
+        out.append(event)
+
+    elif node_name == "llm":
+        event["message"] = "LLM 思考中"
+        out.append(event)
+
+    elif node_name == "force_search":
+        event["message"] = "强制检索知识库"
+        out.append(event)
+
+    else:
+        event["message"] = f"节点 {node_name} 执行完毕"
+        out.append(event)
+
+    return out
+
 
 @app.post("/qa/stream")
 def qa_stream(req: QueryRequest):
-    """SSE 流式问答接口
+    """SSE 流式问答（**唯一实现** —— 原来 /chat/stream 是它的逐行复制品，已删）
 
     返回 text/event-stream，逐步推送：
       1. start   — 会话开始，返回 thread_id
-      2. node    — 每个节点执行完毕，推送节点名和关键数据
-      3. done    — 全部完成，推送最终回答
-      4. error   — 出错时推送错误信息
+      2. node    — 每条进度（planner / executor_step / tool_step / …）
+      3. content — 答案的**逐字**输出，只来自"写答案的那个节点"
+      4. done    — 完成，带最终回答（权威值）
+      5. error   — 出错
+
+    `content` 与 `done.answer` 的关系：前者是打字机效果，后者是权威结果 ——
+    前端在 done 时用 answer 覆盖一次，所以"流式少了一个字/多了一遍"这类问题
+    不会留在界面上；而模型不流式时（一个 content 都没有）答案也照样能到。
+
+    注意 `content` 的过滤有四层判据（来源白名单 / 内部 tag / 只放行 chunk / 非空），
+    详见 sse_content_event —— 尤其"只放行 AIMessageChunk"这条：messages 模式会把
+    节点**返回**的完整 AIMessage 也推一遍，放行就会让答案在气泡里出现两遍。
     """
     tid = req.thread_id or str(uuid.uuid4())
     config = {"configurable": {"thread_id": tid}}
-    active_graph = react_graph if req.mode == "react" else graph
+    is_react = req.mode == "react"
+    active_graph = react_graph if is_react else graph
+    answer_nodes = REACT_ANSWER_NODES if is_react else PLAN_ANSWER_NODES
     initial_state = {"messages": [HumanMessage(content=req.query)], "plan": []}
 
     def event_stream():
         yield _sse({"type": "start", "thread_id": tid, "query": req.query})
-
         try:
-            # 使用默认流式模式（values），逐个节点推送结果
-            for output in active_graph.stream(initial_state, config=config):
-                # output 是 {node_name: node_output} 的 dict
-                for node_name, node_output in output.items():
-                    event = {"type": "node", "node": node_name}
+            for mode, chunk in active_graph.stream(
+                initial_state, config=config, stream_mode=["updates", "messages"]
+            ):
+                if mode == "updates":
+                    for node_name, node_output in chunk.items():
+                        for event in _node_progress_events(node_name, node_output or {}):
+                            yield _sse(event)
+                elif mode == "messages":
+                    msg_chunk, metadata = chunk
+                    line = sse_content_event(msg_chunk, metadata, answer_nodes)
+                    if line:
+                        yield line
 
-                    if node_name == "planner":
-                        plan = node_output.get("plan", [])
-                        if isinstance(plan, dict):
-                            steps = plan.get("steps", [])
-                            need_tools = plan.get("need_tools", False)
-                        else:
-                            steps = plan if isinstance(plan, list) else []
-                            need_tools = len(steps) > 0
-                        event["plan"] = steps
-                        event["need_tools"] = need_tools
-                        event["message"] = f"规划完成，{len(steps)} 个步骤"
-                        yield _sse(event)
-
-                    elif node_name == "executor":
-                        msgs = _tool_result_messages(node_output.get("messages", []))
-                        for i, msg in enumerate(msgs):
-                            tool_name = getattr(msg, "name", "") or f"工具{i+1}"
-                            # 只给"干了什么"的语义标签，**不回显工具返回内容**：
-                            # 课件是 PDF 抽出来的乱文字，出题/批改结果还带答案
-                            summary = quiz_service.tool_summary(tool_name, msg.content)
-                            yield _sse({
-                                "type": "node",
-                                "node": "executor_step",
-                                "step": i + 1,
-                                "total": len(msgs),
-                                "tool": tool_name,
-                                "summary": summary,
-                                "message": f"[{tool_name}] {summary}",
-                            })
-                        event["tool_count"] = len(msgs)
-                        event["message"] = f"执行完成，{len(msgs)} 个工具调用"
-                        yield _sse(event)
-
-                    elif node_name == "web_search_fallback":
-                        event["message"] = "知识库结果不足，已补充联网搜索"
-                        yield _sse(event)
-
-                    elif node_name == "synthesizer":
-                        event["message"] = "回答生成完毕"
-                        yield _sse(event)
-
-                    elif node_name == "llm":
-                        event["message"] = "LLM 思考中"
-                        yield _sse(event)
-
-                    elif node_name == "tools":
-                        msgs = _tool_result_messages(node_output.get("messages", []))
-                        for i, msg in enumerate(msgs):
-                            tool_name = getattr(msg, "name", "") or f"工具{i+1}"
-                            summary = quiz_service.tool_summary(tool_name, msg.content)
-                            yield _sse({
-                                "type": "node",
-                                "node": "tool_step",
-                                "step": i + 1,
-                                "total": len(msgs),
-                                "tool": tool_name,
-                                "summary": summary,
-                                "message": f"[{tool_name}] {summary}",
-                            })
-                        event["tool_count"] = len(msgs)
-                        event["message"] = f"工具执行完成，{len(msgs)} 个结果"
-                        yield _sse(event)
-
-                    elif node_name == "force_search":
-                        event["message"] = "强制检索知识库"
-                        yield _sse(event)
-
-                    else:
-                        event["message"] = f"节点 {node_name} 执行完毕"
-                        yield _sse(event)
-
-            # 获取最终回答
+            # 权威的最终回答：即使一个 content 都没流出来，前端也能拿到结果
             final_state = active_graph.get_state(config)
             messages = final_state.values.get("messages", [])
             answer = messages[-1].content if messages else ""
-
             yield _sse({"type": "done", "answer": answer, "thread_id": tid})
 
         except Exception as e:
@@ -406,131 +453,6 @@ def qa_stream(req: QueryRequest):
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
         },
-    )
-
-
-# ============================================================
-# 新增：兼容前端的聊天接口
-# ============================================================
-
-@app.post("/chat/stream")
-async def chat_stream_frontend(req: QueryRequest):
-    """兼容前端聊天接口的SSE流式响应"""
-    tid = req.thread_id or str(uuid.uuid4())
-    config = {"configurable": {"thread_id": tid}}
-    active_graph = react_graph if req.mode == "react" else graph
-    initial_state = {"messages": [HumanMessage(content=req.query)], "plan": []}
-
-    def event_stream():
-        yield f"data: {json.dumps({'type': 'start', 'thread_id': tid}, ensure_ascii=False)}\n\n"
-
-        try:
-            for mode, chunk in active_graph.stream(
-                initial_state, config=config, stream_mode=["updates", "messages"]
-            ):
-                if mode == "updates":
-                    for node_name, node_output in chunk.items():
-                        event = {"type": "node", "node": node_name}
-
-                        if node_name == "planner":
-                            plan = node_output.get("plan", [])
-                            if isinstance(plan, dict):
-                                steps = plan.get("steps", [])
-                            else:
-                                steps = plan if isinstance(plan, list) else []
-                            event["plan"] = steps
-                            event["message"] = f"规划完成，{len(steps)} 个步骤"
-                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-
-                        elif node_name == "executor":
-                            msgs = _tool_result_messages(node_output.get("messages", []))
-                            for i, msg in enumerate(msgs):
-                                tool_name = getattr(msg, "name", "") or f"工具{i+1}"
-                                summary = quiz_service.tool_summary(tool_name, msg.content)
-                                detail_event = {
-                                    "type": "node", "node": "executor_step",
-                                    "step": i + 1, "total": len(msgs),
-                                    "tool": tool_name, "summary": summary,
-                                    "message": f"[{tool_name}] {summary}",
-                                }
-                                yield f"data: {json.dumps(detail_event, ensure_ascii=False)}\n\n"
-                            event["tool_count"] = len(msgs)
-                            event["message"] = f"执行完成，{len(msgs)} 个工具调用"
-                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-
-                        elif node_name == "synthesizer":
-                            event["message"] = "回答生成完毕"
-                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-
-                        elif node_name == "llm":
-                            event["message"] = "LLM 思考中"
-                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-
-                        elif node_name == "tools":
-                            msgs = _tool_result_messages(node_output.get("messages", []))
-                            for i, msg in enumerate(msgs):
-                                tool_name = getattr(msg, "name", "") or f"工具{i+1}"
-                                summary = quiz_service.tool_summary(tool_name, msg.content)
-                                detail_event = {
-                                    "type": "node", "node": "tool_step",
-                                    "step": i + 1, "total": len(msgs),
-                                    "tool": tool_name, "summary": summary,
-                                    "message": f"[{tool_name}] {summary}",
-                                }
-                                yield f"data: {json.dumps(detail_event, ensure_ascii=False)}\n\n"
-                            event["tool_count"] = len(msgs)
-                            event["message"] = f"工具执行完成，{len(msgs)} 个结果"
-                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-
-                        elif node_name == "force_search":
-                            event["message"] = "强制检索知识库"
-                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-
-                        else:
-                            event["message"] = f"节点 {node_name} 执行完毕"
-                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-
-                elif mode == "messages":
-                    msg_chunk, metadata = chunk
-                    # 工具产出/工具调用消息在这里被过滤掉，绝不会当正文发给前端
-                    event_line = sse_content_event(msg_chunk)
-                    if event_line:
-                        yield event_line
-
-            yield f"data: [DONE]\n\n"
-
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        },
-    )
-
-
-@app.post("/tutor/stream")
-def tutor_stream(req: TutorRequest):
-    """LLM 主导的学习助手 SSE 流式接口
-
-    统一接口，自然语言对话，Agent 自己决定调用什么工具。
-    """
-    def event_stream():
-        try:
-            for event in tutor_agent.process_message(req.session_id, req.query):
-                yield _sse(event)
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            yield _sse({"type": "error", "msg": str(e)[:300]})
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
 
 
