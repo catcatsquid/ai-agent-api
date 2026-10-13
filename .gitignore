@@ -3,6 +3,9 @@
 venv/
 .venv/
 
+# uv 的缓存（只在生成 requirements.lock 时用；安装本身走 pip，不需要它）
+.uv-cache/
+
 # Python 缓存
 __pycache__/
 *.pyc

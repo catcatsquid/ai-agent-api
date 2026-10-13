@@ -14,6 +14,74 @@
 
 （下一次改动先写在这里，发版时移到下面并补上版本号与日期）
 
+## [1.5.0] - 2026-10-13
+
+**环境依赖变成真正可复现的**：加了 uv 生成的通用锁文件，本地与 CI 从此装的是同一套。
+
+### 背景（先说清问题）
+
+`requirements.txt` 只写**直接**依赖，而开头自称"已锁定版本（可复现安装）"。实测下来：
+
+- 传递依赖**一个都没锁**，pip 每次解析都拿"当时最新"；
+- 里面还有一行 `langchain>=0.3.0` —— **开放式范围**，等于没锁；
+- 本地与 CI 的实际差异：**52 个包版本不同**（含 `huggingface-hub` 1.x→2.x、
+  `oauthlib` 3→4、`kubernetes` 36→37 这种跨大版本），另有 7 个包只在 Windows 有、
+  4 个只在 Linux 有。
+
+于是"CI 绿灯"带着运气成分：某个包发了新版，CI 可能在你一行代码没改的情况下变红。
+
+### 变更
+
+- 新增 **`requirements.lock`**（`uv pip compile --universal` 生成）：约 150 条完整锁定，
+  含所有传递依赖与**环境标记** —— 所以同一份文件在两个平台上都对：
+
+  ```
+  uvloop==0.23.0 ; ... sys_platform != 'win32'
+  pywin32==312   ; sys_platform == 'win32'
+  colorama==0.4.6 ; os_name == 'nt' or sys_platform == 'win32'
+  ```
+
+  > 为什么不用 `pip freeze`：它是"我这台机器"的快照、**没有标记** ——
+  > `uvloop` 会被带到 Windows、`pywin32` 会被带到 Linux，**两边各炸一次**。
+  > `--universal` 才是跨平台的正确做法。
+
+- **CI 与 Dockerfile 改成从锁文件安装**（`pip install -r requirements.lock`）。
+  锁文件本来就是 requirements 格式，所以**安装这一步不需要引入新工具** ——
+  镜像不用多装 uv，也不用改已有的清华镜像配置。uv 只用于**生成/更新**锁文件，
+  单独装（`pip install uv`），不进锁文件。
+
+- **删掉 `langchain>=0.3.0`**：全仓库扫过，代码只用 `langchain_core` 与
+  `langchain_community`，**从未 `import langchain`**；本机根本没装它，634 条测试也全过。
+  CI 装它只是因为文件里写了它 —— 而它又是全文件唯一一行开放式范围。
+
+- **本机环境按锁文件对齐**（52 个传递依赖升到锁定版本）**然后跑全量测试** ——
+  锁文件描述的这套栈是被真正验证过的，不是我本机原来那套"碰巧能用"的。
+
+- README 的"快速开始"补上了**装依赖这一步**（原来整节都没提，照它走根本跑不起来）。
+
+### 测试
+
+- 新增 `tests/test_lockfile.py`（3 条）：
+  ① 声明里写死版本的直接依赖，锁文件必须是同一个版本（改了声明忘了重新生成 → 红）；
+  ② 当前环境装的版本必须与锁文件里**对本平台生效**的条目一致
+     （CI 退回从 requirements.txt 装、或有人手工升级 → 红）；
+  ③ 锁文件必须带环境标记（用 `pip freeze` 生成 → 红）。
+  断言写在**解析出来的条目与标记**上，不是搜文件文本 —— 注释骗不过它。
+
+### 验证
+
+- Python **634 passed**（原 631 + 锁文件 3 条）；前端 auth_block 52/0、chat_context 14/0、
+  server_conversations 35/0。
+- 三处变异验证锁文件守卫：改声明不重新生成、加一个锁文件里没有的包、把标记抹掉
+  （模拟 `pip freeze`）—— 全部正确变红。
+- 锁文件的 Windows 分支已在本机验证；**Linux 分支由 CI 验证**（CI 已改为从锁文件装）。
+
+### 一条环境观察（不当成结论）
+
+本机走代理时 `pip install -r requirements.lock` 卡了 25 分钟没动静，换成
+`uv pip install -r requirements.lock` **14 秒**装完。但这**不能**作为"CI 也该用 uv 装"的依据 ——
+CI 是直连 PyPI，pip 在那边一直是 1 分钟左右。保留 pip 是为了不给镜像和 CI 引入新工具。
+
 ## [1.4.1] - 2026-10-13
 
 一轮"自我清洁"：清掉 1.2.0 把 checkpointer 换成落盘 SQLite 时带出来的两处遗留。
@@ -424,7 +492,8 @@ Python **605 passed**（原 595 + 新契约测试 3 条 + 契约/守卫相关新
 
 ---
 
-[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.4.1...HEAD
+[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.0
 [1.4.1]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.4.1
 [1.4.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.4.0
 [1.3.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.3.0
