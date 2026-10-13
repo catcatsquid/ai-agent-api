@@ -8,15 +8,17 @@ thread_id。于是"同一个 thread_id 换个模式继续说"会读到对方的�
 
 1.2.0 起 checkpointer 换成了落盘的 SqliteSaver（见 graph.py）：**两张图各一个库文件**。
 """
+import sqlite3
 from unittest.mock import patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.checkpoint.sqlite import SqliteSaver
 
 from course_agent import nodes
 from course_agent.graph import (
-    graph,
-    react_graph,
+    build_graph,
+    build_react_graph,
     plan_checkpointer,
     react_checkpointer,
 )
@@ -26,6 +28,24 @@ def _db_path(saver) -> str:
     """取 sqlite 连接实际打开的库文件路径"""
     row = saver.conn.execute("PRAGMA database_list").fetchone()
     return row[2] if row else ""
+
+
+@pytest.fixture
+def tmp_graphs(tmp_path):
+    """用**临时库**重建两张图，供"写入再读回"的测试使用
+
+    原来这两条测试直接用模块级的 `graph` / `react_graph`，于是每跑一次测试就往
+    用户的**真实**会话库里插两条 thread（`isolation-test-plan-write` 之类）。
+    换成落盘 checkpointer 之前，这些写入只落在进程内存里、重启就没了；
+    1.2.0 之后它们**持久化**了 —— 用户会在会话列表里看到测试垃圾。
+
+    （`tests/conftest.py` 里还有一条会话级守卫：整轮测试不许往真实库写会话。）
+    """
+    def saver(name):
+        return SqliteSaver(sqlite3.connect(str(tmp_path / name), check_same_thread=False))
+
+    return (build_graph(checkpointer=saver("plan.sqlite3")),
+            build_react_graph(checkpointer=saver("react.sqlite3")))
 
 
 class TestIndependentCheckpointers:
@@ -45,29 +65,31 @@ class TestIndependentCheckpointers:
         assert p.replace("\\", "/").endswith("runtime/checkpoints_plan.sqlite3")
         assert r.replace("\\", "/").endswith("runtime/checkpoints_react.sqlite3")
 
-    def test_react_does_not_see_plan_state(self):
+    def test_react_does_not_see_plan_state(self, tmp_graphs):
         """往 Plan 图写一轮状态，ReAct 图用同一 thread_id 不能读到"""
+        plan_g, react_g = tmp_graphs
         tid = "isolation-test-plan-write"
         cfg = {"configurable": {"thread_id": tid}}
-        graph.update_state(cfg, {
+        plan_g.update_state(cfg, {
             "messages": [HumanMessage(content="PLAN-ONLY-MARKER", id="p1")],
             "plan": [{"tool": "search_knowledge", "args": {"query": "死锁"}}],
         })
 
-        st = react_graph.get_state(cfg)
+        st = react_g.get_state(cfg)
         msgs = (st.values or {}).get("messages", []) if st.values else []
         leaked = [m for m in msgs if "PLAN-ONLY-MARKER" in str(getattr(m, "content", ""))]
         assert not leaked, f"ReAct 读到了 Plan 的会话状态: {leaked}"
         assert not (st.values or {}).get("plan"), "ReAct 不该看到 plan 字段"
 
-    def test_plan_does_not_see_react_state(self):
+    def test_plan_does_not_see_react_state(self, tmp_graphs):
+        plan_g, react_g = tmp_graphs
         tid = "isolation-test-react-write"
         cfg = {"configurable": {"thread_id": tid}}
-        react_graph.update_state(cfg, {
+        react_g.update_state(cfg, {
             "messages": [HumanMessage(content="REACT-ONLY-MARKER", id="r1")],
         })
 
-        st = graph.get_state(cfg)
+        st = plan_g.get_state(cfg)
         msgs = (st.values or {}).get("messages", []) if st.values else []
         leaked = [m for m in msgs if "REACT-ONLY-MARKER" in str(getattr(m, "content", ""))]
         assert not leaked, f"Plan 读到了 ReAct 的会话状态: {leaked}"
