@@ -5,6 +5,8 @@ thread_id。于是"同一个 thread_id 换个模式继续说"会读到对方的�
 更糟的是 plan 的 executor 会造出合成 ToolMessage(tool_call_id="plan_0")，
 而 state 里没有声明它的 assistant 消息 —— react 把这串发给模型会被按协议拒绝（400），
 被 safe_llm_invoke 吞成兜底套话，表现为"切完模式模型静默变傻"。
+
+1.2.0 起 checkpointer 换成了落盘的 SqliteSaver（见 graph.py）：**两张图各一个库文件**。
 """
 from unittest.mock import patch
 
@@ -12,12 +14,36 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from course_agent import nodes
-from course_agent.graph import graph, react_graph, plan_memory, react_memory
+from course_agent.graph import (
+    graph,
+    react_graph,
+    plan_checkpointer,
+    react_checkpointer,
+)
+
+
+def _db_path(saver) -> str:
+    """取 sqlite 连接实际打开的库文件路径"""
+    row = saver.conn.execute("PRAGMA database_list").fetchone()
+    return row[2] if row else ""
 
 
 class TestIndependentCheckpointers:
     def test_each_graph_has_its_own_checkpointer(self):
-        assert plan_memory is not react_memory, "两张图不能共用同一个 checkpointer"
+        assert plan_checkpointer is not react_checkpointer, \
+            "两张图不能共用同一个 checkpointer"
+
+    def test_the_two_checkpointers_use_different_files(self):
+        """光"两个对象"不够 —— 必须落在**不同的库文件**上
+
+        否则即使对象不同，同一个 thread_id 在同一个库里还是会撞上，
+        等于绕了一圈又回到"切模式串味"。
+        """
+        p, r = _db_path(plan_checkpointer), _db_path(react_checkpointer)
+        assert p and r, f"取不到库文件路径：plan={p!r} react={r!r}"
+        assert p != r, f"两张图用了同一个库文件：{p}"
+        assert p.replace("\\", "/").endswith("runtime/checkpoints_plan.sqlite3")
+        assert r.replace("\\", "/").endswith("runtime/checkpoints_react.sqlite3")
 
     def test_react_does_not_see_plan_state(self):
         """往 Plan 图写一轮状态，ReAct 图用同一 thread_id 不能读到"""

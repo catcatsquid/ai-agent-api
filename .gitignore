@@ -57,7 +57,7 @@ docs/benchmark_report.html
 # 对话导出（/chat/export 落地目录，用户自己的对话记录，不入库）
 exports/
 
-# 运行时状态（刷题游标的落盘副本，见 nodes.py 的 CURSOR_FILE）
+# 运行时状态（checkpointer 的库文件 runtime/checkpoints_*.sqlite3，见 graph.py）
 runtime/
 
 # 测试结果（JSON）

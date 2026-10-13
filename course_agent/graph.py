@@ -18,8 +18,11 @@ ReAct 图结构:
 多轮对话：通过 checkpointer 保存对话状态，thread_id 区分不同会话
 """
 
+import sqlite3
+from pathlib import Path
+
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from course_agent.state import AgentState
 from course_agent.nodes import (
     planner_node,
@@ -33,7 +36,7 @@ from course_agent.nodes import (
     should_continue,
 )
 
-# 两张图**各用独立的 checkpointer**。
+# 两张图**各用独立的 checkpointer**（各有各的库文件）。
 #
 # 原来两者共用同一个模块级 MemorySaver，而命名空间只有 thread_id。
 # 于是"同一个 thread_id 换个模式继续说"就会读到对方的会话状态 ——
@@ -44,9 +47,33 @@ from course_agent.nodes import (
 # 也就是"切换模式后模型静默变傻"。
 #
 # 分开之后即使前端忘了重置 thread_id，两套会话也不会互相污染。
-# 保留可传入 checkpointer 的参数，方便换成 SQLite/Postgres 做持久化。
-plan_memory = MemorySaver()
-react_memory = MemorySaver()
+# 保留可传入 checkpointer 的参数，方便测试注入。
+#
+# ## 为什么从 MemorySaver 换成 SQLite
+#
+# MemorySaver 把 state 放在**进程内存**里：服务一重启，所有 thread 的状态就没了 ——
+# 学生回来变成新会话，"继续下一组 / 继续讲"全部失效。
+# 之前只给刷题游标单独做了一份落盘副本（runtime/plan_cursors.json）兜这个底，
+# 但那只救一条链路，还造成"内存 + 磁盘"两个真源、读写口径得手工对齐
+# （1.0.1 修过一次读写不对称，1.0.2 的重启测试就是照它写的）。
+# 换成 SqliteSaver 之后 state **整体**落盘，那份副本连同 _save_cursor/_load_cursor
+# 一起删掉了 —— 真源只剩 state 一个。
+#
+# 两个注意点：
+#   · check_same_thread=False —— LangGraph 会在别的线程里跑节点，FastAPI 也会并发
+#   · 这里是**模块级长连接**（进程生命周期内不关），不是"每次请求开一个"
+_CKPT_DIR = Path(__file__).resolve().parent.parent / "runtime"
+
+
+def _open_saver(filename: str) -> SqliteSaver:
+    """开一个落盘的 checkpointer（库文件放 runtime/，已被 .gitignore 排除）"""
+    _CKPT_DIR.mkdir(parents=True, exist_ok=True)
+    return SqliteSaver(
+        sqlite3.connect(str(_CKPT_DIR / filename), check_same_thread=False))
+
+
+plan_checkpointer = _open_saver("checkpoints_plan.sqlite3")
+react_checkpointer = _open_saver("checkpoints_react.sqlite3")
 
 
 def build_graph(checkpointer=None):
@@ -64,7 +91,7 @@ def build_graph(checkpointer=None):
     builder.add_edge("web_search_fallback", "synthesizer")
     builder.add_edge("synthesizer", END)
 
-    return builder.compile(checkpointer=checkpointer if checkpointer is not None else plan_memory)
+    return builder.compile(checkpointer=checkpointer if checkpointer is not None else plan_checkpointer)
 
 
 def build_react_graph(checkpointer=None):
@@ -78,7 +105,7 @@ def build_react_graph(checkpointer=None):
     builder.add_conditional_edges("llm", should_continue, ["tools", END])
     builder.add_edge("tools", "llm")
 
-    return builder.compile(checkpointer=checkpointer if checkpointer is not None else react_memory)
+    return builder.compile(checkpointer=checkpointer if checkpointer is not None else react_checkpointer)
 
 
 # 默认使用 Plan-and-Execute 模式

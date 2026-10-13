@@ -10,9 +10,58 @@
   （原因见 [docs/README.md](docs/README.md)）。
   两者刻意不重复 —— 同一个事实写两遍，最后必然有一处过期。
 
-## [未发布]
+## [1.2.0] - 2026-10-13
 
-（下一次改动先写在这里，发版时移到下面并补上版本号与日期）
+把 checkpointer 换成落盘的 SQLite —— **会话状态第一次活过进程重启**，
+并在此基础上加了服务端会话列表。顺带删掉 1.0.x 那套"给游标单独落盘"的补丁。
+
+### 变更
+
+- **`MemorySaver` → `SqliteSaver`**（`langgraph-checkpoint-sqlite==3.0.3`）。
+  state 现在写在 `runtime/checkpoints_plan.sqlite3` / `checkpoints_react.sqlite3`
+  （两张图**各一个库文件**，沿用"防止跨模式串味"的隔离），`runtime/` 已被 gitignore。
+  两个实现细节：`check_same_thread=False`（LangGraph 在别的线程跑节点、FastAPI 也会并发）、
+  模块级长连接（不是每次都开）。
+
+  ⚠️ 版本必须配得对：**3.1.x 要求 `langgraph-checkpoint>=4.3.0`，而 langgraph 1.2.11
+  带的是 4.2.0**，装上会在 **import 时**就炸
+  （`ImportError: cannot import name 'writes_sort_key'`）。3.0.3 的约束是 `>=3,<5.0.0`，
+  与 4.2.0 相容。这条写进 requirements.txt 的注释了。
+
+- **删掉 `runtime/plan_cursors.json` 那一整套**（`CURSOR_FILE` / `_save_cursor` /
+  `_load_cursor` / `_thread_id`）。游标只存在 `state["session"]`，由 checkpointer
+  落盘保管 —— **真源从两个变回一个**，1.0.1 修过的那类"读写不对称"从根上消失了。
+  `state.py` 的注释也从"这是补偿"改写成"这是设计"。
+
+- 新增 **`GET /chat/conversations`**：列出服务端保存的会话（thread_id / mode /
+  标题 / checkpoint 数 / 更新时间），最近的在前。鉴权走
+  `AuthGuardMiddleware` 的默认拒绝，并已加进 `test_auth.py` 的"必须鉴权"清单
+  （它会吐出每个会话的第一句提问）。前端目前仍把会话列表存在 localStorage，
+  改用这个接口是下一步。
+
+- `checkpoint_id → 时间` 的换算：它是 **UUIDv6**，前 48 位是 60 位时间戳（1582 起、
+  100 纳秒）的高位。实测三个相隔 2.5 秒写入的 checkpoint，解出来与实际写入时间
+  **差 0.0 秒**；解析失败返回 `None`，排序仍由 checkpoint_id 自身的单调性保证。
+
+### 测试
+
+- 新增 `tests/test_conversations.py`（12 条）：用临时库替换模块级 checkpointer
+  （**不碰真实的 runtime/ 数据**），覆盖标题/分区/排序/limit/端点形状与参数校验；
+  并用**真实 checkpointer 写出来的 id** 验证时间解码（不手造样本）。
+- `test_reported_issues.py` 的游标那组重写：核心换成
+  **模拟重启**（同一个库文件、新 saver、新图 → state 必须还在）——
+  这正是 MemorySaver 时代会拿到空 state 的场景。
+  三个只对磁盘副本有意义的用例（round-trip / 未知 thread / 坏 JSON）删掉。
+- `test_graph_isolation.py`：除了"两个 checkpointer 不是同一个对象"，
+  再加一条**必须落在不同库文件**上 —— 否则绕一圈还是会撞。
+- 全量 **617 passed**（原 604）；前端 auth_block 52/0、chat_context 14/0。
+
+### 已知取舍
+
+- checkpoint 是 **append-only**：每轮对话都会多一行，长期跑需要清理策略
+  （`SqliteSaver` 自带 `delete_thread`，暂未接）。
+- 会话标题取"最新 state 里的第一条用户提问"，被摘要压缩过之后会往后挪
+  （要拿最初那一问得逐条扫历史，代价不值得）。
 
 ## [1.1.0] - 2026-10-13
 
@@ -253,7 +302,8 @@ Python **605 passed**（原 595 + 新契约测试 3 条 + 契约/守卫相关新
 
 ---
 
-[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.1.0...HEAD
+[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.2.0
 [1.1.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.1.0
 [1.0.2]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.0.2
 [1.0.1]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.0.1

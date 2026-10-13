@@ -211,9 +211,11 @@ class TestDefaultDenyGuard:
         ("GET", "/qb/list"),
         ("POST", "/qb/search"),
         ("GET", "/qb/topics"),
+        ("GET", "/chat/conversations"),
     ])
     def test_sensitive_endpoints_require_auth(self, method, path):
-        """这些接口原本全部匿名可用（能列出语料、能检索全文）"""
+        """这些接口原本全部匿名可用（能列出语料、能检索全文）
+        /chat/conversations 还会吐出**每个会话的第一句提问**，同样不该匿名可读。"""
         resp = client.request(method, path, json={"query": "x"} if method == "POST" else None)
         assert resp.status_code == 401, f"{method} {path} 竟然不需要鉴权"
         assert resp.json()["code"] == 401

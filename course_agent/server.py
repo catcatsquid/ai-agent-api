@@ -17,14 +17,19 @@ Week 10 升级：知识库管理接口（增量导入 + 检索测试）
 
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path as FilePath
 from fastapi import FastAPI, Depends, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage, ToolMessage, AIMessage, AIMessageChunk
-from course_agent.graph import graph, react_graph
+from course_agent.graph import (
+    graph,
+    react_graph,
+    plan_checkpointer,
+    react_checkpointer,
+)
 from course_agent.auth import any_auth, create_jwt
 from course_agent.logger import logger
 from course_agent.memory import INTERNAL_LLM_TAG
@@ -454,6 +459,97 @@ def qa_stream(req: QueryRequest):
             "Connection": "keep-alive",
         },
     )
+
+
+# ============================================================
+# 会话列表（服务端保存的 thread）
+# ============================================================
+
+# 1582-10-15 → 1970-01-01 的秒数：checkpoint_id（UUIDv6）的时间起点
+_GREGORIAN_TO_UNIX_SEC = 12219292800
+
+
+def _checkpoint_time(checkpoint_id: str) -> str | None:
+    """把 checkpointer 的 checkpoint_id 解成 ISO 时间
+
+    checkpoint_id 是 **UUIDv6**：前 48 位是 60 位时间戳的**高 48 位**，
+    而时间戳是「1582-10-15 起的 100 纳秒数」。所以左移 12 位补回 60 位、
+    除以 1e7 得秒，再减掉到 1970 的偏移。
+
+    （实测：三个相隔 2.5 秒写入的 checkpoint，解出来与实际写入时间差 0.0 秒。
+      解析失败返回 None —— 排序不依赖它，靠 checkpoint_id 自身的单调性。）
+    """
+    try:
+        high48 = int(checkpoint_id.replace("-", "")[:12], 16)
+        return datetime.fromtimestamp(
+            (high48 << 12) / 1e7 - _GREGORIAN_TO_UNIX_SEC, timezone.utc).isoformat()
+    except (ValueError, AttributeError, OSError, OverflowError):
+        return None
+
+
+def _thread_title(app, thread_id: str) -> str:
+    """用这个会话里的第一句用户提问当标题
+
+    取的是**最新** state 里的第一条 HumanMessage。对话被摘要压缩过之后，
+    最早那条可能已经不在 state 里了 —— 那时标题会往后挪，属于已知取舍：
+    为了拿"最初那一问"去逐条扫 checkpointer 历史，代价不值得。
+    """
+    try:
+        state = app.get_state({"configurable": {"thread_id": thread_id}})
+        for msg in ((state.values or {}).get("messages") or []):
+            if isinstance(msg, HumanMessage) and (msg.content or "").strip():
+                return str(msg.content).strip().replace("\n", " ")[:40]
+    except Exception as e:      # 读不出来不该让整个列表挂掉
+        logger.debug("会话标题读取失败 %s: %s", thread_id, e)
+    return ""
+
+
+def list_server_conversations(limit: int = 30) -> list:
+    """列出落盘的会话（最近的在前）
+
+    为什么这个接口以前不可能有：会话状态原来在 MemorySaver 里（**进程内存**），
+    服务一重启就没了，也就没什么可列的。1.2.0 换成落盘的 SqliteSaver 之后，
+    服务端才第一次真的"存着"这些会话。
+
+    直接查 checkpointer 的库：`checkpoints` 表按 thread_id 聚合，
+    用 `checkpoint_ns = ''` 过滤掉子图（只有顶层才是"一个会话"）。
+    """
+    rows = []
+    for saver, app, mode in ((plan_checkpointer, graph, "plan"),
+                             (react_checkpointer, react_graph, "react")):
+        try:
+            found = saver.conn.execute(
+                "SELECT thread_id, MAX(checkpoint_id) AS latest, COUNT(*) AS n "
+                "FROM checkpoints WHERE checkpoint_ns = '' "
+                "GROUP BY thread_id ORDER BY latest DESC LIMIT ?",
+                (limit,)).fetchall()
+        except Exception as e:      # 库被并发写锁住时别让接口 500
+            logger.warning("会话列表查询失败(%s): %s", mode, e)
+            continue
+        for thread_id, latest, n in found:
+            rows.append({
+                "thread_id": thread_id,
+                "mode": mode,
+                "checkpoints": n,
+                "updated_at": _checkpoint_time(latest),
+                "title": _thread_title(app, thread_id),
+            })
+    rows.sort(key=lambda c: (c["updated_at"] or ""), reverse=True)
+    return rows[:limit]
+
+
+@app.get("/chat/conversations")
+def chat_conversations(limit: int = Query(30, ge=1, le=200)):
+    """列出服务端保存的会话
+
+    前端目前把会话列表存在浏览器 localStorage（`chats`）里，换设备或清缓存就没了。
+    这个接口把"服务端存着哪些会话"暴露出来，供前端改用。
+
+    ⚠️ 这是单用户项目，**没有会话归属**：所有凭据看到同一份列表。
+    鉴权由 AuthGuardMiddleware 默认拒绝地管着 —— 开启 AUTH_ENFORCE 时
+    这个接口和其它接口一样需要凭据。
+    """
+    return {"code": 0, "msg": "ok", "data": list_server_conversations(limit)}
 
 
 # ============================================================
