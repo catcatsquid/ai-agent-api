@@ -364,6 +364,9 @@ let currentMsg = null;
 // chats: [{id, title, messages:[{role, content}], mode, createdAt}]
 let chats = JSON.parse(localStorage.getItem('chats') || '[]');
 let currentChatId = null;
+// 从服务端导入后又被用户删掉的 thread。
+// 不记这一笔的话，下次加载又会把它导回来 —— 用户会觉得"删不掉"。
+let dismissedThreads = JSON.parse(localStorage.getItem('dismissed_threads') || '[]');
 // ============================================================
 // 会话管理
 // ============================================================
@@ -382,7 +385,7 @@ return;
 list.innerHTML = chats.map(c => `
 <div class="chat-item ${c.id === currentChatId ? 'active' : ''}" onclick="loadChat('${c.id}')">
 <div class="chat-info">
-<div class="chat-title">${escapeHtml(c.title)}</div>
+<div class="chat-title">${c.fromServer ? '☁ ' : ''}${escapeHtml(c.title)}</div>
 <div class="chat-time">${formatTime(c.createdAt)}</div>
 </div>
 <button class="btn-delete-chat" onclick="event.stopPropagation(); deleteChat('${c.id}')" title="删除对话">✕</button>
@@ -436,6 +439,12 @@ document.getElementById('input').focus();
 function deleteChat(id) {
 const idx = chats.findIndex(c => c.id === id);
 if (idx === -1) return;
+const removed = chats[idx];
+// 从服务端导入的会话要记一笔"用户删过它"：否则下次加载又被导回来
+if (removed.threadId && !dismissedThreads.includes(removed.threadId)) {
+dismissedThreads.push(removed.threadId);
+try { localStorage.setItem('dismissed_threads', JSON.stringify(dismissedThreads)); } catch (e) {}
+}
 chats.splice(idx, 1);
 saveChats();
 if (currentChatId === id) {
@@ -449,6 +458,58 @@ updateStatus('idle', '就绪');
 }
 renderChatList();
 showToast('对话已删除', 'info');
+}
+// ============================================================
+// 服务端会话（1.3.0）
+// ============================================================
+// 本地的 chats 只活在浏览器 localStorage 里：换设备、清缓存、重装就都没了。
+// 1.2.0 起后端把会话状态**落盘**了（checkpointer），所以"你到底聊过哪些会话"
+// 服务端是知道的。这里把"服务端有、本地没有"的补进来 —— 补进来之后就走原来的
+// loadChat 路径（threadId 与 reasoningMode 都在，能直接接着聊）。
+//
+// 刻意做得很小心：拿不到就静默放弃（离线时本地功能必须照旧可用），
+// 单条失败不影响其它会话，已有同 thread 的本地会话不重复导入。
+async function importServerConversations() {
+if (isStreaming) return;
+let list = [];
+try {
+const resp = await fetch('/chat/conversations?limit=20');
+if (!resp.ok) return;
+list = ((await resp.json()).data) || [];
+} catch (e) {
+return;   // 锦上添花的功能，不能影响本地
+}
+let added = 0;
+for (const conv of list) {
+const tid = conv && conv.thread_id;
+if (!tid) continue;
+if (chats.some(c => c.threadId === tid)) continue;
+if (dismissedThreads.includes(tid)) continue;
+try {
+const url = '/chat/conversations/' + encodeURIComponent(tid)
++ '?mode=' + encodeURIComponent(conv.mode || 'plan');
+const r = await fetch(url);
+if (!r.ok) continue;
+const data = (await r.json()).data || {};
+if (!data.messages || data.messages.length === 0) continue;
+chats.push({
+id: 'srv_' + tid,
+title: conv.title || '（未命名会话）',
+messages: data.messages,
+appMode: 'qa',
+threadId: tid,
+reasoningMode: conv.mode || 'plan',
+createdAt: conv.updated_at ? Date.parse(conv.updated_at) : Date.now(),
+fromServer: true,
+});
+added++;
+} catch (e) { /* 单条失败不影响其它 */ }
+}
+if (added > 0) {
+chats.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+saveChats();
+renderChatList();
+}
 }
 async function exportChat() {
 if (!currentChatId) {
@@ -956,6 +1017,8 @@ this.style.height = Math.min(this.scrollHeight, 120) + 'px';
 });
 // 初始化：渲染对话列表
 renderChatList();
+// 再把服务端保存的会话补进来（本地已有同 thread 的会跳过）
+importServerConversations();
 document.getElementById('input').focus();
 </script>
 </body>

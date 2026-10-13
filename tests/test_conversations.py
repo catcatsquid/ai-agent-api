@@ -6,16 +6,23 @@
 
 这里同时守住 checkpoint_id → 时间的换算：算错了列表的排序和"更新时间"就没意义。
 """
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from course_agent import server
 from course_agent.graph import build_graph, build_react_graph
+from course_agent.memory import SUMMARY_MARK
 from course_agent.server import _checkpoint_time, app
 
 
@@ -119,3 +126,77 @@ class TestConversationsEndpoint:
         client = TestClient(app)
         assert client.get("/chat/conversations?limit=0").status_code == 422
         assert client.get("/chat/conversations?limit=99999").status_code == 422
+
+
+class TestConversationDetail:
+    """取回会话内容（GET /chat/conversations/{thread_id}）
+
+    重点是**只返回能展示的部分**：state 里混着工具结果（检索原文 / 参考答案 /
+    批改 JSON）与内部协议声明，它们绝不该通过这个接口回到前端。
+    """
+
+    def _write(self, messages, tid="t1", mode="plan"):
+        target = server.react_graph if mode == "react" else server.graph
+        target.update_state({"configurable": {"thread_id": tid}},
+                            {"messages": messages})
+
+    def test_returns_user_and_assistant_messages_in_order(self, tmp_checkpointers):
+        self._write([HumanMessage(content="什么是死锁？", id="u1"),
+                     AIMessage(content="死锁是……", id="a1")])
+        resp = TestClient(app).get("/chat/conversations/t1")
+        assert resp.status_code == 200
+        assert resp.json()["data"]["messages"] == [
+            {"role": "user", "content": "什么是死锁？"},
+            {"role": "assistant", "content": "死锁是……"},
+        ]
+
+    def test_tool_results_never_come_back(self, tmp_checkpointers):
+        """工具结果里是检索原文 / 参考答案 / 批改 JSON —— 这个接口绝不能漏"""
+        secret = '{"answer": "D", "reference_points": ["因为等待环"]}'
+        self._write([
+            HumanMessage(content="批改一下", id="u1"),
+            AIMessage(content="", id="a1",
+                      tool_calls=[{"id": "c1", "name": "grade_answers", "args": {}}]),
+            ToolMessage(content=secret, tool_call_id="c1", name="grade_answers"),
+            AIMessage(content="本组 3 题：Q1、Q2、Q3", id="a2"),
+        ])
+        body = TestClient(app).get("/chat/conversations/t1").json()
+        dump = json.dumps(body, ensure_ascii=False)
+        assert "reference_points" not in dump, f"工具结果漏出去了：{dump}"
+        assert secret not in dump
+        # 带 tool_calls 的那条 AIMessage 也不该露出来
+        assert [m["role"] for m in body["data"]["messages"]] == ["user", "assistant"]
+
+    def test_internal_summary_is_not_shown(self, tmp_checkpointers):
+        """压缩摘要（SystemMessage + SUMMARY_MARK）是内部产物，不是谁的原话"""
+        self._write([SystemMessage(content=f"{SUMMARY_MARK}\n学生之前问过死锁", id="s1"),
+                     HumanMessage(content="继续", id="u1"),
+                     AIMessage(content="好的", id="a1")])
+        msgs = TestClient(app).get("/chat/conversations/t1").json()["data"]["messages"]
+        assert SUMMARY_MARK not in json.dumps(msgs, ensure_ascii=False)
+        assert [m["role"] for m in msgs] == ["user", "assistant"]
+
+    def test_unknown_thread_is_404(self, tmp_checkpointers):
+        assert TestClient(app).get("/chat/conversations/does-not-exist").status_code == 404
+
+    def test_wrong_mode_is_404_not_a_silent_empty_chat(self, tmp_checkpointers):
+        """thread 在 plan 库里，用 react 读必须 404
+
+        两条图各有各的 checkpointer —— 读错图时**不能**静默返回"空历史"，
+        那会让前端以为这条会话是空的（1.0.2 修的就是这类静默失忆）。
+        """
+        self._write([HumanMessage(content="plan 侧", id="u1")], tid="only-plan")
+        client = TestClient(app)
+        assert client.get("/chat/conversations/only-plan?mode=plan").status_code == 200
+        assert client.get("/chat/conversations/only-plan?mode=react").status_code == 404
+
+    def test_bad_mode_is_rejected(self, tmp_checkpointers):
+        assert TestClient(app).get(
+            "/chat/conversations/t1?mode=whatever").status_code == 422
+
+    def test_react_thread_reads_from_the_react_graph(self, tmp_checkpointers):
+        self._write([HumanMessage(content="react 侧", id="u1"),
+                     AIMessage(content="答", id="a1")], tid="r1", mode="react")
+        body = TestClient(app).get("/chat/conversations/r1?mode=react").json()
+        assert body["data"]["mode"] == "react"
+        assert len(body["data"]["messages"]) == 2

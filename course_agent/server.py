@@ -19,7 +19,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path as FilePath
-from fastapi import FastAPI, Depends, Query
+from fastapi import FastAPI, Depends, Query, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
@@ -487,21 +487,57 @@ def _checkpoint_time(checkpoint_id: str) -> str | None:
         return None
 
 
+def _displayable_messages(messages) -> list:
+    """从 state 的 messages 里挑出**能展示给学生**的那些
+
+    只留"学生问的"和"模型答的"：
+      · SystemMessage —— 里面是压缩摘要（带 SUMMARY_MARK），内部产物，不是任何一方的原话；
+      · ToolMessage —— 检索原文 / 参考答案 / 批改 JSON，**正是要藏起来的东西**；
+      · 带 tool_calls 的 AIMessage —— 内部协议声明（ReAct 的中间轮也是这样）。
+    中间过程一概不返回，这与前端本来显示的内容一致（它也从没显示过工具过程）。
+    """
+    out = []
+    for msg in messages or []:
+        if getattr(msg, "tool_calls", None):
+            continue
+        if isinstance(msg, HumanMessage):
+            role = "user"
+        elif isinstance(msg, AIMessage):
+            role = "assistant"
+        else:
+            continue
+        content = (getattr(msg, "content", "") or "").strip()
+        if content:
+            out.append({"role": role, "content": content})
+    return out
+
+
 def _thread_title(app, thread_id: str) -> str:
     """用这个会话里的第一句用户提问当标题
 
-    取的是**最新** state 里的第一条 HumanMessage。对话被摘要压缩过之后，
+    取的是**最新** state 里的第一条用户消息。对话被摘要压缩过之后，
     最早那条可能已经不在 state 里了 —— 那时标题会往后挪，属于已知取舍：
     为了拿"最初那一问"去逐条扫 checkpointer 历史，代价不值得。
     """
     try:
         state = app.get_state({"configurable": {"thread_id": thread_id}})
-        for msg in ((state.values or {}).get("messages") or []):
-            if isinstance(msg, HumanMessage) and (msg.content or "").strip():
-                return str(msg.content).strip().replace("\n", " ")[:40]
+        for item in _displayable_messages((state.values or {}).get("messages")):
+            if item["role"] == "user":
+                return item["content"].replace("\n", " ")[:40]
     except Exception as e:      # 读不出来不该让整个列表挂掉
         logger.debug("会话标题读取失败 %s: %s", thread_id, e)
     return ""
+
+
+def _thread_exists(saver, thread_id: str) -> bool:
+    """这个 thread 在库里到底有没有（用于区分 404 与"还没有可展示的消息"）"""
+    try:
+        return saver.conn.execute(
+            "SELECT 1 FROM checkpoints WHERE thread_id = ? AND checkpoint_ns = '' "
+            "LIMIT 1", (thread_id,)).fetchone() is not None
+    except Exception as e:
+        logger.warning("会话存在性查询失败: %s", e)
+        return False
 
 
 def list_server_conversations(limit: int = 30) -> list:
@@ -550,6 +586,41 @@ def chat_conversations(limit: int = Query(30, ge=1, le=200)):
     这个接口和其它接口一样需要凭据。
     """
     return {"code": 0, "msg": "ok", "data": list_server_conversations(limit)}
+
+
+@app.get("/chat/conversations/{thread_id}")
+def chat_conversation_detail(thread_id: str,
+                             mode: str = Query("plan", pattern="^(plan|react)$")):
+    """取回一个会话里**适合展示**的消息，供前端恢复历史
+
+    为什么需要它：列表接口只给元数据（标题/模式/时间）。前端要恢复一条会话，
+    还得拿到当时的对话内容 —— 而这些内容在服务端的 checkpointer 里，
+    前端拿不到（它原来只存在浏览器 localStorage）。
+
+    返回的消息**只含学生问的与模型答的**，中间过程（工具结果、内部协议声明、
+    压缩摘要）一律过滤，见 _displayable_messages。
+
+    `mode` 必传对：两个模式各用独立的 checkpointer，react 的 thread_id
+    在 plan 图里根本不存在（那样会 404，而不是静默当成新会话）。
+    """
+    app_ = react_graph if mode == "react" else graph
+    saver = react_checkpointer if mode == "react" else plan_checkpointer
+
+    if not _thread_exists(saver, thread_id):
+        raise HTTPException(status_code=404,
+                            detail=f"没有这个会话（mode={mode}）")
+
+    try:
+        state = app_.get_state({"configurable": {"thread_id": thread_id}})
+    except Exception as e:
+        logger.warning("会话内容读取失败 %s: %s", thread_id, e)
+        raise HTTPException(status_code=503, detail="会话内容暂时读不出来")
+
+    return {"code": 0, "msg": "ok", "data": {
+        "thread_id": thread_id,
+        "mode": mode,
+        "messages": _displayable_messages((state.values or {}).get("messages")),
+    }}
 
 
 # ============================================================
