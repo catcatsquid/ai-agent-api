@@ -48,12 +48,14 @@
 >    （LangGraph 版助教 `lg_tutor.py`）从未实现。而状态机版
 >    （`learn.py` / `review.py`）已被它取代并删除。
 > 2. 它**不是按路线周次做的**，现在也**不从界面进入** —— 界面上已撤掉模式切换，
->    日常只有 BOT 一条产品路径。手写助教的代码与接口**全部保留**
->    （`course_agent/tutor_agent.py`、`POST /tutor/stream`，测试照跑），
+>    日常只有 BOT 一条产品路径。手写助教只保留**模块与测试**
+>    （`course_agent/tutor_agent.py`、`tests/test_tutor_agent.py`、
+>    `tests/test_tutor_reference.py`，测试照跑），**HTTP 面与前端接线都已移除**，
 >    定位是**冻结的对照实现**：新能力只加到 BOT，它不再跟着演进。
 >    撤掉界面入口的直接原因：两条实现经同题对比后**能力已等价**
 >    （同一段学生脚本 5 个场景：16好/3坏 vs 18好/2坏），
 >    留两个入口只增加"该用哪个"的困惑，而每加一个能力维护两遍是真实成本。
+>    （移除的完整理由与"想恢复要怎么做"见 `chat.html` 侧栏那段注释。）
 >
 >    完整对比与追平过程已整理成文档，但目前**不随仓库分发**
 >    （AI 辅助成稿、作者正在逐篇核实 —— 见 [docs/](docs/README.md)）。
@@ -206,10 +208,13 @@ Docker 部署的详细说明已随文档移出仓库（见 [docs/](docs/README.m
 | GET | `/chat/conversations` | 服务端保存的会话列表（thread / 标题 / 更新时间） |
 | GET | `/chat/conversations/{thread_id}` | 取回某个会话里**可展示**的消息 |
 | DELETE | `/chat/conversations/{thread_id}` | 删除会话（连同它的 checkpoint） |
-| POST | `/tutor/stream` | LLM 助教 SSE —— 冻结的对照实现，界面无入口但**接口保留** |
 
-> ⚠️ `/tutor/stream` 曾在 1.1.0 被**误删**（我用脚本整段替换 server.py 时把它一起吞了），
-> 直到恢复前它都没被任何测试挡住 —— 现在由 `tests/test_route_surface.py` 钉住路由清单。
+> 手写助教**没有 HTTP 端点**（1.5.3 起）：它只保留模块与测试，作为冻结的对照实现。
+> 这个端点来回折腾过三次 —— 1.1.0 被我误删（当时没有任何测试会红）、
+> 1.5.1 按当时的文档恢复、1.5.3 按定位有意移除。
+> 现在由 `tests/test_route_surface.py` 的路由清单与
+> `tests/test_tutor_reference.py::TestTutorHasNoHttpOrFrontendSurface` 两边拦着：
+> 想加回来必须显式改它们。
 
 ---
 
@@ -291,7 +296,7 @@ Docker 部署的详细说明已随文档移出仓库（见 [docs/](docs/README.m
 
 ### 两条 Agent 路径的工具
 
-LangGraph 路径（`/qa/stream`）与手写助教（`/tutor/stream`）
+LangGraph 路径（`/qa/stream`）与手写助教（`tutor_agent.py`，**无 HTTP 端点**）
 **共用同一份业务逻辑**（`course_agent/quiz_service.py`），各自只保留外壳。
 两边现在都能完成刷题全流程：
 

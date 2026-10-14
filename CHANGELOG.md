@@ -14,6 +14,57 @@
 
 （下一次改动先写在这里，发版时移到下面并补上版本号与日期）
 
+## [1.5.3] - 2026-10-13
+
+**把手写助教的 HTTP 面与前端接线成套移除**，并给这个决定加上守卫。
+
+### 背景：这个端点来回折腾了三次
+
+| 版本 | 发生了什么 |
+|---|---|
+| 1.1.0 | 我用脚本整段替换 `server.py` 时**误删**了它 —— 当时只核对"`/chat/stream` 还剩几处"，没问"是不是少了别的" |
+| 1.5.1 | 按当时的文档（写着"代码与接口全部保留"）把它**恢复**了，并加了路由清单守卫 |
+| 1.5.3 | 按定位**有意移除** —— 手写助教只保留模块与测试 |
+
+三次都不是"代码坏了"，而是**"它该不该在"这件事没有一份显式的记录** ——
+只散落在注释与 README 里，于是每次有人照着某处过期的说明改一遍。
+
+### 变更：成套移除（只清一半会留下半截接线）
+
+| 位置 | 处理 |
+|---|---|
+| `server.py` | 删 `tutor_stream` 端点与 `TutorRequest` 模型；`tutor_agent` 从导入里去掉 |
+| `chat.html` | 删请求路径里的 `/tutor/stream` 分支、`currentTutorSessionId`（6 处）、以及**已无任何调用者的 `setAppMode`** |
+| `README.md` | 接口表去掉那一行；"代码与接口全部保留"改成"只保留模块与测试" |
+| `tests/test_auth.py` | 去掉 `/tutor/stream` 的鉴权条目 |
+| `tests/test_route_surface.py` | 路由清单去掉它；`TestTutorStreamActuallyWorks`（2 条）随之删除 |
+| `tests/test_tutor_reference.py` | **新增** `TestTutorHasNoHttpOrFrontendSurface`（4 条） |
+
+顺带发现的死代码：`setAppMode` **没有任何调用者**（模式切换按钮 2026-10 就撤了），
+所以整个函数删除 —— 它的 tutor 分支正是这次要处理的那处。
+
+### 新增守卫：把"没有"也写成测试
+
+`TestTutorHasNoHttpOrFrontendSurface` 守两件事：
+
+- **没有端点**（`/tutor/stream` 不在路由表里）；
+- **前端代码里没有 tutor 接线** —— 断言前会**先去注释**（页面里留了一段"想恢复要怎么做"
+  的说明，它当然提到这些名字；那是文档不是接线。`//` 的判定避开 `https://`）。
+
+变异验证：把 `/tutor/stream` 加回前端代码 → 红；把端点加回 `server.py` →
+**两条守卫同时红**（本文件 + 路由清单）。
+
+### 另外
+
+`docs/*.md` 现在被 gitignore（只留 `docs/README.md`）—— 按"文档不随仓库分发"的既定决定，
+放在 `docs/` 下的笔记不会再出现在 `git status` 里。要放行某个文档，显式加一行 `!docs/xxx.md`。
+
+### 验证
+
+- Python **640 passed**；前端 auth_block 52/0、chat_context 14/0、server_conversations 35/0
+- 路由总览只剩 `/qa/stream` 一个流式端点
+- `test_tutor_agent.py` / `test_tutor_reference.py` 照旧全跑（它们直接调函数，不经过 HTTP）
+
 ## [1.5.2] - 2026-10-13
 
 **把 `test_surface_parity.py` 拆开，让文件名与内容对上。** 纯重组，测试逻辑一行没改。
@@ -575,7 +626,8 @@ Python **605 passed**（原 595 + 新契约测试 3 条 + 契约/守卫相关新
 
 ---
 
-[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.5.2...HEAD
+[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.5.3...HEAD
+[1.5.3]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.3
 [1.5.2]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.2
 [1.5.1]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.1
 [1.5.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.0
