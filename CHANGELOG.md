@@ -14,6 +14,46 @@
 
 （下一次改动先写在这里，发版时移到下面并补上版本号与日期）
 
+## [1.5.2] - 2026-10-13
+
+**把 `test_surface_parity.py` 拆开，让文件名与内容对上。** 纯重组，测试逻辑一行没改。
+
+### 为什么拆
+
+那个文件叫"两个运行面对齐"，但 498 行里**大部分与对齐无关**：
+
+| 内容 | 与"对齐"的关系 |
+|---|---|
+| 工具能力对齐、共用 quiz_service、提示词契约 | 确实是 |
+| `TestBotCaughtUpWithTutor`（9 条） | **只跟 BOT 有关**（planner / synthesizer / 历史裁剪） |
+| 助教的工具守卫、状态注入、会话书签（12 条） | **只跟助教自己有关** |
+
+名字低估内容会让人误判它的用途 —— 上一轮我差点因为"助教不再是产品路径"
+就把它当遗留物建议删掉。现在拆成三个**名字说实话**的文件：
+
+| 文件 | 内容 | 条数 |
+|---|---|---|
+| `test_surface_parity.py` | 两面一致性 + 共享契约（quiz_service） | 19 |
+| `test_bot_study_flow.py` | BOT 那条路自己的学习流程行为 | 9 |
+| `test_tutor_reference.py` | 手写助教（冻结参照）自己的行为与工具守卫 | 12 |
+
+留在 `test_surface_parity.py` 的那 4 条共享核心用例，类名也从
+`TestStudentSessionFindings` 换成了 `TestSharedCoreBehaviour`（同一个理由）。
+
+### 顺带
+
+- `conftest.py` 里 **8 条按「文件名 :: 类名 :: 用例名」索引的 `DATA_NEEDS`** 同步更新 ——
+  它们是 `course_ppt` 数据的跳过机制键。移动测试却忘了改这里，跳过会**静默失效**
+  （用例带着缺失数据跑，报出与代码无关的红）。
+- 两个新文件的模块 docstring 写清了边界，并记下"这些用例为什么存在"
+  （全部来自真实会话发现，不是凭空设计的边界）。
+
+### 验证
+
+- **拆分前后用例数 40 = 40**（9 + 12 + 19），全量 **639 passed** 不变 ——
+  证明这是一次纯重组：没有丢、也没有重复。
+- 前端 auth_block 52/0、chat_context 14/0、server_conversations 35/0。
+
 ## [1.5.1] - 2026-10-13
 
 **修复 1.1.0 误删的 `/tutor/stream` 端点**，并补上"当初就该有"的那类守卫。
@@ -535,7 +575,8 @@ Python **605 passed**（原 595 + 新契约测试 3 条 + 契约/守卫相关新
 
 ---
 
-[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.5.1...HEAD
+[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.5.2...HEAD
+[1.5.2]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.2
 [1.5.1]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.1
 [1.5.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.0
 [1.4.1]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.4.1

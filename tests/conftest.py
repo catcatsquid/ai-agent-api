@@ -180,13 +180,15 @@ DATA_NEEDS = {
     "test_study_mode.py::TestStudyBookmark::test_read_position_alone_reaches_the_planner": ("course_ppt",),
     "test_study_mode.py::TestStudyBookmark::test_read_position_is_remembered_automatically": ("course_ppt",),
     "test_surface_parity.py::TestSharedImplementation::test_tutor_and_bot_agree_on_section_index": ("course_ppt",),
-    "test_surface_parity.py::TestSharedImplementation::test_tutor_corrects_chapter_in_course_field": ("course_ppt",),
-    "test_surface_parity.py::TestSharedImplementation::test_tutor_read_section_records_position_automatically": ("course_ppt",),
-    "test_surface_parity.py::TestSharedImplementation::test_tutor_read_section_returns_same_content_shape": ("course_ppt",),
-    "test_surface_parity.py::TestStudentSessionFindings::test_chapter_lookup_beats_section": ("course_ppt",),
-    "test_surface_parity.py::TestStudentSessionFindings::test_chinese_chapter_maps_to_english_ppt": ("course_ppt",),
-    "test_surface_parity.py::TestStudentSessionFindings::test_section_means_chapter_number_for_chapter_named_courses": ("course_ppt",),
-    "test_surface_parity.py::TestStudentSessionFindings::test_section_still_means_position_when_no_chapter_numbering": ("course_ppt",),
+    # 下面三条随测试一起搬到了 test_tutor_reference.py（拆分：让文件名与内容对上）
+    "test_tutor_reference.py::TestTutorStudyFlow::test_tutor_corrects_chapter_in_course_field": ("course_ppt",),
+    "test_tutor_reference.py::TestTutorStudyFlow::test_tutor_read_section_records_position_automatically": ("course_ppt",),
+    "test_tutor_reference.py::TestTutorStudyFlow::test_tutor_read_section_returns_same_content_shape": ("course_ppt",),
+    # 下面四条留在这个文件，但类名从 TestStudentSessionFindings 换成了 TestSharedCoreBehaviour
+    "test_surface_parity.py::TestSharedCoreBehaviour::test_chapter_lookup_beats_section": ("course_ppt",),
+    "test_surface_parity.py::TestSharedCoreBehaviour::test_chinese_chapter_maps_to_english_ppt": ("course_ppt",),
+    "test_surface_parity.py::TestSharedCoreBehaviour::test_section_means_chapter_number_for_chapter_named_courses": ("course_ppt",),
+    "test_surface_parity.py::TestSharedCoreBehaviour::test_section_still_means_position_when_no_chapter_numbering": ("course_ppt",),
 }
 
 # 供个别用例显式使用（例如"每道题的图片必须存在"这种数据完整性断言）
