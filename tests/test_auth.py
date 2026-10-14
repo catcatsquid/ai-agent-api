@@ -213,6 +213,8 @@ class TestDefaultDenyGuard:
         ("GET", "/qb/topics"),
         ("GET", "/chat/conversations"),
         ("DELETE", "/chat/conversations/t1"),
+        # 手写助教接口（界面上没有入口，但接口保留）—— 它会真的花掉 LLM 额度
+        ("POST", "/tutor/stream"),
     ])
     def test_sensitive_endpoints_require_auth(self, method, path):
         """这些接口原本全部匿名可用（能列出语料、能检索全文）

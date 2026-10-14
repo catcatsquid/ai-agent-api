@@ -189,8 +189,8 @@ Docker 部署的详细说明已随文档移出仓库（见 [docs/](docs/README.m
 |------|------|------|
 | GET | `/health` | 健康检查（docker-compose 探活用这个，不要用 `/`） |
 | GET | `/` | 跳转到 `/chat` |
-| POST | `/tutor/stream` | LLM 助教 SSE（对话式刷题：出题/批改/自拟题） |
-| POST | `/chat/stream` | SSE 流式问答（节点进度 + 逐字输出） |
+| POST | `/qa/stream` | SSE 流式问答（节点进度 + 逐字输出）—— **唯一的流式问答端点** |
+| POST | `/qa/ask` | 非流式问答（同步返回完整回答） |
 | POST | `/auth/login` | 登录获取 JWT |
 | GET | `/kb` | 知识库管理页面 |
 | GET | `/kb/stats` | 知识库统计 |
@@ -203,6 +203,13 @@ Docker 部署的详细说明已随文档移出仓库（见 [docs/](docs/README.m
 | GET | `/qb/list` | 题库文件列表 |
 | POST | `/qb/search` | 题库搜索 |
 | GET | `/qb/topics` | 题库知识点和来源 |
+| GET | `/chat/conversations` | 服务端保存的会话列表（thread / 标题 / 更新时间） |
+| GET | `/chat/conversations/{thread_id}` | 取回某个会话里**可展示**的消息 |
+| DELETE | `/chat/conversations/{thread_id}` | 删除会话（连同它的 checkpoint） |
+| POST | `/tutor/stream` | LLM 助教 SSE —— 冻结的对照实现，界面无入口但**接口保留** |
+
+> ⚠️ `/tutor/stream` 曾在 1.1.0 被**误删**（我用脚本整段替换 server.py 时把它一起吞了），
+> 直到恢复前它都没被任何测试挡住 —— 现在由 `tests/test_route_surface.py` 钉住路由清单。
 
 ---
 
@@ -284,7 +291,7 @@ Docker 部署的详细说明已随文档移出仓库（见 [docs/](docs/README.m
 
 ### 两条 Agent 路径的工具
 
-LangGraph 路径（`/qa/stream`、`/chat/stream`）与手写助教（`/tutor/stream`）
+LangGraph 路径（`/qa/stream`）与手写助教（`/tutor/stream`）
 **共用同一份业务逻辑**（`course_agent/quiz_service.py`），各自只保留外壳。
 两边现在都能完成刷题全流程：
 

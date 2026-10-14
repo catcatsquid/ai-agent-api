@@ -14,6 +14,49 @@
 
 （下一次改动先写在这里，发版时移到下面并补上版本号与日期）
 
+## [1.5.1] - 2026-10-13
+
+**修复 1.1.0 误删的 `/tutor/stream` 端点**，并补上"当初就该有"的那类守卫。
+
+### 修复：一个我自己造成、跨了 4 个版本没被发现的回归
+
+`POST /tutor/stream` 在 1.1.0 被**误删**。那一次我是用脚本把 `server.py` 里从
+`/qa/stream` 到"知识库管理页面"横幅之间的**整段**替换掉的 —— 本意只是删掉重复的
+`/chat/stream`，而 `/tutor/stream` **紧跟在它后面**，于是被一起吞了
+（server.py 里 tutor 相关行 5 → 2）。
+
+当时我核对的是"`/chat/stream` 还剩几处""`/qa/stream` 还在不在"，
+**从没问一句"是不是少了别的"** —— 这正是"确认了预期的变化，却没确认没有别的变化"。
+
+它一直没被发现，因为：
+
+- 界面上早就撤掉了助教入口 —— **没有任何用户路径会 404**；
+- 助教的测试全是直接调 `tutor_agent` 的函数，**从不经过 HTTP**；
+- 于是 README 里"手写助教的代码与接口全部保留"那句话、以及接口表里的
+  `POST /tutor/stream`，从 1.1.0 起就是**假的**。
+
+现在端点已恢复（`tests/test_route_surface.py` 用打桩请求确认 SSE 链路真的通）。
+
+### 新增守卫：tests/test_route_surface.py
+
+- **路由清单**：把 22 个端点钉成一份显式清单，**少一个、多一个都要报错**并指出是哪个。
+  变异验证：把 `/tutor/stream` 的装饰器注释掉（复现那次误删）→ 立刻红。
+- **端点行为**：光"在清单里"不够，还得真能跑 —— 用打桩的 `process_message` 真发一次
+  SSE 请求，确认 `start`/`done` 事件流与错误转成 SSE 事件（不产生任何网络调用）。
+- `test_auth.py` 的"必须鉴权"清单加入 `POST /tutor/stream`（它会真的花掉 LLM 额度）。
+
+### 顺带修掉文档里两处过时引用
+
+README 的接口表还列着 **1.1.0 有意删掉**的 `POST /chat/stream`，正文里也还有一处
+"（`/qa/stream`、`/chat/stream`）"。这些是那次合并**该改而漏改**的，一并修掉，
+并把会话列表三个端点补进接口表。
+
+### 验证
+
+- Python **639 passed**（原 634 + 路由清单 2 + 端点行为 2 + 鉴权 1）
+- 前端 auth_block 52/0、chat_context 14/0、server_conversations 35/0
+- 变异验证：注释掉端点装饰器 → 路由守卫变红（说明它能在下次真的挡住）
+
 ## [1.5.0] - 2026-10-13
 
 **环境依赖变成真正可复现的**：加了 uv 生成的通用锁文件，本地与 CI 从此装的是同一套。
@@ -492,7 +535,8 @@ Python **605 passed**（原 595 + 新契约测试 3 条 + 契约/守卫相关新
 
 ---
 
-[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.5.0...HEAD
+[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.1
 [1.5.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.0
 [1.4.1]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.4.1
 [1.4.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.4.0
