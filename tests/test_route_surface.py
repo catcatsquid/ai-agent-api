@@ -16,9 +16,6 @@
 这类事故的通用形态是「**我确认了我预期的变化，却没确认没有别的变化**」——
 所以这里把清单钉死：少一个、多一个都要显式改这份清单，改动必须是有意识的。
 """
-from fastapi.testclient import TestClient
-
-from course_agent import server
 from course_agent.server import app
 
 # 有意保留的端点清单。改动这里必须是有意识的：要么新增功能，要么明确废弃。
@@ -30,8 +27,8 @@ EXPECTED_ROUTES = {
     ("POST", "/auth/login"),
     ("POST", "/qa/ask"),
     ("POST", "/qa/stream"),
-    # 手写助教：冻结的对照实现，界面上没有入口，但**接口保留**（1.1.0 误删过）
-    ("POST", "/tutor/stream"),
+    # 注意：**没有** POST /tutor/stream —— 1.5.3 按定位有意移除（手写助教只留模块与测试）。
+    # 想加回来就必须显式改这一行，而且 test_tutor_reference.py 里还有一条守卫会拦。
     ("POST", "/chat/export"),
     ("GET", "/chat/conversations"),
     ("GET", "/chat/conversations/{thread_id}"),
@@ -81,37 +78,12 @@ class TestRouteSurface:
             + "\n  —— 新端点请登记进 EXPECTED_ROUTES（顺便想一下它该不该要求鉴权）。")
 
 
-class TestTutorStreamActuallyWorks:
-    """光"路由在清单里"不够 —— 它得真的能跑
-
-    1.1.0 的教训：端点消失时没有任何测试会红。这里用一个打桩的 `process_message`
-    真发一次请求，确认 SSE 链路是通的（不产生任何网络调用）。
-    """
-
-    def test_streams_tutor_events(self, monkeypatch):
-        monkeypatch.setattr(
-            server.tutor_agent, "process_message",
-            lambda session_id, text: [
-                {"type": "start", "session_id": "tutor-test-1", "query": text},
-                {"type": "done", "answer": "好的", "session_id": "tutor-test-1"},
-            ])
-        client = TestClient(app)
-        with client.stream("POST", "/tutor/stream", json={"query": "你好"}) as resp:
-            assert resp.status_code == 200
-            body = "".join(resp.iter_text())
-        assert '"type": "start"' in body, body
-        assert "tutor-test-1" in body, body
-        assert '"answer"' in body, body
-
-    def test_errors_are_reported_as_an_sse_event_not_a_500(self, monkeypatch):
-        """助教内部抛异常时，应当作为 error 事件流出（和 /qa/stream 一致）"""
-        def boom(session_id, text):
-            raise RuntimeError("模型炸了")
-
-        monkeypatch.setattr(server.tutor_agent, "process_message", boom)
-        client = TestClient(app)
-        with client.stream("POST", "/tutor/stream", json={"query": "你好"}) as resp:
-            assert resp.status_code == 200
-            body = "".join(resp.iter_text())
-        assert '"type": "error"' in body, body
-        assert "模型炸了" in body, body
+# ⚠️ 这里原来有一个 `TestTutorStreamActuallyWorks` 类（1.5.1 恢复 `/tutor/stream` 时加的）：
+# 它用打桩的 `process_message` 真发一次 SSE 请求，确认链路是通的。
+# 1.5.3 决定让手写助教只保留模块与测试、不给 HTTP 面，于是端点与那个类一起删掉了 ——
+# 留这段说明是为了别让人以为漏了测试。
+#
+# 现在这两件事分别由谁守：
+#   · 端点还在不在 → 本文件的路由清单（`test_no_route_disappeared` /
+#     `test_no_route_appeared_without_being_registered`）；
+#   · 前端不许长回 tutor 接线 → `test_tutor_reference.py::TestTutorHasNoHttpOrFrontendSurface`。

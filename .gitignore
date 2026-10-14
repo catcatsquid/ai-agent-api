@@ -83,3 +83,10 @@ deepseek_demo.py
 tool_lab.py
 react_lab.py
 multi_tool_agent.py
+
+# docs/ 里只保留给人看的说明文件（docs/README.md），其余文档**不随仓库分发**
+# —— 这是既定的决定（原先那批文档已移到仓库外）。
+# 要新增一个允许入库的文档，就在下面显式加一行例外，例如：
+#   !docs/架构决策.md
+docs/*.md
+!docs/README.md

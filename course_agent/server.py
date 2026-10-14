@@ -34,7 +34,7 @@ from course_agent.auth import any_auth, create_jwt
 from course_agent.logger import logger
 from course_agent.memory import INTERNAL_LLM_TAG
 from course_agent.middleware import setup_middlewares
-from course_agent import tutor_agent, qbank, quiz_service
+from course_agent import qbank, quiz_service
 from config import APP_VERSION
 from rag_tool import get_knowledge_base
 
@@ -162,11 +162,6 @@ class QueryResponse(BaseModel):
     plan: list = []
     thread_id: str = None
     turn_count: int = 0
-
-
-class TutorRequest(BaseModel):
-    query: str
-    session_id: str = None
 
 
 class LoginRequest(BaseModel):
@@ -461,37 +456,18 @@ def qa_stream(req: QueryRequest):
     )
 
 
-@app.post("/tutor/stream")
-def tutor_stream(req: TutorRequest):
-    """LLM 主导的学习助手 SSE 流式接口
-
-    统一接口，自然语言对话，Agent 自己决定调用什么工具。
-
-    ⚠️ 这个端点曾经"消失"过：1.1.0 合并流式端点时，我用脚本替换了 server.py 里
-    从 `/qa/stream` 到"知识库管理页面"横幅之间的**整段**代码 —— 本意只是删掉重复的
-    `/chat/stream`，结果把紧挨着它的这个端点也一起删了。而当时我核对的只有
-    "`/chat/stream` 还剩几处"，没问"是不是少了别的"。
-
-    它一直没被发现，是因为界面上早就撤掉了助教入口（没有用户路径会 404），
-    而助教的测试全都是直接调 `tutor_agent` 的函数、从不经过 HTTP。
-    于是文档里那句"手写助教的代码与接口全部保留"从 1.1.0 起就是假的。
-
-    现在由 `tests/test_route_surface.py` 把**路由清单**钉住 —— 少一个、多一个都要显式改清单。
-    """
-    def event_stream():
-        try:
-            for event in tutor_agent.process_message(req.session_id, req.query):
-                yield _sse(event)
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            yield _sse({"type": "error", "msg": str(e)[:300]})
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
-    )
+# 手写助教（`tutor_agent.py`）**没有 HTTP 面** —— 这是 2026-10 的明确定位：
+# 它只保留模块与测试（冻结的对照实现），供"手写循环 vs LangGraph"对照学习用。
+#
+# ⚠️ 这个位置原来有 `POST /tutor/stream`，它的经历值得记一笔：
+#   · 1.1.0 我用脚本整段替换 server.py 时**误删**了它，而当时只核对了
+#     "`/chat/stream` 还剩几处"，没问"是不是少了别的"；
+#   · 1.5.1 根据当时的文档（写着"代码与接口全部保留"）把它**恢复**了；
+#   · 1.5.3 按上面的定位**有意移除**，并把前端那一侧（`setAppMode`、请求路径、
+#     `currentTutorSessionId`）成套清掉 —— 只清一半会留下半截接线。
+#
+# 路由清单守卫见 `tests/test_route_surface.py`；前端不得再出现 tutor 接线由
+# `tests/test_tutor_reference.py::TestTutorHasNoHttpOrFrontendSurface` 守。
 
 
 # ============================================================

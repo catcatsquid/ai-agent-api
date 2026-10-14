@@ -135,11 +135,18 @@ body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #f0f2
   2026-10 撤掉了切换按钮，只保留 BOT 一条产品路径。
   原因：两条实现在**同题对比里已经等价**（同一段学生脚本 5 个场景，16好/3坏 vs 18好/2坏），
   留着两个入口只会让人不知道该用哪个；而每加一个新能力要维护两遍是真实成本。
-  手写助教**代码全部保留**（course_agent/tutor_agent.py、POST /tutor/stream、
-  tests/test_tutor_agent.py、tests/test_surface_parity.py），
-  只是不再从界面进入 —— 需要对照时直接调 /tutor/stream，或把下面两行恢复即可：
-    <button class="mode-btn active" onclick="setAppMode('qa', this)">知识寻回BOT</button>
-    <button class="mode-btn" onclick="setAppMode('tutor', this)">LLM助教</button>
+
+  现状（1.5.3 清干净）：手写助教只保留**模块与测试**
+  （course_agent/tutor_agent.py、tests/test_tutor_agent.py、tests/test_tutor_reference.py），
+  供「手写循环 vs LangGraph」对照学习用。**HTTP 面与前端接线都已移除** ——
+  server.py 里没有 /tutor/stream，这里也没有请求路径、没有 currentTutorSessionId
+  （原来那个 setAppMode 也一并删了：切换按钮撤掉之后它已无任何调用者）。
+
+  想重新让它可对话，需要成套加回来（只加一半会留下半截接线）：
+    ① server.py：把 tutor_stream 端点加回（它调 tutor_agent.process_message）；
+    ② 这里：请求路径里加回 /tutor/stream 分支 + 一个 session_id 变量；
+    ③ tests/test_route_surface.py 的路由清单、test_tutor_reference.py 的
+       「助教没有 HTTP/前端面」那条守卫要一起改 —— 它们是故意拦着这件事的。
 -->
 <div id="qa-options">
 <div style="font-size: 11px; color: #6b7280; margin-bottom: 4px;">推理模式</div>
@@ -357,7 +364,6 @@ try { return localStorage.getItem('reasoning_mode') || 'plan'; } catch (e) { ret
 }
 let currentReasoningMode = readStoredReasoningMode();
 let currentThreadId = null;
-let currentTutorSessionId = null;
 let isStreaming = false;
 let currentMsg = null;
 // 对话历史（localStorage 持久化）
@@ -427,7 +433,6 @@ currentChatId = id;
 // 模式不对的话恢复出来的 thread 等于没用（后端静默当成新会话，不报错）。
 if (chat.reasoningMode) applyReasoningMode(chat.reasoningMode);
 currentThreadId = chat.threadId || null;
-currentTutorSessionId = null;
 renderMessages(chat.messages);
 document.getElementById('chat-title').textContent = chat.title;
 document.getElementById('thread-id-display').textContent =
@@ -458,7 +463,6 @@ if (done) forgetDismissed(tid);
 if (currentChatId === id) {
 currentChatId = null;
 currentThreadId = null;
-currentTutorSessionId = null;
 renderMessages([]);
 document.getElementById('chat-title').textContent = '新对话';
 document.getElementById('thread-id-display').textContent = '';
@@ -658,7 +662,6 @@ toggleBtn.textContent = sidebar.classList.contains('collapsed') ? '▶' : '☰';
 }
 function newChat() {
 currentThreadId = null;
-currentTutorSessionId = null;
 currentChatId = null;
 document.getElementById('messages').innerHTML = `
 <div class="welcome" id="welcome">
@@ -677,20 +680,6 @@ updateStatus('idle', '就绪');
 renderChatList();
 document.getElementById('input').focus();
 }
-function setAppMode(mode, el) {
-  currentAppMode = mode;
-  el.parentElement.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-  el.classList.add('active');
-  document.getElementById('qa-options').style.display = mode === 'qa' ? 'block' : 'none';
-  currentThreadId = null;
-  currentTutorSessionId = null;
-  const input = document.getElementById('input');
-  if (mode === 'qa') input.placeholder = '随便聊，问问题、学知识、刷题都可以...';
-  else if (mode === 'tutor') input.placeholder = '随便聊，想学什么、刷什么题都可以告诉我...';
-  else input.placeholder = '输入消息...';
-}
-// 模式的"状态 + 按钮高亮 + 持久化"三件事集中在这里。
-// 单独抽出来是因为 loadChat 也要恢复模式，但**不该**弹下面那个"新对话"提示。
 function applyReasoningMode(mode) {
 currentReasoningMode = mode;
 document.querySelectorAll('#qa-options .mode-btn').forEach(function (b) {
@@ -850,19 +839,12 @@ if (chat) chat.messages.push({ role: 'user', content: text });
 }
 const tid = currentThreadId;
 try {
-    let url, body;
-    if (currentAppMode === 'qa') {
-      url = '/qa/stream';
-      body = { query: text, mode: currentReasoningMode };
-      if (currentThreadId) body.thread_id = currentThreadId;
-    } else if (currentAppMode === 'tutor') {
-      // 手写助教的入口：界面上已撤掉模式切换按钮，所以 currentAppMode 恒为 'qa'，
-      // 这个分支平时走不到。保留是因为 tutor_agent.py 与 /tutor/stream 仍在维护
-      // （对照实现），恢复模式按钮后这段立刻可用，不必重写。
-      url = '/tutor/stream';
-      body = { query: text };
-      if (currentTutorSessionId) body.session_id = currentTutorSessionId;
-    }
+    // 只有 BOT 一条产品路径（手写助教的 HTTP 面与前端接线已在 1.5.3 成套移除），
+    // 所以这里不再按 currentAppMode 分支。currentAppMode 仍保留，因为要写进
+    // chats[].appMode 作为元数据（老数据里可能是 'tutor'）。
+    const url = '/qa/stream';
+    const body = { query: text, mode: currentReasoningMode };
+    if (currentThreadId) body.thread_id = currentThreadId;
 const response = await fetch(url, {
 method: 'POST',
 headers: { 'Content-Type': 'application/json', ...authToken },
@@ -928,9 +910,6 @@ function handleSSEEvent(evt, currentAnswer, setAnswer) {
 switch (evt.type) {
 case 'start':
 rememberThreadId(evt.thread_id);
-if (evt.session_id) {
-if (currentAppMode === 'tutor') currentTutorSessionId = evt.session_id;
-}
 break;
 case 'node':
 if (evt.node === 'planner' && evt.plan) {
@@ -985,9 +964,6 @@ break;
 case 'done':
 if (evt.answer) setAnswer(evt.answer);
 rememberThreadId(evt.thread_id);
-if (evt.session_id) {
-if (currentAppMode === 'tutor') currentTutorSessionId = evt.session_id;
-}
 break;
 case 'error':
 addThinkingStep('error', evt.msg || evt.content || '未知错误');

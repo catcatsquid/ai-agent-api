@@ -13,7 +13,34 @@
 两个运行面的**一致性**（工具对齐、共用 quiz_service、提示词契约）在
 `test_surface_parity.py`；BOT 那条路的学习流程在 `test_bot_study_flow.py`。
 """
+import re
+from pathlib import Path
+
+import pytest
+
 from course_agent import tutor_agent
+from course_agent.server import app
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def _frontend_code() -> str:
+    """chat.html 的内联脚本，**去掉 HTML 注释与 JS 行注释**
+
+    必须先去注释：1.5.3 在页面里留了一段说明（写清了"想恢复要怎么做"），
+    它当然会提到 `/tutor/stream` 与 `currentTutorSessionId` —— 那是文档，不是接线。
+
+    `//` 的判定要避开 `https://`：只在 `//` **前面不是冒号**时才当行注释。
+    """
+    html = (ROOT / "course_agent" / "static" / "chat.html").read_text(encoding="utf-8")
+    script = re.search(r"<script>(.*)</script>", html, re.S)
+    assert script, "chat.html 里找不到内联脚本"
+    text = re.sub(r"<!--.*?-->", "", script.group(1), flags=re.S)
+    out = []
+    for line in text.splitlines():
+        m = re.search(r"(?<!:)//", line)
+        out.append(line[:m.start()] if m else line)
+    return "\n".join(out)
 
 
 class TestTutorStudyFlow:
@@ -135,3 +162,30 @@ class TestTutorToolGuards:
     def test_no_injection_when_not_studying(self):
         p = tutor_agent._system_prompt_for({"current_paper": None})
         assert p == tutor_agent.SYSTEM_PROMPT, "没在学习就不该注入状态"
+
+
+class TestTutorHasNoHttpOrFrontendSurface:
+    """1.5.3 的决定：手写助教只保留**模块与测试**，不给 HTTP 面、不给前端接线
+
+    为什么把"没有"也写成测试：这个端点的经历是
+    **1.1.0 被误删（谁都没发现）→ 1.5.1 按当时的文档恢复 → 1.5.3 按定位有意移除**，
+    来回了三次。说明"它该不该在"这件事必须有个**显式的、会红的**记录，
+    而不是散落在注释里 —— 否则下一个人只会照着某处过期的说明再改一遍。
+
+    想重新让它可对话，就一起改这三处（这份守卫、路由清单、README）——
+    被拦下来本身就是提醒。
+    """
+
+    def test_no_tutor_route(self):
+        paths = {getattr(r, "path", "") for r in app.routes}
+        assert "/tutor/stream" not in paths, (
+            "`/tutor/stream` 又出现了 —— 手写助教的定位是不给 HTTP 面。"
+            "要改这个决定，请同时改本文件与 test_route_surface.py 的路由清单。")
+
+    @pytest.mark.parametrize("bad", ["/tutor/stream", "currentTutorSessionId", "setAppMode"])
+    def test_frontend_has_no_tutor_wiring(self, bad):
+        """前端**代码**里不许再有 tutor 接线（注释里提到它是允许的）"""
+        assert bad not in _frontend_code(), (
+            f"chat.html 的代码里又出现了 `{bad}` —— 前端不该再有 tutor 接线"
+            "（`setAppMode` 也一并在 1.5.3 删了：切换按钮撤掉后它已无调用者）。"
+            "要恢复请成套加回来，并更新这条守卫。")
