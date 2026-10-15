@@ -14,6 +14,46 @@
 
 （下一次改动先写在这里，发版时移到下面并补上版本号与日期）
 
+## [1.5.4] - 2026-10-13
+
+**修掉"文档里的工具清单已经腐烂"** —— `tools.py` 文件头还写着 9 个工具，实际是 13 个。
+
+### 修复
+
+- **`tools.py` 文件头**：清单写 9 个、实际注册 **13 个** —— 漏的正是后来加的
+  「学习/复习三件套 + 自拟题」（`list_course_sections` / `read_section` /
+  `record_study_position` / `prepare_custom_quiz`）。现在按用途分四组写全
+  （检索 / 刷题 / 学习复习 / 练习统计），并注明它腐烂过一次。
+- **`README.md` 文件树注释**只列了 13 个中的 3 个
+  （`search_knowledge + web_search + get_course_info`）→ 改成指向文件头，不再枚举。
+- **`README.md` 的工具表**补了范围说明：那张表只覆盖刷题线，完整清单在文件头；
+  并说明 `search_knowledge_base` 是助教侧命名、BOT 侧同名能力叫 `search_knowledge`。
+
+### 新增守卫
+
+`tests/test_surface_parity.py::TestToolParity::test_the_docstring_tool_list_matches_reality`：
+文件头列出的工具名必须与 `tools_by_name` **完全一致**。断言比对的是**解析出来的条目名**，
+不是搜文本（正文里提到某个工具名不算数）。
+
+变异验证：从文件头删掉 `read_section` → 报「只在代码里: ['read_section']」；
+加一个不存在的 `ghost_tool` → 报「只在文档里: ['ghost_tool']」。
+
+### 顺带把同类风险扫了一遍（这几处没问题）
+
+| 位置 | 结论 |
+|---|---|
+| `nodes.py` 的 `PLANNER_PROMPT` 写"你有 13 个工具可用" | **已被守住** —— `test_planner_prompt_contract.py::test_tool_count_statement_matches_reality` 会比对实际注册数。这处最要紧：它影响**模型行为**，不只是文档 |
+| `graph.py` 文件头那张图结构图 | 与真实节点一致（4 个 plan 节点 + 2 个 react 节点都在图里） |
+| `README.md` 的"两条 Agent 路径的工具"表 | 是有范围的**部分**表（刷题线），已补范围说明 |
+
+> 一条可以复用的规则：**文档里不要枚举"会变的清单"** —— 要么指向权威处（像文件头那样，
+> 并有测试守着），要么就接受它一定会腐烂。
+
+### 验证
+
+- Python **641 passed**（原 640 + 新增守卫 1）
+- 前端 auth_block 52/0、chat_context 14/0、server_conversations 35/0
+
 ## [1.5.3] - 2026-10-13
 
 **把手写助教的 HTTP 面与前端接线成套移除**，并给这个决定加上守卫。
@@ -626,7 +666,8 @@ Python **605 passed**（原 595 + 新契约测试 3 条 + 契约/守卫相关新
 
 ---
 
-[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.5.3...HEAD
+[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.5.4...HEAD
+[1.5.4]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.4
 [1.5.3]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.3
 [1.5.2]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.2
 [1.5.1]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.1
