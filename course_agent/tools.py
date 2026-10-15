@@ -8,16 +8,33 @@ Week 4 工具调用能力 + 刷题扩展能力。
 不要再往这个文件里加业务逻辑 —— 历史上这里和 tutor_agent.py 各写了一份，
 已经真实分叉过（这一侧的阅卷缺 basis_warning、题号也没按题型内序号算）。
 
-工具列表:
-  - search_knowledge: 检索 Chroma 知识库（计网+OS课程笔记）
-  - web_search: 联网搜索（智谱 web_search），知识库不够时补充
-  - get_course_info: 获取知识库统计信息
-  - list_papers: 列出习题库中的试卷
-  - get_paper_questions: 获取指定试卷某组的题目
-  - grade_answers: 批量批改学生答案
-  - explain_question: 取题面与参考答案用于讲题
-  - get_practice_stats: 获取试卷练习统计
-  - record_practice: 记录一次试卷练习
+工具列表（**13 个**，按用途分组）:
+
+  检索 / 知识库
+    - search_knowledge: 检索 Chroma 知识库（计网+OS 课程笔记）
+    - web_search: 联网搜索（智谱 web_search），知识库不够时补充
+    - get_course_info: 获取知识库统计信息
+
+  刷题
+    - list_papers: 列出习题库中的试卷
+    - get_paper_questions: 获取指定试卷某组的题目
+    - grade_answers: 批量批改学生答案
+    - explain_question: 取题面与参考答案用于讲题
+    - prepare_custom_quiz: 为「临时出题」取素材（给素材，不给成品题）
+
+  学习 / 复习
+    - list_course_sections: 列出某门课实际有哪些资料（分节讲解与复习用）
+    - read_section: 按课件原始顺序读取某一节（讲课程内容时优先于 search_knowledge）
+    - record_study_position: 记下学到哪了，供下一轮「下一节」接着讲
+
+  练习统计
+    - get_practice_stats: 获取试卷练习统计
+    - record_practice: 记录一次试卷练习
+
+⚠️ 这份清单**腐烂过一次**：原来写 9 个，加了「学习/复习三件套 + 自拟题」之后
+实际变成 13 个，而文件头一直没跟着改 —— 照着它数工具就会数错。
+现在由 `tests/test_surface_parity.py::TestToolParity::
+test_the_docstring_tool_list_matches_reality` 守着：清单与实际注册的工具不一致就红。
 """
 
 import json

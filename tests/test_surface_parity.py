@@ -22,6 +22,7 @@
 """
 import inspect
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -94,6 +95,23 @@ class TestToolParity:
         assert names == _tutor_tools(), (
             f"schema 有但没 handler: {names - _tutor_tools()}；"
             f"handler 有但没 schema: {_tutor_tools() - names}")
+
+    def test_the_docstring_tool_list_matches_reality(self):
+        """`tools.py` 文件头那份"工具列表"必须与实际注册的工具**完全一致**
+
+        它腐烂过一次：文件头写 9 个，加了「学习/复习三件套 + 自拟题」之后实际变成
+        13 个，而文件头一直没改 —— 照着它数工具就会数错（我自己就被误导过一次）。
+
+        断言比对的是**解析出来的条目名**，不是搜文本：正文里提到某个工具名不算数。
+        """
+        listed = set(re.findall(r"^\s+- ([a-z_][a-z0-9_]*):",
+                                tools.__doc__ or "", re.M))
+        actual = set(tools.tools_by_name)
+        assert listed == actual, (
+            "tools.py 文件头的工具列表与实际注册的对不上：\n"
+            f"  只在文档里: {sorted(listed - actual)}\n"
+            f"  只在代码里: {sorted(actual - listed)}\n"
+            "  —— 加/删工具时请同步改文件头那份清单。")
 
 
 class TestSharedImplementation:

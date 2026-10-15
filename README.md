@@ -89,7 +89,7 @@ ai-agent-learning/
 │   ├── graph.py                     # 图结构（Plan-Execute + ReAct 双模式）
 │   ├── state.py                     # AgentState（messages + plan）
 │   ├── nodes.py                     # 节点函数（planner/executor/synthesizer/llm/tools/guard）
-│   ├── tools.py                     # 工具定义（search_knowledge + web_search + get_course_info）
+│   ├── tools.py                     # 工具定义（检索/刷题/学习复习/练习统计；完整清单见文件头）
 │   ├── llm.py                       # LLM 配置
 │   ├── server.py                    # FastAPI 服务（/chat + /kb + /qb + /auth + /health）
 │   ├── tutor_agent.py               # LLM 主导的对话式学习助手（路线外实验分支，见上文说明）
@@ -299,6 +299,10 @@ Docker 部署的详细说明已随文档移出仓库（见 [docs/](docs/README.m
 LangGraph 路径（`/qa/stream`）与手写助教（`tutor_agent.py`，**无 HTTP 端点**）
 **共用同一份业务逻辑**（`course_agent/quiz_service.py`），各自只保留外壳。
 两边现在都能完成刷题全流程：
+
+> 下表只列**刷题这条线**上的工具；**完整清单（13 个）见 `tools.py` 文件头** ——
+> 那里的清单有测试守着，不会和实际脱节。
+> （`search_knowledge_base` 是助教侧的命名，BOT 侧同一个能力叫 `search_knowledge`。）
 
 | 工具 | 作用 |
 |------|------|
