@@ -1,0 +1,445 @@
+{
+  "app_version": "1.5.4",
+  "started_at": "2026-10-15T13:57:08.023341+00:00",
+  "base": "http://127.0.0.1:8003",
+  "attempts": 2,
+  "summary": {
+    "cases": 2,
+    "cases_stable_pass": 0,
+    "checks_total": 58,
+    "checks_passed": 46,
+    "ttft_p50_ms": null,
+    "ttft_p95_ms": null,
+    "turn_total_p50_ms": 34736
+  },
+  "cases": [
+    {
+      "id": "continue_next_group",
+      "attempts": [
+        {
+          "attempt": 1,
+          "thread_id": "eval-continue_next_group-0-422c00",
+          "turns": [
+            {
+              "answer": "这是《2026春操作系统期末试题（回忆版）》的选择题，第 1/10 组（选择题 5 题）：\n\n1. 进程与线程 ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q1_p1.png)\n2. 进程调度 ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q2_p1.png)\n3. 进程状态 ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q3_p1.png)\n4. 进程管理 ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q4_p1.png)\n5. 进程管理 ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q5_p1.png)\n\n请慢慢做。答案怎么写都行 —— 比如 `1.D 2.B 3.D`、`DBDAC`、`全都选A`，直接把选项发给我就行，**不用照上面的格式**，我来批改。",
+              "answer_source": "done",
+              "content_events": 0,
+              "tools": [
+                "list_papers",
+                "get_paper_questions"
+              ],
+              "ttft_ms": null,
+              "total_ms": 35778,
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "至少 3 张题目图片",
+                  "ok": true,
+                  "detail": "实际 5 张"
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 961 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": false,
+                  "detail": "content 事件 0 个，正文来源=done（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 8000 ms",
+                  "ok": false,
+                  "detail": "实际 没有任何 content 事件 ms（总时长 35778 ms）"
+                }
+              ],
+              "user": "给我出 2026春操作系统期末试题（回忆版）的第 1 组题"
+            },
+            {
+              "answer": "这是《2026春操作系统期末试题（回忆版）》的选择题，第 2/10 组（选择题 5 题）：\n\n6. 信号量与进程同步 ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q6_p2.png)\n7. 死锁与资源分配 ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q7_p2.png)\n8. 调度算法与作业调度 ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q8_p2.png)\n9. 调度算法 ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q9_p2.png)\n10. 内存管理 ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q10_p2.png)\n\n请慢慢做。答案怎么写都行 —— 比如 `1.D 2.B 3.D`、`DBDAC`、`全都选A`，直接把选项发给我就行，**不用照上面的格式**，我来批改。",
+              "answer_source": "done",
+              "content_events": 0,
+              "tools": [
+                "get_paper_questions"
+              ],
+              "ttft_ms": null,
+              "total_ms": 37408,
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 list_papers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "图片链接都来自题库（没有编造）",
+                  "ok": true,
+                  "detail": "外来链接: []"
+                },
+                {
+                  "check": "题面没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "参考答案没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "没有直接给出选项答案",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 974 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": false,
+                  "detail": "content 事件 0 个，正文来源=done（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 8000 ms",
+                  "ok": false,
+                  "detail": "实际 没有任何 content 事件 ms（总时长 37408 ms）"
+                }
+              ],
+              "user": "继续下一组"
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "thread_id": "eval-continue_next_group-1-bd29b3",
+          "turns": [
+            {
+              "answer": "这是《2026春操作系统期末试题（回忆版）》的选择题，第 1/10 组（选择题 5 题）：\n\n1. **进程与线程** ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q1_p1.png)\n2. **进程调度** ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q2_p1.png)\n3. **进程状态** ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q3_p1.png)\n4. **进程管理** ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q4_p1.png)\n5. **进程管理** ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q5_p1.png)\n\n请慢慢做。答案怎么写都行 —— 比如 `1.D 2.B 3.D`、`DBDAC`、`全都选A`，直接把选项发给我就行，**不用照上面的格式**，我来批改。",
+              "answer_source": "done",
+              "content_events": 0,
+              "tools": [
+                "list_papers",
+                "get_paper_questions"
+              ],
+              "ttft_ms": null,
+              "total_ms": 31947,
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "至少 3 张题目图片",
+                  "ok": true,
+                  "detail": "实际 5 张"
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 981 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": false,
+                  "detail": "content 事件 0 个，正文来源=done（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 8000 ms",
+                  "ok": false,
+                  "detail": "实际 没有任何 content 事件 ms（总时长 31947 ms）"
+                }
+              ],
+              "user": "给我出 2026春操作系统期末试题（回忆版）的第 1 组题"
+            },
+            {
+              "answer": "这是《2026春操作系统期末试题（回忆版）》的选择题，第 2/10 组（选择题 5 题）：\n\n6. 信号量与进程同步  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q6_p2.png)\n7. 死锁与资源分配  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q7_p2.png)\n8. 调度算法与作业调度  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q8_p2.png)\n9. 调度算法  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q9_p2.png)\n10. 内存管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q10_p2.png)\n\n请慢慢做。答案怎么写都行 —— 比如 `1.D 2.B 3.D`、`DBDAC`、`全都选A`，直接把选项发给我就行，**不用照上面的格式**，我来批改。",
+              "answer_source": "done",
+              "content_events": 0,
+              "tools": [
+                "get_paper_questions"
+              ],
+              "ttft_ms": null,
+              "total_ms": 35418,
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 list_papers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "图片链接都来自题库（没有编造）",
+                  "ok": true,
+                  "detail": "外来链接: []"
+                },
+                {
+                  "check": "题面没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "参考答案没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "没有直接给出选项答案",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 979 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": false,
+                  "detail": "content 事件 0 个，正文来源=done（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 8000 ms",
+                  "ok": false,
+                  "detail": "实际 没有任何 content 事件 ms（总时长 35418 ms）"
+                }
+              ],
+              "user": "继续下一组"
+            }
+          ]
+        }
+      ],
+      "checks_total": 32,
+      "checks_passed": 24,
+      "stable_pass": false,
+      "failures": [
+        "回答是逐字流式出来的（不是最后一次性给出）: content 事件 0 个，正文来源=done（来源为 done 意味着流式没生效：首响=总时长）",
+        "首响 ≤ 8000 ms: 实际 没有任何 content 事件 ms（总时长 35778 ms）",
+        "回答是逐字流式出来的（不是最后一次性给出）: content 事件 0 个，正文来源=done（来源为 done 意味着流式没生效：首响=总时长）",
+        "首响 ≤ 8000 ms: 实际 没有任何 content 事件 ms（总时长 37408 ms）",
+        "回答是逐字流式出来的（不是最后一次性给出）: content 事件 0 个，正文来源=done（来源为 done 意味着流式没生效：首响=总时长）",
+        "首响 ≤ 8000 ms: 实际 没有任何 content 事件 ms（总时长 31947 ms）",
+        "回答是逐字流式出来的（不是最后一次性给出）: content 事件 0 个，正文来源=done（来源为 done 意味着流式没生效：首响=总时长）",
+        "首响 ≤ 8000 ms: 实际 没有任何 content 事件 ms（总时长 35418 ms）"
+      ]
+    },
+    {
+      "id": "quiz_no_leak",
+      "attempts": [
+        {
+          "attempt": 1,
+          "thread_id": "eval-quiz_no_leak-0-83e061",
+          "turns": [
+            {
+              "answer": "这是《2026春操作系统期末试题（回忆版）》的选择题，第 1/10 组（选择题 5 题）：\n\n1. **进程与线程** ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q1_p1.png)\n2. **进程调度** ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q2_p1.png)\n3. **进程状态** ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q3_p1.png)\n4. **进程管理** ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q4_p1.png)\n5. **进程管理** ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q5_p1.png)\n\n请慢慢做。答案怎么写都行 —— 比如 `1.D 2.B 3.D`、`DBDAC`、`全都选A`，直接把选项发给我就行，**不用照上面的格式**，我来批改。",
+              "answer_source": "done",
+              "content_events": 0,
+              "tools": [
+                "list_papers",
+                "get_paper_questions"
+              ],
+              "ttft_ms": null,
+              "total_ms": 29758,
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 grade_answers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 explain_question",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 prepare_custom_quiz",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "至少 3 张题目图片",
+                  "ok": true,
+                  "detail": "实际 5 张"
+                },
+                {
+                  "check": "图片链接都来自题库（没有编造）",
+                  "ok": true,
+                  "detail": "外来链接: []"
+                },
+                {
+                  "check": "题面没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "参考答案没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "没有直接给出选项答案",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 981 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": false,
+                  "detail": "content 事件 0 个，正文来源=done（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 8000 ms",
+                  "ok": false,
+                  "detail": "实际 没有任何 content 事件 ms（总时长 29758 ms）"
+                }
+              ],
+              "user": "给我出 2026春操作系统期末试题（回忆版）的第 1 组题"
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "thread_id": "eval-quiz_no_leak-1-2d201c",
+          "turns": [
+            {
+              "answer": "这是《2026春操作系统期末试题（回忆版）》的选择题，第 1/10 组（选择题 5 题）：\n\n1. **进程与线程** ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q1_p1.png)\n2. **进程调度** ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q2_p1.png)\n3. **进程状态** ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q3_p1.png)\n4. **进程管理** ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q4_p1.png)\n5. **进程管理** ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q5_p1.png)\n\n请慢慢做。答案怎么写都行 —— 比如 `1.D 2.B 3.D`、`DBDAC`、`全都选A`，直接把选项发给我就行，**不用照上面的格式**，我来批改。",
+              "answer_source": "done",
+              "content_events": 0,
+              "tools": [
+                "list_papers",
+                "get_paper_questions"
+              ],
+              "ttft_ms": null,
+              "total_ms": 34055,
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 grade_answers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 explain_question",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 prepare_custom_quiz",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "至少 3 张题目图片",
+                  "ok": true,
+                  "detail": "实际 5 张"
+                },
+                {
+                  "check": "图片链接都来自题库（没有编造）",
+                  "ok": true,
+                  "detail": "外来链接: []"
+                },
+                {
+                  "check": "题面没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "参考答案没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "没有直接给出选项答案",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 981 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": false,
+                  "detail": "content 事件 0 个，正文来源=done（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 8000 ms",
+                  "ok": false,
+                  "detail": "实际 没有任何 content 事件 ms（总时长 34055 ms）"
+                }
+              ],
+              "user": "给我出 2026春操作系统期末试题（回忆版）的第 1 组题"
+            }
+          ]
+        }
+      ],
+      "checks_total": 26,
+      "checks_passed": 22,
+      "stable_pass": false,
+      "failures": [
+        "回答是逐字流式出来的（不是最后一次性给出）: content 事件 0 个，正文来源=done（来源为 done 意味着流式没生效：首响=总时长）",
+        "首响 ≤ 8000 ms: 实际 没有任何 content 事件 ms（总时长 29758 ms）",
+        "回答是逐字流式出来的（不是最后一次性给出）: content 事件 0 个，正文来源=done（来源为 done 意味着流式没生效：首响=总时长）",
+        "首响 ≤ 8000 ms: 实际 没有任何 content 事件 ms（总时长 34055 ms）"
+      ]
+    }
+  ]
+}
