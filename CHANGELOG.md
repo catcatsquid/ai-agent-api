@@ -14,6 +14,69 @@
 
 （下一次改动先写在这里，发版时移到下面并补上版本号与日期）
 
+## [1.6.0] - 2026-10-15
+
+**第一次有了"效果好不好的数据"**：新增 `eval/` 行为评测（脚本化用例 + 可判定判据 +
+按版本存档的报告）。而且它**第一次运行就抓到一个 641 条测试看不见的真问题**。
+
+### 新增：`eval/` 行为评测
+
+`pytest tests/` 守的是"**代码对不对**"，回答不了"这个版本学生用起来是不是更好了"。
+`eval/` 补那一层：打真实 HTTP（学生走的那条路：`/qa/stream` + SSE），
+每条用例**重复 N 次**（历史上那些缺陷全是"时好时坏"，单次通过没有意义），
+报告存进 git 供版本对比。
+
+- **起始 2 条用例**：`quiz_no_leak`（出题不泄题 + 图片归属 + 无协议原文）、
+  `continue_next_group`（多轮：出题 →"继续下一组"必须取第 2 组，且不许回头重列试卷）
+- **判据全部可判定**（不做主观打分）：工具轨迹、图片是否**全部来自题库**、
+  题面/参考答案是否泄漏（用**题库原文切片**比对，不猜关键词）、是否有工具调用原文、
+  正文长度、**是否真的流式**、**首响预算**
+- **硬指标**：`ttft_ms`（首响 = 首 token —— 流式产品里"快"的正确口径）、总时长、
+  content 事件数、正文来源（`content` / `done`）
+- **软指标**（讲得好不好、像不像老师）**明确留作另一层**：LLM 裁判 + 人工标注校准，
+  在报告里标注为参考值、**不当门槛** —— 软的当门槛会变成噪声驱动的开发
+
+### 它第一次运行就抓到的真问题：**回答根本不流式**
+
+```
+2 条用例 / 58 条判据 / 46 通过 / 稳定通过 0 条
+12 条红**全部**是 require_streaming 与 max_ttft_ms
+ttft_p50 = None（一次 content 事件都没有）· 每轮总时长 p50 = 34.7 秒
+```
+
+**正确性那一侧是真绿的** —— 工具轨迹、不泄题、图片归属、无协议原文全过，
+"继续下一组"也确实取对了第 2 组（游标链路被独立确认）。
+
+但**"快"这一侧完全不及格**：`/qa/stream` 的 `content` 事件**在生产里从未触发过** ——
+学生盯着转圈约 35 秒，然后整段答案一次性出现。
+
+**根因**：`course_agent/llm.py` 的 `SimpleLLM` **不是 LangChain 的 ChatModel**
+（普通类，只实现 `invoke` / `bind_tools`），它调的智谱接口本身也**不是流式**
+（`chat_with_tools` → 非流式 POST）。所以 LangGraph 的 `messages` 模式**永远产不出 chunk**，
+1.1.0 那套"只放行 `AIMessageChunk`"的判据自然一条都放不出来。
+（顺带：`SimpleLLM.astream` 是个**假流式** —— 调非流式接口再按字符切。）
+
+**为什么一直没被发现**：640+ 条测试里，流式相关用例用的是 `GenericFakeChatModel`
+（真 LangChain 模型），**从没跑过生产 LLM**；而前端有 `done.answer` 兜底，
+所以答案照样显示，只是退化成"等 35 秒一次性出现"。
+
+→ 这是**第一个由评测（而不是读代码）发现的缺陷**。修复方向已明确（让 LLM 真的流式），
+留给下一个版本，用**同一套评测**给出改前/改后的 TTFT 对比。
+
+### 一条踩出来的评测设计纪律（已写进 `eval/README.md`）
+
+第一次跑的时候正文是空的（流式没生效 + runner 只读了 `content` 事件），
+结果 `no_stem_leak` / `no_reference_leak` **全部轻松通过** —— 空字符串当然不含参考答案。
+**只有 `answer_min_chars` 把它暴露出来。**
+
+→ **每条用例都必须有"最低门槛"断言**（`answer_min_chars` / `require_streaming`），
+否则其余判据会**真空通过**。
+
+### 验证
+
+- `python -m eval.runner` 可跑；报告 `eval/reports/1.5.4.json` 入库（23.9 KB）
+- 既有 640+ 条测试不受影响（`eval/` 不进 CI —— 它要真模型、真额度）
+
 ## [1.5.4] - 2026-10-13
 
 **修掉"文档里的工具清单已经腐烂"** —— `tools.py` 文件头还写着 9 个工具，实际是 13 个。
@@ -666,7 +729,8 @@ Python **605 passed**（原 595 + 新契约测试 3 条 + 契约/守卫相关新
 
 ---
 
-[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.5.4...HEAD
+[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.6.0
 [1.5.4]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.4
 [1.5.3]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.3
 [1.5.2]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.2
