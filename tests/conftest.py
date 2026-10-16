@@ -282,3 +282,73 @@ def _real_conversation_store_stays_clean():
         "测试往**真实的** runtime/checkpoints_*.sqlite3 里写了会话，"
         f"用户会在会话列表里看到这些垃圾：{added}。"
         "请给写入型测试注入临时库 saver（别用模块级的 graph / react_graph 写状态）。")
+
+
+def _real_data_files() -> set:
+    """真实 data/ 下现存的文件集合（只读；跳过测试自己用的临时目录）"""
+    data = ROOT / "data"
+    if not data.exists():
+        return set()
+    return {p.relative_to(data).as_posix()
+            for p in data.rglob("*")
+            if p.is_file() and "_tmp_" not in p.as_posix()}
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _real_data_dir_stays_clean():
+    """跑完测试后，真实的 data/ 下不能多出（或少掉）任何文件
+
+    为什么需要：`data/` 是**用户的课程资料与题库**，不是测试的草稿纸。
+    而 1.7.0 起 `/kb/add` 会把 data/ 之外的文件**复制进** data/ —— 于是
+    "拿 README.md 这类真实文件去测越界导入"会真的往用户数据目录里塞文件并入库。
+
+    这条守卫把"测试碰了真实数据"变成一次失败，而不是等用户发现资料里多了个怪文件。
+    写文件的测试请把 `server.DATA_ROOT` 指到工作区内的临时目录。
+    """
+    before = _real_data_files()
+    yield
+    after = _real_data_files()
+    added = sorted(after - before)
+    removed = sorted(before - after)
+    assert not added and not removed, (
+        f"测试改动了**真实的** data/ 目录：新增 {added}，减少 {removed}。"
+        "请把 server.DATA_ROOT 指到临时目录，别往用户的课程资料目录里写。")
+
+
+def _local_server_is_running() -> bool:
+    """本机是不是我们那个服务在跑（用 /health 的特征字段认，避免误判别的程序）"""
+    import json
+    import urllib.request
+
+    for url in ("http://127.0.0.1:8003/health", "http://127.0.0.1:8000/health"):
+        try:
+            with urllib.request.urlopen(url, timeout=1) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            if body.get("status") == "healthy" and "knowledge_chunks" in body:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_server_running_during_tests():
+    """跑测试时**不能**有服务在跑 —— Chroma 是单写者，并发写会把知识库写坏
+
+    代价是实测出来的：2026-10-16 我在服务运行着的时候跑了一遍全量测试，
+    两个进程同时写 `vector_store/`，把元数据段写坏 —— 之后**任何**读操作都抛
+    `Failed to apply logs to the metadata segment`，最后只能整库重建
+    （4199 块重新 embedding）。更阴的是：清掉写前日志后"读"恢复了，
+    而"写"变成**静默丢弃**（upsert 不报错但什么都不落盘）。
+
+    想同时跑就先把服务停掉；确实需要并存时设 `ALLOW_TESTS_WITH_SERVER=1`。
+    """
+    if os.environ.get("ALLOW_TESTS_WITH_SERVER") == "1":
+        return
+    if _local_server_is_running():
+        pytest.exit(
+            "检测到本地服务正在运行（8003/8000 的 /health 有响应）。\n"
+            "Chroma 是单写者：服务与测试同时写 vector_store/ 会把知识库写坏"
+            "（实测踩过，代价是整库重建）。\n"
+            "请先停掉服务再跑测试；确需并存请设 ALLOW_TESTS_WITH_SERVER=1。",
+            returncode=1)

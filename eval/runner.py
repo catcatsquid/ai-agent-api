@@ -44,10 +44,10 @@ EVAL_DIR = Path(__file__).resolve().parent
 CASES_DIR = EVAL_DIR / "cases"
 REPORTS_DIR = EVAL_DIR / "reports"
 
-# 与生产同一条正则：正文里不许出现"工具名 {json}"这种内部协议原文
-_TOOL_CALL_TEXT_RE = re.compile(
-    r"(?:\b[a-z][a-z0-9]*(?:_[a-z0-9]+){1,4}\s*\{[^{}]*\})"
-    r"|(?:\b[a-z][a-z0-9]*(?:_[a-z0-9]+){1,4}\(\s*\{[^{}]*\}\s*\))")
+# 与生产**同一条**正则：正文里不许出现"工具名 {json}"这种内部协议原文。
+# 直接 import 而不是复制 —— 复制的话生产改了正则，评测还在按旧规则判，
+# 而注释里那句"与生产同一条"就变成假话（这个项目在别处已经栽过好几次了）。
+from course_agent.nodes import _TOOL_CALL_TEXT_RE  # noqa: E402
 # 只在"明确给答案"的语境里才算泄题（避免"B 选项说…"这种讲解被误判）
 _ANSWER_LETTER_RE = re.compile(r"(答案|正确答案|正确选项)\s*[:：是为]?\s*([A-D])\b")
 _IMG_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
@@ -256,12 +256,33 @@ def run_case(case: dict, base: str, attempts: int) -> dict:
                          for c in detail if not c["ok"]]}
 
 
+def delete_threads(base: str, thread_ids: list[str], mode: str = "plan") -> int:
+    """删掉评测自己造的会话 —— 评测不该把垃圾留在学生的会话库里
+
+    为什么必须做：`/chat/conversations` 会把这些 thread 列出来，前端会当成
+    "服务端保存的会话"导入 → 用户侧栏里就会冒出几条「给我出 2026春…」这种怪东西。
+    （这与 1.4.1 修过的"测试污染会话库"是同一类问题，只是来源换成了评测。）
+    """
+    cleaned = 0
+    for tid in thread_ids:
+        try:
+            resp = requests.delete(f"{base}/chat/conversations/{tid}",
+                                   params={"mode": mode}, timeout=30)
+            if resp.status_code in (200, 404):     # 404 = 本来就没落盘
+                cleaned += 1
+        except requests.RequestException:
+            pass
+    return cleaned
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="行为评测 runner")
     ap.add_argument("--base", default="http://127.0.0.1:8003")
     ap.add_argument("--case", action="append", default=None,
                     help="只跑指定用例（可重复）")
     ap.add_argument("--attempts", type=int, default=3)
+    ap.add_argument("--keep-threads", action="store_true",
+                    help="跑完不删评测造的会话（默认会删，免得污染会话库）")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -291,6 +312,10 @@ def main() -> int:
             print(f"    ✗ {c}")
         print(f"  判据 {r['checks_passed']}/{r['checks_total']}"
               f"  {'✅ 稳定通过' if r['stable_pass'] else '❌ 未稳定通过'}")
+        if not args.keep_threads:
+            tids = [a["thread_id"] for a in r["attempts"]]
+            n = delete_threads(args.base, tids, mode=case.get("mode", "plan"))
+            print(f"  已清理 {n}/{len(tids)} 个评测会话（不留在会话库里）")
 
     all_checks = [c for r in results for a in r["attempts"]
                   for t in a["turns"] for c in t["checks"]]

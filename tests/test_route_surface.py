@@ -39,6 +39,8 @@ EXPECTED_ROUTES = {
     ("POST", "/kb/search"),
     ("POST", "/kb/add"),
     ("POST", "/kb/add-directory"),
+    ("POST", "/kb/upload"),
+    ("GET", "/kb/import-targets"),
     ("GET", "/kb/browse"),
     ("GET", "/qb/list"),
     ("POST", "/qb/search"),

@@ -371,10 +371,26 @@ def setup_middlewares(app):
             )
     else:
         auth_info = "关闭(本地模式)"
-        logger.info(
-            "AUTH_ENFORCE=false：接口无需凭据即可调用。"
-            "文件路径校验(resolve_within_data)仍然生效，data/ 之外的文件依旧会被拒绝；"
-            "对外部署前请设 AUTH_ENFORCE=true"
-        )
+        from config import KB_IMPORT_ALLOW_OUTSIDE
+
+        if KB_IMPORT_ALLOW_OUTSIDE:
+            logger.info(
+                "AUTH_ENFORCE=false：接口无需凭据即可调用。"
+                "路径校验仍然生效，但**只限制写入位置**：导入的落点一律在 data/ 之内；"
+                "而 /kb/add 允许把 data/ 之外的文件**复制进** data/ 再入库"
+                "（KB_IMPORT_ALLOW_OUTSIDE=true）"
+            )
+            logger.warning(
+                "⚠️ 「无鉴权」+「允许从 data/ 之外导入」同时开着："
+                "任何能访问本端口的人都可以把机器上可读的文件灌进知识库、"
+                "再用 /kb/search 读出来。仅限本机自用；对外部署请设 AUTH_ENFORCE=true，"
+                "或设 KB_IMPORT_ALLOW_OUTSIDE=false"
+            )
+        else:
+            logger.info(
+                "AUTH_ENFORCE=false：接口无需凭据即可调用。"
+                "文件路径校验生效：data/ 之外的文件会被拒绝"
+                "（KB_IMPORT_ALLOW_OUTSIDE=false）；对外部署前请设 AUTH_ENFORCE=true"
+            )
     logger.info("中间件已加载: 请求日志 | 限流(%s) | 鉴权(%s) | CORS | 全局异常处理",
                 rate_limit_info, auth_info)

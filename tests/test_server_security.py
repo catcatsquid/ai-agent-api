@@ -55,25 +55,63 @@ class TestResolveWithinData:
 
 
 class TestKbPathValidation:
-    """带合法凭据时，越界路径也必须被 403 拒绝
+    """`/kb/add` 的路径策略：**源不限制、写入位置必须落在 data/ 之内**
 
     攻击链（修复前）：
       ① /auth/login 不校验密码 → 任意匿名者拿到 JWT
       ② /kb/add?file_path=<任意文件> → 被 _classify_doc 兜底成 "notes" 收进库
       ③ /kb/search（当时无鉴权）→ 返回 chunk 全文 = 文件内容外泄
+
+    现在 ② **被有意放开**（用户要"从任何位置导入"），代价是"无鉴权 + 端口暴露"时
+    那条链又通了。所以补了三件事（本文件守前两条，第三条见 middleware）：
+      · 写入位置仍被钉在 data/ 之内（越界目标 403）
+      · `KB_IMPORT_ALLOW_OUTSIDE=false` 可一键恢复原策略
+      · 无鉴权 + 允许导入的组合会在启动时打 WARNING
     """
 
     @pytest.fixture(autouse=True)
     def _auth(self):
         with patch("course_agent.auth.API_KEY", "test-key"):
             yield {"X-API-Key": "test-key"}
-    @pytest.mark.parametrize("path", ["README.md", "../../etc/passwd", "C:/Windows/win.ini"])
-    def test_kb_add_rejects_outside_data(self, _auth, path):
-        resp = client.post("/kb/add", params={"file_path": path}, headers=_auth)
+
+    def test_outside_import_can_be_locked_down(self, _auth, monkeypatch):
+        """关掉开关 → 回到"data/ 之外一律 403"，而且提示要可操作"""
+        import config
+        monkeypatch.setattr(config, "KB_IMPORT_ALLOW_OUTSIDE", False)
+        resp = client.post("/kb/add", params={"file_path": "README.md"}, headers=_auth)
         assert resp.status_code == 200
         body = resp.json()
-        assert body["code"] == 403, f"{path} 竟然没被拒绝: {body}"
-        assert "data/" in body["msg"]
+        assert body["code"] == 403, f"README.md 竟然没被拒绝: {body}"
+        assert "KB_IMPORT_ALLOW_OUTSIDE" in body["msg"], "提示里要写清开关名"
+        assert not (DATA_ROOT / "导入").exists(), "被拒的导入不该建出目录"
+
+    @pytest.mark.parametrize("path", [
+        "../../__definitely_not_here__/x.md",
+        "C:/__definitely_not_here__/x.md",
+    ])
+    def test_nonexistent_outside_path_is_404_not_403(self, _auth, path):
+        """外面**不存在**的路径返回 404 而非越界 403 —— 说明走的是"复制进来"那条分支
+
+        刻意不用真实存在的文件（README.md / win.ini）来测：默认开着开关时，
+        那会把文件**真的复制进 data/ 并入库**，污染用户的知识库。
+        """
+        resp = client.post("/kb/add", params={"file_path": path}, headers=_auth)
+        assert resp.json()["code"] == 404, resp.json()
+
+    def test_policy_is_checked_before_existence(self, _auth, monkeypatch):
+        """关掉开关时，越界路径**一律** 403 —— 不能因为"文件不存在"就变成 404
+
+        那会泄露 data/ 之外某个文件**存不存在**。
+        （这条是 CI 教的：`.env` 在 .gitignore 里，CI 检出后并不存在，
+        先判存在性会让"应当 403"的用例拿到 404。）
+        """
+        import config
+        monkeypatch.setattr(config, "KB_IMPORT_ALLOW_OUTSIDE", False)
+        body = client.post("/kb/add",
+                           params={"file_path": "../../__not_here__/x.md"},
+                           headers=_auth).json()
+        assert body["code"] == 403, body
+        assert "KB_IMPORT_ALLOW_OUTSIDE" in body["msg"]
 
     def test_kb_add_accepts_inside_data_but_missing(self, _auth):
         """越界是 403，越界之外的"路径不存在"是 404 —— 两者不能混成一个码"""
@@ -105,11 +143,16 @@ class TestKbPathValidation:
 
 
 class TestPathValidationSurvivesAuthOff:
-    """关掉鉴权后，路径校验必须依然拦住越界文件
+    """关掉鉴权后，路径校验必须依然生效
 
-    这是"本地默认免登录"这个决定能成立的前提：真正危险的那条链
-    （任意文件入库 → /kb/search 外泄）靠的是处理函数内部的 resolve_within_data，
-    与鉴权解耦。如果哪天有人把校验挪到依赖里、或依赖鉴权兜底，这些用例会红。
+    这是"本地默认免登录"这个决定能成立的前提：危险的那条链
+    （任意文件入库 → /kb/search 外泄）靠的是处理函数**内部**的校验，与鉴权解耦。
+    如果哪天有人把校验挪到依赖里、或依赖鉴权兜底，这些用例会红。
+
+    1.7.0 起 `/kb/add` 的语义变了（源不限制、写入位置必须在 data/ 之内），
+    所以这里的断言也跟着变：
+      · 关掉 `KB_IMPORT_ALLOW_OUTSIDE` → 越界依旧 403（与鉴权无关）
+      · 目录导入 / 浏览接口**没有**放开，越界依旧 403
     """
 
     @pytest.fixture(autouse=True)
@@ -119,10 +162,12 @@ class TestPathValidationSurvivesAuthOff:
             yield
 
     @pytest.mark.parametrize("path", [
-        "README.md", ".env", "../../etc/passwd", "C:/Windows/win.ini",
-        "course_agent/server.py", "data/../README.md",
+        "README.md", ".env", "course_agent/server.py", "data/../README.md",
     ])
-    def test_add_still_rejects_outside_data_without_auth(self, path):
+    def test_add_still_rejects_outside_data_without_auth(self, path, monkeypatch):
+        """刻意用**真实存在**的文件：只有把开关关掉，它们才不会被复制进 data/"""
+        import config
+        monkeypatch.setattr(config, "KB_IMPORT_ALLOW_OUTSIDE", False)
         resp = client.post("/kb/add", params={"file_path": path})
         assert resp.status_code == 200
         assert resp.json()["code"] == 403, f"{path} 在无鉴权模式下竟然通过了: {resp.json()}"

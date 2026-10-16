@@ -16,10 +16,11 @@ Week 10 升级：知识库管理接口（增量导入 + 检索测试）
 """
 
 import json
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path as FilePath
-from fastapi import FastAPI, Depends, Query, HTTPException
+from fastapi import FastAPI, Depends, File, Query, HTTPException, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
@@ -71,6 +72,79 @@ def resolve_within_data(user_path: str, *, must_exist: bool = True) -> FilePath:
     if must_exist and not candidate.exists():
         raise ValueError(f"路径不存在: {user_path}")
     return candidate
+
+
+# ---------------------------------------------------------------- 导入的落盘规则
+#
+# **源不限制、目标必须在 data/ 之下。**
+#
+# 原来 `resolve_within_data` 连**读取**都要求路径在 data/ 之下 —— 于是"从下载目录
+# 导入一个文件"必然失败（用户实测遇到）。而当初立这条的理由是"防越界读取"，
+# 可它防错了方向：真正要守的是**写入位置**（别把东西写到 data/ 外面去）。
+#
+# 另外还有一条技术理由必须复制而不是就地读：`_classify_doc` 是按"路径相对 data/
+# 的位置"判类型的（含 ppt → ppt、含 课本 → textbook、含 往年题 → 跳过），
+# 外部路径一律落成 notes。所以复制进 data/ 才能落到**正确的分类**上。
+
+DEFAULT_IMPORT_DIR = "导入"
+
+
+def _safe_filename(name: str) -> str:
+    """只取文件名部分，丢掉任何目录成分 —— 防 `../../x` 这类名字"""
+    base = FilePath(str(name).replace("\\", "/")).name.strip().replace("\x00", "")
+    if base in ("", ".", ".."):
+        raise ValueError(f"非法文件名: {name!r}")
+    return base
+
+
+def _import_root() -> FilePath:
+    """没指定目标目录时的默认落点：data/导入/（按规则会判成 notes）"""
+    return (DATA_ROOT / DEFAULT_IMPORT_DIR).resolve()
+
+
+def _destination_dir(target_dir: str | None) -> FilePath:
+    """把 target_dir 解析成 data/ 之下的目录；空则用默认落点
+
+    **语义只有一种：相对 data/ 的路径**（如 `操作系统/ppt`）。
+    为什么不顺手支持"相对项目根"：那样 `data/x` 会被解释成 `data/data/x`，
+    然后**静默建出一个怪目录** —— 两种约定混在一起必然出这种事。
+    （`/kb/browse` 与 `/kb/add-directory` 用的是"相对项目根"，那是它们的历史约定，
+    这里刻意不同，并由 `/kb/import-targets` 直接给出本函数认识的取值。）
+    """
+    if not target_dir:
+        dest = _import_root()
+    else:
+        raw = FilePath(str(target_dir).strip().replace("\\", "/"))
+        if raw.is_absolute():
+            raise ValueError(f"目标目录请填相对 data/ 的路径，不要填绝对路径: {target_dir}")
+        candidate = (DATA_ROOT / raw).resolve()
+        # 越界检查（`..` 会被 resolve 消掉，所以必须比 resolve 之后的结果）
+        if candidate != DATA_ROOT and DATA_ROOT not in candidate.parents:
+            raise ValueError(f"目标目录必须位于 data/ 之下: {target_dir}")
+        dest = candidate
+    dest.mkdir(parents=True, exist_ok=True)
+    return dest
+
+
+def _place_into_data(source: FilePath, target_dir: str | None) -> FilePath:
+    """把**源文件复制**到 data/ 之下，返回落点
+
+    重名不覆盖：撞了就加序号（和对话导出同样的策略 —— 静默覆盖是最难查的一类问题）。
+    复制完再兜一道"必须仍在 data/ 之下"。
+    """
+    dest_dir = _destination_dir(target_dir)
+    name = _safe_filename(source.name)
+    target = dest_dir / name
+    n = 2
+    while target.exists():
+        target = dest_dir / f"{FilePath(name).stem}_{n}{FilePath(name).suffix}"
+        n += 1
+    shutil.copy2(source, target)
+    final = target.resolve()
+    if final != DATA_ROOT and DATA_ROOT not in final.parents:
+        target.unlink(missing_ok=True)
+        raise ValueError(f"目标路径越界: {target}")
+    return final
 
 
 # 只有"写答案的那个节点"有资格把内容推给用户（按图区分：plan 图是 synthesizer，
@@ -721,25 +795,158 @@ def kb_search(req: SearchTestRequest):
 
 @app.post("/kb/add")
 def kb_add_document(
-    file_path: str = Query(..., description="文件路径（必须位于 data/ 目录下）"),
+    file_path: str = Query(..., description="文件路径（**任意位置**都行）"),
+    target_dir: str = Query(None,
+                            description="复制到 data/ 下的哪个子目录（默认 导入/）"),
     doc_type: str = Query(None, description="文档类型：ppt/notes/textbook，留空自动判断"),
     chapter: str = Query(None, description="章节，留空自动从文件名提取"),
     auth: dict = Depends(any_auth),
 ):
-    """增量导入单个文件（只允许 data/ 目录下的文件）"""
+    """增量导入单个文件 —— **源不限制，目标必须在 data/ 之下**
+
+    · 源文件已在 `data/` 之下 → 就地入库（原行为不变）
+    · 源文件在别处（下载目录、桌面、D 盘…）→ **复制进** `data/<target_dir>/` 再入库
+
+    为什么得复制而不能就地读：`_classify_doc` 按"路径相对 data/ 的位置"判类型，
+    外部路径一律落成 notes —— 复制进来才能落到 ppt / 课本 / notes 的正确分类上。
+    """
+    src = FilePath(str(file_path).strip())
+    if not src.is_absolute():
+        src = PROJECT_ROOT / src
+    src = src.resolve()
+
+    # ⚠️ 顺序要紧：**先判策略，再判存在性**。
+    # 反过来（先 exists 再判策略）会在"越界被禁止"时用 404/403 的差别
+    # **泄露 data/ 之外某个文件存不存在**。而且 CI 里 `.env` 本来就不存在
+    # （它在 .gitignore 里），先判存在性会让断言 403 的用例拿到 404。
+    inside_data = src == DATA_ROOT or DATA_ROOT in src.parents
+    if not inside_data:
+        from config import KB_IMPORT_ALLOW_OUTSIDE
+        if not KB_IMPORT_ALLOW_OUTSIDE:
+            return {"code": 403,
+                    "msg": "data/ 之外的路径导入已被关闭"
+                           "（KB_IMPORT_ALLOW_OUTSIDE=false）；"
+                           "可改用「直接上传」——它不读你机器上的路径"}
+
+    if not src.is_file():
+        return {"code": 404, "msg": f"文件不存在或不是文件: {file_path}"}
+
     try:
-        resolved = resolve_within_data(file_path, must_exist=False)
+        if inside_data:
+            resolved, copied = resolve_within_data(str(src)), False
+        else:
+            # 审计：越界来源要留痕（这是有意放开的一条能力，出事要查得到）
+            logger.info("从 data/ 之外导入并复制: %s", src)
+            resolved, copied = _place_into_data(src, target_dir), True
     except ValueError as e:
-        logger.warning("拒绝导入越界路径: %s", file_path)
+        logger.warning("拒绝导入: %s (%s)", file_path, e)
         return {"code": 403, "msg": str(e)}
-    if not resolved.is_file():
-        return {"code": 404, "msg": f"文件不存在: {file_path}"}
+
     kb = get_knowledge_base()
+    from doc_utils import _classify_doc
+
+    # 「往年题」按约定不进知识库（它是题库的源材料，走题库那条管线）。
+    # 以前这种情况会返回 `code: 0, added_chunks: 0`，界面显示"导入成功: 0 个分块" ——
+    # 用户实测就是这个体验：文件放进 data/操作系统/往年题/ 再导入，看着像失败。
+    # 所以这里**明确说清为什么跳过、以及该放哪**。
+    if doc_type is None and _classify_doc(resolved, DATA_ROOT) is None:
+        return {"code": 0, "msg": "已跳过（该目录不进知识库）", "added_chunks": 0,
+                "skipped_reason": "「往年题」目录不进知识库 —— 它是题库的源材料，"
+                                  "走题库导入那条管线（/qb 页面）。"
+                                  "要让它进知识库，请放入「课本」或含 ppt 的目录。",
+                "path": str(resolved), "copied": copied}
     try:
         added = kb.add_document(str(resolved), doc_type=doc_type, chapter=chapter)
-        return {"code": 0, "msg": "ok", "added_chunks": added}
+        return {"code": 0, "msg": "ok", "added_chunks": added,
+                "path": str(resolved), "copied": copied}
     except Exception as e:
         return {"code": 500, "msg": f"导入失败: {str(e)[:200]}"}
+
+
+@app.post("/kb/upload")
+async def kb_upload(
+    file: UploadFile = File(..., description="要上传的文件"),
+    target_dir: str = Query(None,
+                            description="落到 data/ 下的哪个子目录（默认 导入/）"),
+    auth: dict = Depends(any_auth),
+):
+    """**直接上传**文件并入库（浏览器选文件 → 落进 data/ → 入库）
+
+    这是最省事也最安全的一条路：文件内容**经 HTTP 传过来**，
+    服务端不需要去读你机器上的任意路径。（传路径那条路也保留，见 `/kb/add`。）
+    """
+    try:
+        dest_dir = _destination_dir(target_dir)
+        name = _safe_filename(file.filename or "")
+    except ValueError as e:
+        return {"code": 403, "msg": str(e)}
+
+    # 落到会"跳过"的目录（往年题）就先拦住：否则文件存下来了却什么也没入库，
+    # 用户只会看到"成功 0 个分块"。宁可说清楚、别存这个文件。
+    from doc_utils import _classify_doc
+    if _classify_doc(dest_dir / (name or "x"), DATA_ROOT) is None:
+        return {"code": 400,
+                "msg": "这个目标目录不进知识库（「往年题」是题库的源材料，走 /qb 那条管线）；"
+                       "请改选「课本」或含 ppt 的目录 —— 文件没有保存"}
+
+    target = dest_dir / name
+    n = 2
+    while target.exists():          # 重名不覆盖，加序号
+        target = dest_dir / f"{FilePath(name).stem}_{n}{FilePath(name).suffix}"
+        n += 1
+
+    try:
+        content = await file.read()
+        target.write_bytes(content)
+    except Exception as e:
+        target.unlink(missing_ok=True)
+        return {"code": 500, "msg": f"保存失败: {str(e)[:200]}"}
+
+    final = target.resolve()
+    if final != DATA_ROOT and DATA_ROOT not in final.parents:   # 兜底
+        final.unlink(missing_ok=True)
+        return {"code": 403, "msg": "目标路径越界"}
+
+    kb = get_knowledge_base()
+    try:
+        added = kb.add_document(str(final))
+        return {"code": 0, "msg": "ok", "added_chunks": added,
+                "path": str(final), "bytes": len(content)}
+    except Exception as e:
+        return {"code": 500, "msg": f"入库失败（文件已保存到 data/）: {str(e)[:200]}"}
+
+
+@app.get("/kb/import-targets")
+def kb_import_targets(auth: dict = Depends(any_auth)):
+    """列出可选的导入目标目录
+
+    为什么要给一份清单、而不是让用户随便填：`_classify_doc` 是**按子目录名**判类型的
+    （含 ppt → ppt、含 课本 → textbook、含 往年题 → 跳过），填错目录就会被判成 notes。
+    这份清单里的 doc_type 是**用生产那条分类规则算出来的**，不是我另写一套。
+    """
+    from doc_utils import _classify_doc
+
+    targets = [{"dir": DEFAULT_IMPORT_DIR, "doc_type": "notes", "files": 0, "exists": False}]
+    if DATA_ROOT.exists():
+        for p in sorted(DATA_ROOT.rglob("*")):
+            if not p.is_dir():
+                continue
+            rel = p.relative_to(DATA_ROOT).as_posix()
+            if rel.count("/") > 1:
+                continue
+            # question_bank 是题库的源材料（走另一条导入管线），images 是附件目录
+            if any(x in rel for x in ("往年题", "images", "question_bank", "__pycache__")):
+                continue
+            dtype = _classify_doc(p / "占位.txt", DATA_ROOT)
+            if dtype is None:       # 「往年题」这类会被跳过的目录，不列出来
+                continue
+            targets.append({
+                "dir": rel,
+                "doc_type": dtype,
+                "files": sum(1 for f in p.iterdir() if f.is_file()),
+                "exists": True,
+            })
+    return {"code": 0, "msg": "ok", "data": targets}
 
 
 @app.post("/kb/add-directory")
@@ -782,7 +989,13 @@ def kb_remove_document(source: str, auth: dict = Depends(any_auth)):
 #
 # 所以改成：**先在服务端落盘**（这一步的成败前端一定拿得到），
 # 把真实路径显示给用户；浏览器下载降级为"顺带触发一下"。
-EXPORT_ROOT = (PROJECT_ROOT / "exports").resolve()
+#
+# 落点可配置（config.EXPORT_DIR）：相对路径按项目根解析，也可以填绝对路径。
+# 写成函数而不是模块常量 —— 常量在 import 时就定死了，测试和环境变量都不好改。
+def _export_root() -> FilePath:
+    from config import EXPORT_DIR
+    p = FilePath(EXPORT_DIR).expanduser()
+    return (p if p.is_absolute() else PROJECT_ROOT / p).resolve()
 
 
 class ChatExportRequest(BaseModel):
@@ -813,10 +1026,13 @@ def _render_chat_markdown(title: str, messages: list[dict]) -> str:
 
 @app.post("/chat/export")
 def chat_export(req: ChatExportRequest, auth: dict = Depends(any_auth)):
-    """把当前对话导出成 Markdown，落在项目的 exports/ 目录下
+    """把当前对话导出成 Markdown
 
-    返回里带**真实路径**，前端会显示出来 —— 这样"导出到哪了"永远有答案，
-    不依赖浏览器的下载行为。
+    落点由 `config.EXPORT_DIR` 决定：默认 `<项目>/exports`，
+    也可以配成绝对路径（如 `D:\\我的笔记\\对话记录`）。
+
+    返回里带**真实路径**（`path` 相对项目、`abs_path` 绝对），前端会显示出来 ——
+    这样"导出到哪了"永远有答案，不依赖浏览器的下载行为。
     """
     md = req.markdown
     if not md and req.messages:
@@ -824,20 +1040,21 @@ def chat_export(req: ChatExportRequest, auth: dict = Depends(any_auth)):
     if not md.strip():
         return {"code": 400, "msg": "没有可导出的内容"}
 
-    EXPORT_ROOT.mkdir(parents=True, exist_ok=True)
+    export_root = _export_root()
+    export_root.mkdir(parents=True, exist_ok=True)
     # 时间戳只到秒 —— 同一秒内导出两次会算出同一个文件名，
     # 后一次会把前一次**静默覆盖**掉（写测试时实测到了）。
     # 所以这里保证不重名：撞了就往后加序号。
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     base = f"{_safe_export_name(req.title)}_{stamp}"
-    target = EXPORT_ROOT / f"{base}.md"
+    target = export_root / f"{base}.md"
     n = 2
     while target.exists():
-        target = EXPORT_ROOT / f"{base}_{n}.md"
+        target = export_root / f"{base}_{n}.md"
         n += 1
 
-    # 文件名已过滤分隔符，这里再兜一道：必须仍落在 exports/ 之内
-    if EXPORT_ROOT != target.resolve().parent:
+    # 文件名已过滤分隔符，这里再兜一道：必须仍落在导出目录之内
+    if export_root != target.resolve().parent:
         logger.warning("拒绝越界的导出文件名: %s", target.name)
         return {"code": 403, "msg": "非法文件名"}
     target = target.resolve()
@@ -848,7 +1065,12 @@ def chat_export(req: ChatExportRequest, auth: dict = Depends(any_auth)):
         logger.warning("对话导出写入失败: %s", e)
         return {"code": 500, "msg": f"写入失败: {str(e)[:120]}"}
 
-    rel = target.relative_to(PROJECT_ROOT).as_posix()
+    try:
+        rel = target.relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        # 导出目录被配到了项目之外（EXPORT_DIR 填了绝对路径）—— 这时没有"相对项目"
+        # 的形式，直接给绝对路径（前端只是把它显示给用户看）
+        rel = str(target)
     nbytes = len(md.encode("utf-8"))
     logger.info("对话已导出: %s (%d 字节)", rel, nbytes)
     return {"code": 0, "msg": "ok", "path": rel, "abs_path": str(target),
