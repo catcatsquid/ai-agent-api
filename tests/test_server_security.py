@@ -98,6 +98,21 @@ class TestKbPathValidation:
         resp = client.post("/kb/add", params={"file_path": path}, headers=_auth)
         assert resp.json()["code"] == 404, resp.json()
 
+    def test_policy_is_checked_before_existence(self, _auth, monkeypatch):
+        """关掉开关时，越界路径**一律** 403 —— 不能因为"文件不存在"就变成 404
+
+        那会泄露 data/ 之外某个文件**存不存在**。
+        （这条是 CI 教的：`.env` 在 .gitignore 里，CI 检出后并不存在，
+        先判存在性会让"应当 403"的用例拿到 404。）
+        """
+        import config
+        monkeypatch.setattr(config, "KB_IMPORT_ALLOW_OUTSIDE", False)
+        body = client.post("/kb/add",
+                           params={"file_path": "../../__not_here__/x.md"},
+                           headers=_auth).json()
+        assert body["code"] == 403, body
+        assert "KB_IMPORT_ALLOW_OUTSIDE" in body["msg"]
+
     def test_kb_add_accepts_inside_data_but_missing(self, _auth):
         """越界是 403，越界之外的"路径不存在"是 404 —— 两者不能混成一个码"""
         resp = client.post("/kb/add",

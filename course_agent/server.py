@@ -814,19 +814,27 @@ def kb_add_document(
     if not src.is_absolute():
         src = PROJECT_ROOT / src
     src = src.resolve()
+
+    # ⚠️ 顺序要紧：**先判策略，再判存在性**。
+    # 反过来（先 exists 再判策略）会在"越界被禁止"时用 404/403 的差别
+    # **泄露 data/ 之外某个文件存不存在**。而且 CI 里 `.env` 本来就不存在
+    # （它在 .gitignore 里），先判存在性会让断言 403 的用例拿到 404。
+    inside_data = src == DATA_ROOT or DATA_ROOT in src.parents
+    if not inside_data:
+        from config import KB_IMPORT_ALLOW_OUTSIDE
+        if not KB_IMPORT_ALLOW_OUTSIDE:
+            return {"code": 403,
+                    "msg": "data/ 之外的路径导入已被关闭"
+                           "（KB_IMPORT_ALLOW_OUTSIDE=false）；"
+                           "可改用「直接上传」——它不读你机器上的路径"}
+
     if not src.is_file():
         return {"code": 404, "msg": f"文件不存在或不是文件: {file_path}"}
 
     try:
-        if src == DATA_ROOT or DATA_ROOT in src.parents:
+        if inside_data:
             resolved, copied = resolve_within_data(str(src)), False
         else:
-            from config import KB_IMPORT_ALLOW_OUTSIDE
-            if not KB_IMPORT_ALLOW_OUTSIDE:
-                return {"code": 403,
-                        "msg": "data/ 之外的路径导入已被关闭"
-                               "（KB_IMPORT_ALLOW_OUTSIDE=false）；"
-                               "可改用「直接上传」——它不读你机器上的路径"}
             # 审计：越界来源要留痕（这是有意放开的一条能力，出事要查得到）
             logger.info("从 data/ 之外导入并复制: %s", src)
             resolved, copied = _place_into_data(src, target_dir), True
