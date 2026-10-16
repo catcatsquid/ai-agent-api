@@ -210,13 +210,31 @@
         <p style="font-size:13px;color:#6b7280;margin-bottom:16px;">
           增量导入只处理新增或修改过的文件（MD5 hash 去重），不会重建整个知识库。
         </p>
-        <h4 style="font-size:14px;margin-bottom:10px;">导入单个文件</h4>
+        <h4 style="font-size:14px;margin-bottom:10px;">① 直接上传（推荐）</h4>
+        <p style="font-size:12px;color:#6b7280;margin-bottom:8px;">
+          文件内容经 HTTP 传过来，落进 <code>data/</code> 下你选的目标目录再入库 ——
+          不依赖服务端能否读到你机器上的某个路径。
+        </p>
         <div class="import-row">
-          <input type="text" id="file-path" placeholder="文件路径，如：data/操作系统/ppt/07-文件系统.pdf">
+          <input type="file" id="upload-files" multiple style="flex:1;">
+          <select id="upload-target" title="目标目录（决定文档类型）"></select>
+          <button class="btn btn-primary" id="btn-upload" onclick="uploadFiles()">上传并导入</button>
+        </div>
+        <hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0;">
+
+        <h4 style="font-size:14px;margin-bottom:10px;">② 用文件路径导入（任意位置都行）</h4>
+        <p style="font-size:12px;color:#6b7280;margin-bottom:8px;">
+          也可以直接填路径。**已经在 <code>data/</code> 里的就地入库**；
+          在外面（下载目录、桌面、D 盘…）的会被<strong>复制</strong>到你选的目标目录再入库。
+          目标目录决定文档类型：含 <code>ppt</code>→课件、含 <code>课本</code>→课本、其余→笔记。
+        </p>
+        <div class="import-row">
+          <input type="text" id="file-path" placeholder="文件路径，如：C:\Users\me\Downloads\07-文件系统.pdf">
+          <select id="path-target" title="目标目录（文件在 data/ 之外时用它）"></select>
           <button class="btn btn-primary" id="btn-add-file" onclick="addFile()">导入</button>
         </div>
         <hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0;">
-        <h4 style="font-size:14px;margin-bottom:10px;">导入目录（点击文件夹进入，点"选择此目录"确认）</h4>
+        <h4 style="font-size:14px;margin-bottom:10px;">③ 导入目录（点击文件夹进入，点"选择此目录"确认）</h4>
         <div class="dir-browser" id="dir-browser">
           <div class="dir-breadcrumb" id="dir-breadcrumb">
             <span class="crumb" onclick="browseDir('data')">data</span>
@@ -607,17 +625,90 @@ async function doSearch() {
 }
 
 // 增量导入
+// 目标目录决定 doc_type（后端按子目录名判定），所以让用户显式选，不猜。
+let importTargets = [];
+
+async function loadImportTargets() {
+  try {
+    const data = await api('/kb/import-targets');
+    if (data.code !== 0) return;
+    importTargets = data.data || [];
+    const opts = importTargets.map(
+      t => `<option value="${escapeAttr(t.dir)}">${escapeHtml(t.dir)} → ${t.doc_type}${t.exists ? '' : '（将新建）'}</option>`
+    ).join('');
+    for (const id of ['upload-target', 'path-target']) {
+      const sel = document.getElementById(id);
+      if (sel) sel.innerHTML = opts;
+    }
+  } catch (e) { /* 下拉拿不到不影响其它功能 */ }
+}
+
+// `escapeHtml` 在文件末尾已有一个（DOM 版），这里**不重复定义**。
+// 注意它只转义 & < >，**不转义引号** —— 所以放进属性里要用下面这个。
+function escapeAttr(s) {
+  return escapeHtml(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/** 直接上传：文件内容经 HTTP 过来，服务端不需要读你机器上的任意路径 */
+async function uploadFiles() {
+  const input = document.getElementById('upload-files');
+  const files = Array.from(input.files || []);
+  if (files.length === 0) { showToast('请先选择文件', 'info'); return; }
+  const target = document.getElementById('upload-target').value;
+  const btn = document.getElementById('btn-upload');
+  btn.disabled = true;
+  const resultDiv = document.getElementById('import-result');
+  const lines = [];
+
+  for (let i = 0; i < files.length; i++) {
+    btn.textContent = `上传中 ${i + 1}/${files.length}...`;
+    const fd = new FormData();
+    fd.append('file', files[i]);
+    try {
+      const resp = await fetch(`/kb/upload?target_dir=${encodeURIComponent(target)}`, {
+        method: 'POST', body: fd, headers: { ...(authHeaders ? authHeaders() : {}) }
+      });
+      const data = await resp.json();
+      if (data.code === 0) {
+        lines.push(`✅ ${files[i].name} → ${data.added_chunks} 个分块\n   落在 ${data.path}`);
+      } else {
+        lines.push(`❌ ${files[i].name}: ${data.msg}`);
+      }
+    } catch (e) {
+      lines.push(`❌ ${files[i].name}: ${e.message}`);
+    }
+  }
+  resultDiv.innerHTML = `<pre style="white-space:pre-wrap;font-size:12px;">${escapeHtml(lines.join('\n'))}</pre>`;
+  const ok = lines.filter(l => l.startsWith('✅')).length;
+  showToast(`上传完成: 成功 ${ok}/${files.length}`, ok === files.length ? 'success' : 'error');
+  input.value = '';
+  btn.disabled = false; btn.textContent = '上传并导入';
+}
+
 async function addFile() {
   const path = document.getElementById('file-path').value.trim();
   if (!path) { showToast('请输入文件路径', 'info'); return; }
+  const target = document.getElementById('path-target').value;
 
   const btn = document.getElementById('btn-add-file');
   btn.disabled = true; btn.textContent = '导入中...';
 
   try {
-    const data = await api(`/kb/add?file_path=${encodeURIComponent(path)}`, { method: 'POST' });
+    let url = `/kb/add?file_path=${encodeURIComponent(path)}`;
+    if (target) url += `&target_dir=${encodeURIComponent(target)}`;
+    const data = await api(url, { method: 'POST' });
     if (data.code === 0) {
-      showToast(`导入成功: ${data.added_chunks} 个分块`, 'success');
+      if (data.skipped_reason) {
+        // 「往年题」这类目录按约定不进知识库。以前这里显示"成功 0 个分块"，
+        // 看着像失败 —— 现在把原因直接摊开。
+        showToast('已跳过（该目录不进知识库）', 'info');
+        document.getElementById('import-result').innerHTML =
+          `<pre style="white-space:pre-wrap;font-size:12px;">已跳过：${escapeHtml(data.skipped_reason)}
+文件位置：${escapeHtml(data.path || '')}</pre>`;
+      } else {
+        showToast(`导入成功: ${data.added_chunks} 个分块` +
+                  (data.copied ? `（已复制到 ${data.path}）` : ''), 'success');
+      }
       document.getElementById('file-path').value = '';
     } else {
       showToast(data.msg, 'error');
@@ -845,6 +936,8 @@ function escapeHtml(text) {
 
 // 目录浏览器初始化
 browseDir('data');
+// 导入目标目录下拉（决定 doc_type，见 /kb/import-targets）
+loadImportTargets();
 // 题库检索知识点加载
 loadQBTopics();
 </script>

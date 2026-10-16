@@ -14,12 +14,13 @@
 浏览器下载降级为顺带触发。所以这里测的是服务端那一半 —— 它是可验证的那一半。
 """
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from course_agent.server import app, EXPORT_ROOT, PROJECT_ROOT, _safe_export_name
+from course_agent.server import app, PROJECT_ROOT, _export_root, _safe_export_name
 
 client = TestClient(app, raise_server_exceptions=False)
 
@@ -27,12 +28,13 @@ client = TestClient(app, raise_server_exceptions=False)
 @pytest.fixture
 def cleanup_exports():
     """只删本测试新建的文件（不碰用户已导出的内容）"""
-    before = set(EXPORT_ROOT.glob("*.md")) if EXPORT_ROOT.exists() else set()
+    root = _export_root()
+    before = set(root.glob("*.md")) if root.exists() else set()
     try:
         yield
     finally:
-        if EXPORT_ROOT.exists():
-            for f in set(EXPORT_ROOT.glob("*.md")) - before:
+        if root.exists():
+            for f in set(root.glob("*.md")) - before:
                 f.unlink(missing_ok=True)
 
 
@@ -72,10 +74,57 @@ class TestChatExport:
                         json={"title": "../../../evil", "markdown": "# x"}).json()
         assert r["code"] == 0, r
         p = (PROJECT_ROOT / r["path"]).resolve()
-        # 关键：文件必须落在 exports/ 里（分隔符已被替换，所以路径无法逃逸）
-        assert p.parent == EXPORT_ROOT, f"跑出 exports/ 了: {p}"
+        # 关键：文件必须落在导出目录里（分隔符已被替换，所以路径无法逃逸）
+        assert p.parent == _export_root(), f"跑出导出目录了: {p}"
         assert "/" not in r["filename"] and "\\" not in r["filename"]
         assert not (PROJECT_ROOT / "evil.md").exists()
+
+    def test_export_dir_can_be_configured(self, monkeypatch):
+        """EXPORT_DIR 生效：可以导到项目之外（用户要的就是这个）"""
+        import config
+        target = Path(__file__).resolve().parent / "_tmp_exports"
+        if target.exists():
+            shutil.rmtree(target)
+        monkeypatch.setattr(config, "EXPORT_DIR", str(target))
+        try:
+            r = client.post("/chat/export",
+                            json={"title": "自定义位置", "markdown": "# x"}).json()
+            assert r["code"] == 0, r
+            p = Path(r["abs_path"])
+            assert p.parent == target.resolve(), f"没落到配置的目录: {p}"
+            assert p.exists()
+            # 这个目录在项目**之内**（tests/ 下面），所以 path 是相对项目的形式
+            assert (PROJECT_ROOT / r["path"]).resolve() == p
+        finally:
+            shutil.rmtree(target, ignore_errors=True)
+
+    def test_path_is_absolute_when_export_dir_is_outside_project(self, monkeypatch):
+        """导出目录在项目之外时，没有"相对项目"的形式 → path 直接给绝对路径
+
+        用 monkeypatch 挪动 PROJECT_ROOT 来造出"在外面"的情形，
+        免得测试真的往工作区外写文件。
+        """
+        import config
+        from course_agent import server
+        target = Path(__file__).resolve().parent / "_tmp_exports_abs"
+        if target.exists():
+            shutil.rmtree(target)
+        monkeypatch.setattr(config, "EXPORT_DIR", str(target))
+        monkeypatch.setattr(server, "PROJECT_ROOT", target.parent / "_nowhere_")
+        try:
+            r = client.post("/chat/export",
+                            json={"title": "项目之外", "markdown": "# x"}).json()
+            assert r["code"] == 0, r
+            p = Path(r["abs_path"])
+            assert p.parent == target.resolve()
+            assert r["path"] == str(p), f"应该是绝对路径，实际 {r['path']}"
+        finally:
+            shutil.rmtree(target, ignore_errors=True)
+
+    def test_relative_export_dir_stays_under_project(self, monkeypatch):
+        import config
+        monkeypatch.setattr(config, "EXPORT_DIR", "exports")
+        assert _export_root() == PROJECT_ROOT / "exports"
 
     def test_windows_illegal_chars_are_replaced(self):
         assert _safe_export_name('a/b\\c:d*e?f"g<h>i|j') == "a_b_c_d_e_f_g_h_i_j"
