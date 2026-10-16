@@ -57,17 +57,9 @@ _IMG_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 # 驱动：打真实的流式端点
 # ============================================================
 
-def stream_turn(base: str, query: str, thread_id: str, mode: str = "plan",
-                timeout: int = 240) -> dict:
-    """发一轮，解析 SSE，返回正文 / 工具轨迹 / 首响时间 / 总时长
-
-    ## 正文取哪里：`content` 事件**或** `done.answer`
-
-    `content` 是逐字流（打字机效果）；`done.answer` 是权威值 —— 前端也是这么用的
-    （流式少一个字不会留在界面上）。两者都要取，并且**分开记录**：
-    `answer_source` 说明这一轮的正文是从哪来的 —— 如果它总是 `done`，
-    说明**流式根本没生效**（首响就等于总时长），那是个产品问题，不是解析问题。
-    """
+def _read_turn(base: str, query: str, thread_id: str, mode: str,
+               timeout: int) -> dict:
+    """一轮 SSE 的实际读取（不含重试）"""
     t0 = time.perf_counter()
     streamed, tools, ttft_ms, done_answer, n_content = "", [], None, None, 0
     body = {"query": query, "thread_id": thread_id, "mode": mode}
@@ -100,6 +92,44 @@ def stream_turn(base: str, query: str, thread_id: str, mode: str = "plan",
         "ttft_ms": ttft_ms,
         "total_ms": int((time.perf_counter() - t0) * 1000),
     }
+
+
+def stream_turn(base: str, query: str, thread_id: str, mode: str = "plan",
+                timeout: int = 240, retries: int = 2) -> dict:
+    """发一轮，解析 SSE，返回正文 / 工具轨迹 / 首响时间 / 总时长
+
+    ## 正文取哪里：`content` 事件**或** `done.answer`
+
+    `content` 是逐字流（打字机效果）；`done.answer` 是权威值 —— 前端也是这么用的
+    （流式少一个字不会留在界面上）。两者都要取，并且**分开记录**：
+    `answer_source` 说明这一轮的正文是从哪来的 —— 如果它总是 `done`，
+    说明**流式根本没生效**（首响就等于总时长），那是个产品问题，不是解析问题。
+
+    ## 传输超时要重试（2026-10-16 实测踩到两次）
+
+    智谱偶发地把一次请求挂住（服务端 `Read timed out` 之后 120s 才放弃），
+    于是 runner 这边读超时 —— 一轮失败就把**整批**评测带走（报告一行都没写）。
+    一次网络抖动不该等于"评测失败"，所以只对**传输层**超时重试；重试换一个新的
+    thread_id（上一轮可能已经半路写进了会话状态，接着用会让判据看到残留）。
+    注意：模型真的出错时服务端会发 `error` 事件，那不是传输问题，**不重试**。
+    """
+    last_err = None
+    tid = thread_id
+    for attempt in range(retries + 1):
+        try:
+            turn = _read_turn(base, query, tid, mode, timeout)
+            turn["thread_id"] = tid            # 清理会话时要用**实际**那个
+            return turn
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.ReadTimeout,
+                requests.exceptions.ChunkedEncodingError) as e:
+            last_err = e
+            if attempt < retries:
+                tid = f"{thread_id}-r{attempt + 1}"
+                print(f"    ! 传输超时，换会话重试（{attempt + 1}/{retries}）："
+                      f"{type(e).__name__}")
+                time.sleep(5 * (attempt + 1))
+    raise RuntimeError(f"连着 {retries + 1} 次传输失败（不是模型的问题）: {last_err}")
 
 
 # ============================================================
@@ -151,6 +181,25 @@ def _chunks(text: str, size: int = 20) -> list[str]:
     return [t[i:i + size] for i in range(0, len(t) - size + 1, step)]
 
 
+# 正文里**绝不能出现**的内部痕迹。两条来源都是真实契约：
+#   · `search_knowledge` 的返回值末尾带一段【怎么用上面的片段】使用说明 ——
+#     那是写给**模型**看的，不是给学生看的；
+#   · planner 的计划是 JSON（need_tools / steps），工具调用原文是 `工具名 {json}`。
+# 与"泄题"不同，这里不比对真值，所以也能用在**没有 truth** 的用例上
+# （讲解类用例就是这种：没有"卷子原文"可比）。
+_INTERNAL_ARTIFACTS = (
+    "【怎么用上面的片段】",
+    "【检索范围】",
+    "need_tools",
+    "tool_calls",
+    "【内部摘要】",
+)
+
+
+def _internal_artifacts_in(answer: str) -> list:
+    return [marker for marker in _INTERNAL_ARTIFACTS if marker in (answer or "")]
+
+
 def run_checks(expect: dict, turn: dict, truth: dict) -> list[dict]:
     answer = turn["answer"]
     tools = turn["tools"]
@@ -173,6 +222,11 @@ def run_checks(expect: dict, turn: dict, truth: dict) -> list[dict]:
     if expect.get("forbid_tool_call_text"):
         hit = _TOOL_CALL_TEXT_RE.search(answer)
         add("正文里没有工具调用原文", not hit, f"命中: {hit.group(0)[:60]}" if hit else "")
+
+    if expect.get("no_internal_artifacts"):
+        hits = _internal_artifacts_in(answer)
+        add("正文里没有内部痕迹（计划 JSON / 工具使用说明 / 摘要标记）",
+            not hits, f"命中: {hits}")
 
     if expect.get("min_images"):
         n = len(_IMG_RE.findall(answer))
@@ -235,6 +289,10 @@ def run_case(case: dict, base: str, attempts: int) -> dict:
         for turn_spec in case["turns"]:
             turn = stream_turn(base, turn_spec["user"], tid,
                                mode=case.get("mode", "plan"))
+            # 传输重试会换 thread_id（见 stream_turn）；记录**实际**用的那个，
+            # 否则清理会话时会漏掉重试留下的那一条
+            tid = turn.get("thread_id", tid)
+            attempt["thread_id"] = tid
             truth = {}
             if case.get("truth"):
                 truth = bank_truth(case["truth"]["paper_source"],
@@ -275,6 +333,40 @@ def delete_threads(base: str, thread_ids: list[str], mode: str = "plan") -> int:
     return cleaned
 
 
+def _force_utf8_stdout() -> None:
+    """把 stdout 切到 UTF-8（中文 Windows 上默认是 GBK，会崩在打印上）
+
+    实测踩到：`python -m eval.runner` 在 cp936 控制台上抛
+    `UnicodeEncodeError: 'gbk' codec can't encode character '\\u2716'`
+    —— 崩点还是在**用例标题**那一行，等于一条用例都没跑。
+    报告 JSON 一直是 UTF-8，坏的只是控制台输出。
+
+    这里显式重配 stdout（而不是要求用户设 PYTHONIOENCODING）：评测是要
+    "每个版本跑一次"的东西，不该靠记性。`errors="replace"` 兜底 ——
+    打印不出某个字符也不许让一次评测白跑。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+def _display_path(path: Path) -> str:
+    """报告路径：能相对就相对，不能相对就原样（**不许因此崩掉**）
+
+    `--out` 允许给任意路径（相对、绝对、别的盘）。原实现直接
+    `out.relative_to(ROOT)`，只要它不在仓库下就抛 ValueError —— 而且是在
+    **报告已经写完、汇总已经打完之后**抛的，退出码变成 1（"评测失败"），
+    假的失败信号。实测踩到：`--out eval/reports/baseline-1.7.1.json`
+    （路径本身就在仓库里，只是因为没 resolve 而判定不在）。
+    """
+    try:
+        return str(path.resolve().relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="行为评测 runner")
     ap.add_argument("--base", default="http://127.0.0.1:8003")
@@ -285,6 +377,7 @@ def main() -> int:
                     help="跑完不删评测造的会话（默认会删，免得污染会话库）")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
+    _force_utf8_stdout()
 
     from config import APP_VERSION
 
@@ -304,14 +397,14 @@ def main() -> int:
     started = datetime.now(timezone.utc)
     results = []
     for case in cases:
-        print(f"\n▶ {case['id']}")
-        print(f"  为什么存在: {case.get('why', '(未写)')}")
+        print(f"\n>> {case['id']}")
+        print(f"   为什么存在: {case.get('why', '(未写)')}")
         r = run_case(case, args.base, args.attempts)
         results.append(r)
         for c in r["failures"]:
-            print(f"    ✗ {c}")
+            print(f"   [x] {c}")
         print(f"  判据 {r['checks_passed']}/{r['checks_total']}"
-              f"  {'✅ 稳定通过' if r['stable_pass'] else '❌ 未稳定通过'}")
+              f"  {'[OK] 稳定通过' if r['stable_pass'] else '[NG] 未稳定通过'}")
         if not args.keep_threads:
             tids = [a["thread_id"] for a in r["attempts"]]
             n = delete_threads(args.base, tids, mode=case.get("mode", "plan"))
@@ -347,7 +440,7 @@ def main() -> int:
         "summary": summary,
         "cases": results,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"\n报告已写入 {out.relative_to(ROOT)}")
+    print(f"\n报告已写入 {_display_path(out)}")
     return 0 if summary["cases_stable_pass"] == summary["cases"] else 1
 
 

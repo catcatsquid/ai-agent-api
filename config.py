@@ -1,4 +1,4 @@
-﻿"""全局配置 - 统一管理环境变量
+"""全局配置 - 统一管理环境变量
 
 所有模块通过 `from config import xxx` 获取配置，不直接调用 os.getenv。
 .env 文件由 load_dotenv() 加载，缺失必填项时启动即报错。
@@ -32,7 +32,7 @@ def _optional(name: str, default: str = "") -> str:
 # 原来版本号只硬编码在 course_agent/server.py 的 FastAPI(version="3.0") 里，
 # 周围没有一句说明，也没有对应的 tag 或释出记录 —— 一个自称 3.0 的 API
 # 却查不到任何版本历史。现在收到这里，发版只改一处。
-APP_VERSION = _optional("APP_VERSION", "1.7.1")
+APP_VERSION = _optional("APP_VERSION", "1.7.2")
 
 
 # ============================================================

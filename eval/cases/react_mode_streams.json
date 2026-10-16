@@ -1,0 +1,19 @@
+{
+  "id": "react_mode_streams",
+  "why": "ReAct 模式（另一种 graph）的正文来自 llm 节点，不是 synthesizer —— 白名单是两套，很容易只修好一条路。1.7.2 的流式修复对这条链路多一层风险：工具调用也走 _stream，若分片没流出去或被合并坏，ReAct 就不再调工具、甚至答不出话。所以这条用例同时守「真的调了工具」「正文逐字流出来」「正文里没有内部痕迹」。用户话术刻意点名「本课资料/来源」——不点名时模型（实测）会直接凭记忆答，工具都不调，那测的就不是这条链路了。",
+  "mode": "react",
+  "turns": [
+    {
+      "user": "请按我们课程资料来讲：TCP 三次握手为什么不能改成两次？说明出处。",
+      "expect": {
+        "tools_any_of": ["search_knowledge"],
+        "tools_none_of": ["grade_answers"],
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 50,
+        "require_streaming": true,
+        "max_ttft_ms": 15000
+      }
+    }
+  ]
+}

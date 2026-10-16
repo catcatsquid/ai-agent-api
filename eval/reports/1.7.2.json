@@ -1,0 +1,1357 @@
+{
+  "app_version": "1.7.2",
+  "started_at": "2026-10-16T08:39:38.974753+00:00",
+  "base": "http://127.0.0.1:8003",
+  "attempts": 3,
+  "summary": {
+    "cases": 5,
+    "cases_stable_pass": 5,
+    "checks_total": 180,
+    "checks_passed": 180,
+    "ttft_p50_ms": 6533,
+    "ttft_p95_ms": 7867,
+    "turn_total_p50_ms": 31052
+  },
+  "cases": [
+    {
+      "id": "continue_next_group",
+      "attempts": [
+        {
+          "attempt": 1,
+          "thread_id": "eval-continue_next_group-0-70e63d",
+          "turns": [
+            {
+              "answer": "这是《2026春操作系统期末试题（回忆版）》的选择题，第 1/10 组（选择题 5 题）：\n\n1. 进程与线程  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q1_p1.png)\n\n2. 进程调度  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q2_p1.png)\n\n3. 进程状态  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q3_p1.png)\n\n4. 进程管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q4_p1.png)\n\n5. 进程管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q5_p1.png)\n\n请享用。直接把答案发给我吧，我来帮你看看有没有做对。",
+              "answer_source": "content",
+              "content_events": 605,
+              "tools": [
+                "list_papers",
+                "get_paper_questions"
+              ],
+              "ttft_ms": 10238,
+              "total_ms": 35934,
+              "thread_id": "eval-continue_next_group-0-70e63d",
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "至少 3 张题目图片",
+                  "ok": true,
+                  "detail": "实际 5 张"
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 919 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 605 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 10238 ms（总时长 35934 ms）"
+                }
+              ],
+              "user": "给我出 2026春操作系统期末试题（回忆版）的第 1 组题"
+            },
+            {
+              "answer": "好的，这是《2026春操作系统期末试题（回忆版）》的选择题，第 2/10 组（选择题 5 题）：\n\n6. 信号量与进程同步  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q6_p2.png)\n\n7. 死锁与资源分配  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q7_p2.png)\n\n8. 调度算法与作业调度  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q8_p2.png)\n\n9. 调度算法  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q9_p2.png)\n\n10. 内存管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q10_p2.png)\n\n请享用。直接把答案发给我吧，我来帮你看看有没有做对。",
+              "answer_source": "content",
+              "content_events": 613,
+              "tools": [
+                "get_paper_questions"
+              ],
+              "ttft_ms": 5624,
+              "total_ms": 29380,
+              "thread_id": "eval-continue_next_group-0-70e63d",
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 list_papers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "图片链接都来自题库（没有编造）",
+                  "ok": true,
+                  "detail": "外来链接: []"
+                },
+                {
+                  "check": "题面没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "参考答案没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "没有直接给出选项答案",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 935 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 613 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 5624 ms（总时长 29380 ms）"
+                }
+              ],
+              "user": "继续下一组"
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "thread_id": "eval-continue_next_group-1-2872f1",
+          "turns": [
+            {
+              "answer": "这是《2026春操作系统期末试题（回忆版）》的选择题，第 1/10 组（选择题 5 题）：\n\n1. 进程与线程  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q1_p1.png)\n2. 进程调度  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q2_p1.png)\n3. 进程状态  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q3_p1.png)\n4. 进程管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q4_p1.png)\n5. 进程管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q5_p1.png)\n\n请享用。直接把答案发给我吧，我来帮你看看有没有做对。",
+              "answer_source": "content",
+              "content_events": 605,
+              "tools": [
+                "list_papers",
+                "get_paper_questions"
+              ],
+              "ttft_ms": 6236,
+              "total_ms": 31052,
+              "thread_id": "eval-continue_next_group-1-2872f1",
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "至少 3 张题目图片",
+                  "ok": true,
+                  "detail": "实际 5 张"
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 915 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 605 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 6236 ms（总时长 31052 ms）"
+                }
+              ],
+              "user": "给我出 2026春操作系统期末试题（回忆版）的第 1 组题"
+            },
+            {
+              "answer": "这是《2026春操作系统期末试题（回忆版）》的选择题，第 2/10 组（选择题 5 题）：\n\n6. 信号量与进程同步  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q6_p2.png)\n7. 死锁与资源分配  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q7_p2.png)\n8. 调度算法与作业调度  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q8_p2.png)\n9. 调度算法  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q9_p2.png)\n10. 内存管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q10_p2.png)\n\n请享用。直接把答案发给我吧，我来帮你看看有没有做对。",
+              "answer_source": "content",
+              "content_events": 611,
+              "tools": [
+                "get_paper_questions"
+              ],
+              "ttft_ms": 4613,
+              "total_ms": 31143,
+              "thread_id": "eval-continue_next_group-1-2872f1",
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 list_papers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "图片链接都来自题库（没有编造）",
+                  "ok": true,
+                  "detail": "外来链接: []"
+                },
+                {
+                  "check": "题面没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "参考答案没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "没有直接给出选项答案",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 928 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 611 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 4613 ms（总时长 31143 ms）"
+                }
+              ],
+              "user": "继续下一组"
+            }
+          ]
+        },
+        {
+          "attempt": 3,
+          "thread_id": "eval-continue_next_group-2-2363c7",
+          "turns": [
+            {
+              "answer": "这是《2026春操作系统期末试题（回忆版）》的选择题，第 1/10 组（选择题 5 题）：\n\n1. 进程与线程  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q1_p1.png)\n2. 进程调度  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q2_p1.png)\n3. 进程状态  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q3_p1.png)\n4. 进程管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q4_p1.png)\n5. 进程管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q5_p1.png)\n\n请享用。直接把答案发给我吧，我来帮你看看有没有做对。",
+              "answer_source": "content",
+              "content_events": 605,
+              "tools": [
+                "list_papers",
+                "get_paper_questions"
+              ],
+              "ttft_ms": 7443,
+              "total_ms": 37432,
+              "thread_id": "eval-continue_next_group-2-2363c7",
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "至少 3 张题目图片",
+                  "ok": true,
+                  "detail": "实际 5 张"
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 915 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 605 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 7443 ms（总时长 37432 ms）"
+                }
+              ],
+              "user": "给我出 2026春操作系统期末试题（回忆版）的第 1 组题"
+            },
+            {
+              "answer": "这是《2026春操作系统期末试题（回忆版）》的选择题，第 2/10 组（选择题 5 题）：\n\n6. 信号量与进程同步  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q6_p2.png)\n7. 死锁与资源分配  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q7_p2.png)\n8. 调度算法与作业调度  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q8_p2.png)\n9. 调度算法  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q9_p2.png)\n10. 内存管理  ![题目](/qb_images/2026%E",
+              "answer_source": "content",
+              "content_events": 498,
+              "tools": [
+                "get_paper_questions"
+              ],
+              "ttft_ms": 6874,
+              "total_ms": 682539,
+              "thread_id": "eval-continue_next_group-2-2363c7",
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 list_papers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "图片链接都来自题库（没有编造）",
+                  "ok": true,
+                  "detail": "外来链接: []"
+                },
+                {
+                  "check": "题面没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "参考答案没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "没有直接给出选项答案",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 764 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 498 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 6874 ms（总时长 682539 ms）"
+                }
+              ],
+              "user": "继续下一组"
+            }
+          ]
+        }
+      ],
+      "checks_total": 48,
+      "checks_passed": 48,
+      "stable_pass": true,
+      "failures": []
+    },
+    {
+      "id": "dont_know_calls_explain",
+      "attempts": [
+        {
+          "attempt": 1,
+          "thread_id": "eval-dont_know_calls_explain-0-e0e39f",
+          "turns": [
+            {
+              "answer": "这是《2026春操作系统期末试题（回忆版）》的选择题，第 1/10 组（选择题 5 题）：\n\n1. 进程与线程  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q1_p1.png)\n\n2. 进程调度  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q2_p1.png)\n\n3. 进程状态  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q3_p1.png)\n\n4. 进程管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q4_p1.png)\n\n5. 进程管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q5_p1.png)\n\n请享用。直接把答案发给我吧，我来帮你看看有没有做对。",
+              "answer_source": "content",
+              "content_events": 605,
+              "tools": [
+                "list_papers",
+                "get_paper_questions"
+              ],
+              "ttft_ms": 5685,
+              "total_ms": 34128,
+              "thread_id": "eval-dont_know_calls_explain-0-e0e39f",
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 grade_answers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "图片链接都来自题库（没有编造）",
+                  "ok": true,
+                  "detail": "外来链接: []"
+                },
+                {
+                  "check": "题面没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "参考答案没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 919 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 605 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 8000 ms",
+                  "ok": true,
+                  "detail": "实际 5685 ms（总时长 34128 ms）"
+                }
+              ],
+              "user": "给我出 2026春操作系统期末试题（回忆版）的第 1 组题"
+            },
+            {
+              "answer": "这个题号在选择题和综合题中都出现了，所以需要明确指出是哪一道题。为了帮助你理解，我会分别解释选择题和综合题中的第 1 题的思路。\n\n首先，我们来看选择题中的第 1 题：\n\n选择题第 1 题的思路是：\n1. **理解题意**：首先，仔细阅读题目，理解题目所描述的情景或问题。\n2. **分析选项**：然后，逐一分析每个选项，判断其是否符合题目要求。\n3. **排除错误选项**：通过排除法，找出那些明显不符合题目要求的选项。\n4. **确定正确答案**：最后，根据分析结果，确定最符合题目要求的选项。\n\n接下来，我们来看综合题中的第 1 题：\n\n综合题第 1 题的思路是：\n1. **梳理知识点**：首先，回忆与题目相关的知识点，确保对这些知识点有清晰的理解。\n2. **分析问题**：然后，分析题目所提出的问题，明确需要解决的问题是什么。\n3. **逐步解答**：根据问题，逐步进行解答，每一步都要有理有据。\n4. **总结**：最后，对解答过程进行总结，确保解答完整且正确。\n\n请告诉我，你是想了解选择题中的第 1 题，还是综合题中的第 1 题？这样我才能给出更具体的讲解。",
+              "answer_source": "content",
+              "content_events": 266,
+              "tools": [
+                "explain_question"
+              ],
+              "ttft_ms": 4532,
+              "total_ms": 17372,
+              "thread_id": "eval-dont_know_calls_explain-0-e0e39f",
+              "checks": [
+                {
+                  "check": "调用了 explain_question",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['explain_question']"
+                },
+                {
+                  "check": "没有调用 grade_answers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['explain_question']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文里没有内部痕迹（计划 JSON / 工具使用说明 / 摘要标记）",
+                  "ok": true,
+                  "detail": "命中: []"
+                },
+                {
+                  "check": "正文至少 40 字",
+                  "ok": true,
+                  "detail": "实际 488 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 266 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 4532 ms（总时长 17372 ms）"
+                }
+              ],
+              "user": "这里面第 1 题我不会，讲讲思路吧"
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "thread_id": "eval-dont_know_calls_explain-1-8501c8",
+          "turns": [
+            {
+              "answer": "这是《2026春操作系统期末试题（回忆版）》的选择题，第 1/10 组（选择题 5 题）：\n\n1. 进程与线程  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q1_p1.png)\n2. 进程调度  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q2_p1.png)\n3. 进程状态  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q3_p1.png)\n4. 进程管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q4_p1.png)\n5. 进程管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q5_p1.png)\n\n请享用。直接把答案发给我吧，我来帮你看看有没有做对。",
+              "answer_source": "content",
+              "content_events": 605,
+              "tools": [
+                "list_papers",
+                "get_paper_questions"
+              ],
+              "ttft_ms": 5980,
+              "total_ms": 35299,
+              "thread_id": "eval-dont_know_calls_explain-1-8501c8",
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 grade_answers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "图片链接都来自题库（没有编造）",
+                  "ok": true,
+                  "detail": "外来链接: []"
+                },
+                {
+                  "check": "题面没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "参考答案没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 915 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 605 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 8000 ms",
+                  "ok": true,
+                  "detail": "实际 5980 ms（总时长 35299 ms）"
+                }
+              ],
+              "user": "给我出 2026春操作系统期末试题（回忆版）的第 1 组题"
+            },
+            {
+              "answer": "哦，看来这个题号在不同的题型里重复了，我需要知道你是想问选择题中的第 1 题还是综合题中的第 1 题。你能告诉我具体是哪一道题吗？这样我才能准确给你讲解思路。",
+              "answer_source": "content",
+              "content_events": 50,
+              "tools": [
+                "explain_question"
+              ],
+              "ttft_ms": 7189,
+              "total_ms": 9144,
+              "thread_id": "eval-dont_know_calls_explain-1-8501c8",
+              "checks": [
+                {
+                  "check": "调用了 explain_question",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['explain_question']"
+                },
+                {
+                  "check": "没有调用 grade_answers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['explain_question']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文里没有内部痕迹（计划 JSON / 工具使用说明 / 摘要标记）",
+                  "ok": true,
+                  "detail": "命中: []"
+                },
+                {
+                  "check": "正文至少 40 字",
+                  "ok": true,
+                  "detail": "实际 79 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 50 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 7189 ms（总时长 9144 ms）"
+                }
+              ],
+              "user": "这里面第 1 题我不会，讲讲思路吧"
+            }
+          ]
+        },
+        {
+          "attempt": 3,
+          "thread_id": "eval-dont_know_calls_explain-2-1bfe30",
+          "turns": [
+            {
+              "answer": "这是《2026春操作系统期末试题（回忆版）》的选择题，第 1/10 组（选择题 5 题）：\n\n1. 进程与线程 ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q1_p1.png)\n2. 进程调度 ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q2_p1.png)\n3. 进程状态 ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q3_p1.png)\n4. 进程管理 ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q4_p1.png)\n5. 进程管理 ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q5_p1.png)\n\n请享用。直接把答案发给我吧，我来帮你看看有没有做对。",
+              "answer_source": "content",
+              "content_events": 600,
+              "tools": [
+                "list_papers",
+                "get_paper_questions"
+              ],
+              "ttft_ms": 7552,
+              "total_ms": 38204,
+              "thread_id": "eval-dont_know_calls_explain-2-1bfe30",
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 grade_answers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "图片链接都来自题库（没有编造）",
+                  "ok": true,
+                  "detail": "外来链接: []"
+                },
+                {
+                  "check": "题面没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "参考答案没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 910 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 600 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 8000 ms",
+                  "ok": true,
+                  "detail": "实际 7552 ms（总时长 38204 ms）"
+                }
+              ],
+              "user": "给我出 2026春操作系统期末试题（回忆版）的第 1 组题"
+            },
+            {
+              "answer": "这个题目似乎有些特殊，因为它在选择题和综合题中都出现了编号为1的题目。为了确保我们讨论的是同一道题，我们可以先确认一下具体是哪一道题目。选择题中的第1题和综合题中的第1题可能内容不同，所以请告诉我你想讨论的是选择题中的第1题还是综合题中的第1题？这样我才能给出正确的解题思路。",
+              "answer_source": "content",
+              "content_events": 82,
+              "tools": [
+                "explain_question"
+              ],
+              "ttft_ms": 5462,
+              "total_ms": 8636,
+              "thread_id": "eval-dont_know_calls_explain-2-1bfe30",
+              "checks": [
+                {
+                  "check": "调用了 explain_question",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['explain_question']"
+                },
+                {
+                  "check": "没有调用 grade_answers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['explain_question']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文里没有内部痕迹（计划 JSON / 工具使用说明 / 摘要标记）",
+                  "ok": true,
+                  "detail": "命中: []"
+                },
+                {
+                  "check": "正文至少 40 字",
+                  "ok": true,
+                  "detail": "实际 138 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 82 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 5462 ms（总时长 8636 ms）"
+                }
+              ],
+              "user": "这里面第 1 题我不会，讲讲思路吧"
+            }
+          ]
+        }
+      ],
+      "checks_total": 48,
+      "checks_passed": 48,
+      "stable_pass": true,
+      "failures": []
+    },
+    {
+      "id": "knowledge_answer_streams",
+      "attempts": [
+        {
+          "attempt": 1,
+          "thread_id": "eval-knowledge_answer_streams-0-7365d6",
+          "turns": [
+            {
+              "answer": "关于操作系统中的死锁，课程资料中并没有直接提到死锁的四个必要条件。不过，我可以根据操作系统的一般知识来解释这四个条件。\n\n**死锁的四个必要条件是**：\n\n1. **互斥条件**：资源不能被多个进程同时使用。至少有一个资源必须由一个进程独占，直到该进程完成任务并释放该资源。\n\n2. **持有和等待条件**：一个进程至少持有一个资源，同时还在等待获取其他资源。这意味着该进程不能继续执行，直到它获得所有所需的资源。\n\n3. **非抢占条件**：已经分配给进程的资源不能被抢占。只有当进程自愿释放这些资源时，它们才能被其他进程使用。\n\n4. **循环等待条件**：存在一个进程资源的循环等待链，其中每个进程都在等待下一个进程持有的资源。\n\n这四个条件必须同时满足，才能发生死锁。如果其中任何一个条件不成立，死锁就不会发生。\n\n**结合本课资料**，虽然资料中没有直接提到死锁的四个必要条件，但我们可以从线程和进程的概念中找到与这些条件相关的内容。例如，线程的引入是为了提高进程内的并发程度，但如果不正确管理，可能会导致资源被错误地持有和等待，从而引发死锁。\n\n**本节结束**\n\n【本节小测】\n1. 解释什么是互斥条件，并举例说明其在操作系统中的作用。\n2. 描述持有和等待条件在死锁中的角色，并给出一个例子。\n3. 解释非抢占条件在防止死锁中的作用。\n4. 说明循环等待条件如何导致死锁，并给出一个例子。\n\n请作答，我来逐题批改。",
+              "answer_source": "content",
+              "content_events": 331,
+              "tools": [
+                "search_knowledge",
+                "read_section"
+              ],
+              "ttft_ms": 7867,
+              "total_ms": 26748,
+              "thread_id": "eval-knowledge_answer_streams-0-7365d6",
+              "checks": [
+                {
+                  "check": "调用了 search_knowledge",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['search_knowledge', 'read_section']"
+                },
+                {
+                  "check": "没有调用 grade_answers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['search_knowledge', 'read_section']"
+                },
+                {
+                  "check": "没有调用 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['search_knowledge', 'read_section']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文里没有内部痕迹（计划 JSON / 工具使用说明 / 摘要标记）",
+                  "ok": true,
+                  "detail": "命中: []"
+                },
+                {
+                  "check": "正文至少 200 字",
+                  "ok": true,
+                  "detail": "实际 615 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 331 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 7867 ms（总时长 26748 ms）"
+                }
+              ],
+              "user": "操作系统里死锁的四个必要条件是什么？请结合本课资料讲一下。"
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "thread_id": "eval-knowledge_answer_streams-1-7ea6d2",
+          "turns": [
+            {
+              "answer": "在操作系统中，死锁是一种多进程（线程）因循环等待资源而造成无法执行的现象。要发生死锁，需要满足以下四个必要条件：\n\n1. **互斥使用（Mutual exclusion）**：至少有一个资源必须互斥使用，意味着在某一时刻只能由一个进程（线程）使用该资源。\n\n2. **不可抢占（No preemption）**：资源只能被进程自愿放弃，不能被操作系统强制收回。\n\n3. **请求和保持（Hold and wait）**：进程必须持有至少一个资源，然后才能申请其他资源。\n\n4. **循环等待（Circular wait）**：在资源分配图中，存在一个进程资源的循环链，即每个进程都等待下一个进程所占有的资源。\n\n这些条件必须同时满足，才能形成死锁。例如，在资源分配图中，如果存在一个环路，如 P1→R1→P2→R2→P3→R1，这表明进程之间存在循环等待资源的情况。\n\n这些条件来自本课程的资料，具体可以在课件 \"05-死锁.pdf\" 中找到详细的解释。这些条件是理解和处理死锁问题的关键。\n\n本节结束。",
+              "answer_source": "content",
+              "content_events": 229,
+              "tools": [
+                "search_knowledge"
+              ],
+              "ttft_ms": 6533,
+              "total_ms": 16103,
+              "thread_id": "eval-knowledge_answer_streams-1-7ea6d2",
+              "checks": [
+                {
+                  "check": "调用了 search_knowledge",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['search_knowledge']"
+                },
+                {
+                  "check": "没有调用 grade_answers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['search_knowledge']"
+                },
+                {
+                  "check": "没有调用 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['search_knowledge']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文里没有内部痕迹（计划 JSON / 工具使用说明 / 摘要标记）",
+                  "ok": true,
+                  "detail": "命中: []"
+                },
+                {
+                  "check": "正文至少 200 字",
+                  "ok": true,
+                  "detail": "实际 452 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 229 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 6533 ms（总时长 16103 ms）"
+                }
+              ],
+              "user": "操作系统里死锁的四个必要条件是什么？请结合本课资料讲一下。"
+            }
+          ]
+        },
+        {
+          "attempt": 3,
+          "thread_id": "eval-knowledge_answer_streams-2-31c09c",
+          "turns": [
+            {
+              "answer": "死锁是操作系统中的一个重要概念，它指的是多个进程（或线程）因循环等待资源而造成无法执行的现象。根据本课资料，产生死锁的四个必要条件如下：\n\n1. **互斥条件**：资源不能被多个进程同时使用。例如，打印机一次只能由一个进程使用，这就是一个互斥资源。\n\n2. **持有和等待条件**：进程已经持有至少一个资源，但又提出了新的资源请求，而该资源已被其他进程持有，所以当前进程会等待。\n\n3. **非抢占条件**：进程所获得的资源在未使用完之前，不能被其他进程强行抢占。\n\n4. **循环等待条件**：存在一种进程资源的循环等待链，即进程集合 {P1, P2, ..., PN} 中，P1 正在等待一个 P2 占用的资源，P2 正在等待 P3 占用的资源，以此类推，PN 正在等待 P1 占用的资源。\n\n这四个条件必须同时满足，才能形成死锁。为了预防和避免死锁，操作系统可以采取不同的策略，如资源有序分配、银行家算法、死锁检测与恢复等。\n\n以上内容是根据本课资料整理的，希望对您有所帮助。",
+              "answer_source": "content",
+              "content_events": 249,
+              "tools": [
+                "search_knowledge"
+              ],
+              "ttft_ms": 7860,
+              "total_ms": 21033,
+              "thread_id": "eval-knowledge_answer_streams-2-31c09c",
+              "checks": [
+                {
+                  "check": "调用了 search_knowledge",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['search_knowledge']"
+                },
+                {
+                  "check": "没有调用 grade_answers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['search_knowledge']"
+                },
+                {
+                  "check": "没有调用 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['search_knowledge']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文里没有内部痕迹（计划 JSON / 工具使用说明 / 摘要标记）",
+                  "ok": true,
+                  "detail": "命中: []"
+                },
+                {
+                  "check": "正文至少 200 字",
+                  "ok": true,
+                  "detail": "实际 441 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 249 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 7860 ms（总时长 21033 ms）"
+                }
+              ],
+              "user": "操作系统里死锁的四个必要条件是什么？请结合本课资料讲一下。"
+            }
+          ]
+        }
+      ],
+      "checks_total": 24,
+      "checks_passed": 24,
+      "stable_pass": true,
+      "failures": []
+    },
+    {
+      "id": "quiz_no_leak",
+      "attempts": [
+        {
+          "attempt": 1,
+          "thread_id": "eval-quiz_no_leak-0-6df882",
+          "turns": [
+            {
+              "answer": "这是《2026春操作系统期末试题（回忆版）》的选择题，第 1/10 组（选择题 5 题）：\n\n1. 进程与线程  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q1_p1.png)\n2. 进程调度  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q2_p1.png)\n3. 进程状态  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q3_p1.png)\n4. 进程管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q4_p1.png)\n5. 进程管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q5_p1.png)\n\n请享用。直接把答案发给我吧，我来帮你看看有没有做对。",
+              "answer_source": "content",
+              "content_events": 605,
+              "tools": [
+                "list_papers",
+                "get_paper_questions"
+              ],
+              "ttft_ms": 6658,
+              "total_ms": 34773,
+              "thread_id": "eval-quiz_no_leak-0-6df882",
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 grade_answers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 explain_question",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 prepare_custom_quiz",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "至少 3 张题目图片",
+                  "ok": true,
+                  "detail": "实际 5 张"
+                },
+                {
+                  "check": "图片链接都来自题库（没有编造）",
+                  "ok": true,
+                  "detail": "外来链接: []"
+                },
+                {
+                  "check": "题面没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "参考答案没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "没有直接给出选项答案",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 915 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 605 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 6658 ms（总时长 34773 ms）"
+                }
+              ],
+              "user": "给我出 2026春操作系统期末试题（回忆版）的第 1 组题"
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "thread_id": "eval-quiz_no_leak-1-b2a925",
+          "turns": [
+            {
+              "answer": "这是《2026春操作系统期末试题（回忆版）》的选择题，第 1/10 组（选择题 5 题）：\n\n1. 进程与线程  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q1_p1.png)\n2. 进程调度  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q2_p1.png)\n3. 进程状态  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q3_p1.png)\n4. 进程管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q4_p1.png)\n5. 进程管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q5_p1.png)\n\n请享用。直接把答案发给我吧，我来帮你看看有没有做对。",
+              "answer_source": "content",
+              "content_events": 605,
+              "tools": [
+                "list_papers",
+                "get_paper_questions"
+              ],
+              "ttft_ms": 6187,
+              "total_ms": 31671,
+              "thread_id": "eval-quiz_no_leak-1-b2a925",
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 grade_answers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 explain_question",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 prepare_custom_quiz",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "至少 3 张题目图片",
+                  "ok": true,
+                  "detail": "实际 5 张"
+                },
+                {
+                  "check": "图片链接都来自题库（没有编造）",
+                  "ok": true,
+                  "detail": "外来链接: []"
+                },
+                {
+                  "check": "题面没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "参考答案没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "没有直接给出选项答案",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 915 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 605 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 6187 ms（总时长 31671 ms）"
+                }
+              ],
+              "user": "给我出 2026春操作系统期末试题（回忆版）的第 1 组题"
+            }
+          ]
+        },
+        {
+          "attempt": 3,
+          "thread_id": "eval-quiz_no_leak-2-b5d973",
+          "turns": [
+            {
+              "answer": "这是《2026春操作系统期末试题（回忆版）》的选择题，第 1/10 组（选择题 5 题）：\n\n1. 进程与线程  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q1_p1.png)\n2. 进程调度  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q2_p1.png)\n3. 进程状态  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q3_p1.png)\n4. 进程管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q4_p1.png)\n5. 进程管理  ![题目](/qb_images/2026%E6%98%A5%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%9C%9F%E6%9C%AB%E8%AF%95%E9%A2%98%EF%BC%88%E5%9B%9E%E5%BF%86%E7%89%88%EF%BC%89_Q5_p1.png)\n\n请享用。直接把答案发给我吧，我来帮你看看有没有做对。",
+              "answer_source": "content",
+              "content_events": 605,
+              "tools": [
+                "list_papers",
+                "get_paper_questions"
+              ],
+              "ttft_ms": 6564,
+              "total_ms": 32449,
+              "thread_id": "eval-quiz_no_leak-2-b5d973",
+              "checks": [
+                {
+                  "check": "调用了 get_paper_questions",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 grade_answers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 explain_question",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "没有调用 prepare_custom_quiz",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['list_papers', 'get_paper_questions']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "至少 3 张题目图片",
+                  "ok": true,
+                  "detail": "实际 5 张"
+                },
+                {
+                  "check": "图片链接都来自题库（没有编造）",
+                  "ok": true,
+                  "detail": "外来链接: []"
+                },
+                {
+                  "check": "题面没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "参考答案没有泄漏进正文",
+                  "ok": true,
+                  "detail": "泄漏片段: []"
+                },
+                {
+                  "check": "没有直接给出选项答案",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文至少 10 字",
+                  "ok": true,
+                  "detail": "实际 915 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 605 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 6564 ms（总时长 32449 ms）"
+                }
+              ],
+              "user": "给我出 2026春操作系统期末试题（回忆版）的第 1 组题"
+            }
+          ]
+        }
+      ],
+      "checks_total": 39,
+      "checks_passed": 39,
+      "stable_pass": true,
+      "failures": []
+    },
+    {
+      "id": "react_mode_streams",
+      "attempts": [
+        {
+          "attempt": 1,
+          "thread_id": "eval-react_mode_streams-0-fcdd50",
+          "turns": [
+            {
+              "answer": "TCP三次握手不能改成两次的原因在于，它确保了连接双方的初始序列号都是随机的，从而避免了在建立连接过程中由于初始化序列号相同而导致的错误。如果将三次握手改为两次，那么双方在建立连接时将无法确保各自的初始序列号是唯一的，这可能导致数据传输过程中出现错误。具体来说，三次握手的过程如下：\n\n1. 客户端发送一个带有SYN标志的数据包到服务器，并进入SYN_SENT状态。\n2. 服务器收到SYN请求后，会发送一个带有SYN和ACK标志的数据包作为响应，并进入SYN_RCVD状态。\n3. 客户端收到服务器的响应后，会发送一个带有ACK标志的数据包作为确认，并进入ESTABLISHED状态。\n\n通过这个过程，双方可以确保各自的初始序列号是唯一的，从而避免了错误。具体出处请参考计算机网络课程资料中的相关内容。",
+              "answer_source": "content",
+              "content_events": 182,
+              "tools": [
+                "search_knowledge"
+              ],
+              "ttft_ms": 4983,
+              "total_ms": 14140,
+              "thread_id": "eval-react_mode_streams-0-fcdd50",
+              "checks": [
+                {
+                  "check": "调用了 search_knowledge",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['search_knowledge']"
+                },
+                {
+                  "check": "没有调用 grade_answers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['search_knowledge']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文里没有内部痕迹（计划 JSON / 工具使用说明 / 摘要标记）",
+                  "ok": true,
+                  "detail": "命中: []"
+                },
+                {
+                  "check": "正文至少 50 字",
+                  "ok": true,
+                  "detail": "实际 352 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 182 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 4983 ms（总时长 14140 ms）"
+                }
+              ],
+              "user": "请按我们课程资料来讲：TCP 三次握手为什么不能改成两次？说明出处。"
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "thread_id": "eval-react_mode_streams-1-e9d72f",
+          "turns": [
+            {
+              "answer": "在《Chapter5-Transport Layer.pdf》中，我没有找到关于TCP三次握手为什么不能改成两次的具体解释。不过，我可以根据网络协议的基本原理来解释这个问题。\n\nTCP三次握手是为了确保通信双方的初始序列号是同步的，并且确保双方都准备好进行数据传输。以下是三次握手不能改成两次的原因：\n\n1. **初始化序列号同步**：在TCP连接建立时，双方需要协商初始序列号，以确保数据传输的有序性。如果只进行两次握手，那么无法确保双方都使用相同的初始序列号。\n\n2. **检测错误和重传**：三次握手过程中的第三次握手可以用来检测前两次握手过程中可能出现的错误或丢失。如果只进行两次握手，那么在建立连接的过程中，如果出现错误或丢失，将无法检测和重传。\n\n3. **防止欺骗攻击**：三次握手还可以防止一些欺骗攻击，例如SYN洪泛攻击。通过三次握手，可以确保只有合法的通信双方才能建立连接。\n\n虽然课程资料中没有直接解释这个问题，但这些原因可以帮助理解为什么TCP三次握手不能改成两次。",
+              "answer_source": "content",
+              "content_events": 219,
+              "tools": [
+                "search_knowledge",
+                "search_knowledge"
+              ],
+              "ttft_ms": 8737,
+              "total_ms": 19145,
+              "thread_id": "eval-react_mode_streams-1-e9d72f",
+              "checks": [
+                {
+                  "check": "调用了 search_knowledge",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['search_knowledge', 'search_knowledge']"
+                },
+                {
+                  "check": "没有调用 grade_answers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['search_knowledge', 'search_knowledge']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文里没有内部痕迹（计划 JSON / 工具使用说明 / 摘要标记）",
+                  "ok": true,
+                  "detail": "命中: []"
+                },
+                {
+                  "check": "正文至少 50 字",
+                  "ok": true,
+                  "detail": "实际 445 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 219 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 8737 ms（总时长 19145 ms）"
+                }
+              ],
+              "user": "请按我们课程资料来讲：TCP 三次握手为什么不能改成两次？说明出处。"
+            }
+          ]
+        },
+        {
+          "attempt": 3,
+          "thread_id": "eval-react_mode_streams-2-510703",
+          "turns": [
+            {
+              "answer": "在计算机网络的TCP协议中，三次握手是一个非常重要的过程，用于建立两个通信主机之间的连接。不能将TCP三次握手改为两次的原因主要与网络可靠性和数据同步有关。\n\n首先，三次握手确保了双方都处于正确的状态来接收数据。在第一次握手后，发送方发送一个SYN（同步序列编号）数据包，接收方收到后会回应一个SYN-ACK（同步确认）数据包。这个过程确保了双方都知道对方已准备好通信。\n\n其次，三次握手可以防止已失效的连接请求突然又传送到了服务端而建立错误的连接。在第三次握手时，发送方会发送一个ACK（确认）数据包，确认已经收到了对方的SYN-ACK响应。这个步骤确保了连接的建立是有效的。\n\n具体出处可以在我们的课程资料《Chapter5-Transport Layer.pdf》中的相关章节找到，这部分详细介绍了TCP协议和连接管理的过程。\n\n简单来说，三次握手的设计既保证了网络的可靠性，又避免了错误连接的建立。",
+              "answer_source": "content",
+              "content_events": 201,
+              "tools": [
+                "search_knowledge"
+              ],
+              "ttft_ms": 3939,
+              "total_ms": 12690,
+              "thread_id": "eval-react_mode_streams-2-510703",
+              "checks": [
+                {
+                  "check": "调用了 search_knowledge",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['search_knowledge']"
+                },
+                {
+                  "check": "没有调用 grade_answers",
+                  "ok": true,
+                  "detail": "实际工具轨迹: ['search_knowledge']"
+                },
+                {
+                  "check": "正文里没有工具调用原文",
+                  "ok": true,
+                  "detail": ""
+                },
+                {
+                  "check": "正文里没有内部痕迹（计划 JSON / 工具使用说明 / 摘要标记）",
+                  "ok": true,
+                  "detail": "命中: []"
+                },
+                {
+                  "check": "正文至少 50 字",
+                  "ok": true,
+                  "detail": "实际 403 字"
+                },
+                {
+                  "check": "回答是逐字流式出来的（不是最后一次性给出）",
+                  "ok": true,
+                  "detail": "content 事件 201 个，正文来源=content（来源为 done 意味着流式没生效：首响=总时长）"
+                },
+                {
+                  "check": "首响 ≤ 15000 ms",
+                  "ok": true,
+                  "detail": "实际 3939 ms（总时长 12690 ms）"
+                }
+              ],
+              "user": "请按我们课程资料来讲：TCP 三次握手为什么不能改成两次？说明出处。"
+            }
+          ]
+        }
+      ],
+      "checks_total": 21,
+      "checks_passed": 21,
+      "stable_pass": true,
+      "failures": []
+    }
+  ]
+}

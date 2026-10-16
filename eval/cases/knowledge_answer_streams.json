@@ -1,0 +1,19 @@
+{
+  "id": "knowledge_answer_streams",
+  "why": "学生问概念时，回答必须**逐字流出来**（1.7.2 修的真问题：SimpleLLM 不是 LangChain ChatModel，/qa/stream 的 content 事件在生产里从未触发过，学生要等约 33 秒才看到整段答案）。这条用例不比对真值，靠三条最低门槛 + 「正文里没有内部痕迹」：讲解类回答最容易把 search_knowledge 返回的使用说明（【怎么用上面的片段】）或 planner 的 JSON 计划抄进正文 —— 那是写给模型看的，不是给学生看的。",
+  "mode": "plan",
+  "turns": [
+    {
+      "user": "操作系统里死锁的四个必要条件是什么？请结合本课资料讲一下。",
+      "expect": {
+        "tools_any_of": ["search_knowledge"],
+        "tools_none_of": ["grade_answers", "get_paper_questions"],
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 200,
+        "require_streaming": true,
+        "max_ttft_ms": 15000
+      }
+    }
+  ]
+}

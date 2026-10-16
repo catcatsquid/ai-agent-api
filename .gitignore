@@ -40,6 +40,11 @@ embedding_cache/
 # 调试脚本
 debug/
 
+# 本机沙箱的临时目录（跑服务/评测时必须把 TMP/TEMP 指到这里：系统临时目录不可写，
+# Chroma 需要；pytest 的 tmp_path 也会落到它下面）
+.tmp/
+pytest-of-*/
+
 # TRAE 内部文件
 .trae-html-share-packages/
 

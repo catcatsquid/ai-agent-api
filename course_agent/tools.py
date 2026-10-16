@@ -402,8 +402,48 @@ def get_paper_questions(paper_source: str, group_index: int = 1) -> str:
     }, ensure_ascii=False)
 
 
+# 工具参数容错：与 `read_section` 的 `"int | str"` 同一条纪律 ——
+# **schema 层放行现实里的写法，容错放在实现里**（见 tests/test_study_mode.py）。
+def _as_list(value):
+    """把模型给"列表型参数"的各种写法收敛成一个 list（None 原样返回）
+
+    实测（2026-10-16 评测的 `dont_know_calls_explain` 用例抓到）：模型讲第 1 题时
+    调成 `explain_question(paper_source=…, no="1")` —— 而 schema 写的是 `list[int]`，
+    pydantic 层直接 `ValidationError: Input should be a valid list`，工具**根本没执行**，
+    学生看到的是一段讲不到点子上的话。这类"单值 vs 列表"的错法在真机上很常见。
+
+    收得进来的写法：
+      · 1 / "1"            → [1]（单值）
+      · "1,2" / "1、2"     → [1, 2]
+      · "[1,2]" / '["a"]'  → JSON 解析后再收敛（模型会把数组当字符串发过来）
+      · ["1","2"]          → ["1","2"]
+    """
+    if value is None or isinstance(value, list):
+        return value
+    if isinstance(value, bool):
+        return [value]
+    if isinstance(value, int):
+        return [value]          # 数字原样留着：caller 可能真的需要 int
+    if isinstance(value, float):
+        # 题号不会是小数；模型写 1.0 时按 1 收（否则 explain_payload 匹配不上题号）
+        return [int(value)] if value.is_integer() else [value]
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                return parsed
+        items = [p.strip() for p in text.replace("、", ",").split(",")]
+        return [p for p in items if p]
+    return [value]
+
+
 @tool
-def grade_answers(paper_source: str, user_answer_text: str, qids: list[str] = None) -> str:
+def grade_answers(paper_source: str, user_answer_text: str,
+                  qids: "list[str] | str" = None) -> str:
     """批量批改学生答案。学生提交答案后，调用此工具获取批改结果。
 
     支持多种答案格式：1.A 2.B、ABCDA、1.对 2.错等，工具会自动解析。
@@ -415,7 +455,7 @@ def grade_answers(paper_source: str, user_answer_text: str, qids: list[str] = No
         qids: 可选，要批改的题目 qid 列表（get_paper_questions 返回过）。
               传入可精确定位到刚出的那一组；不传则按题型分段解析整卷。
     """
-    paper_source, qids = quiz_service.normalize_grade_args(paper_source, qids)
+    paper_source, qids = quiz_service.normalize_grade_args(paper_source, _as_list(qids))
     paper, candidates = quiz_service.resolve_paper(paper_source)
     if paper is None:
         if candidates:
@@ -442,7 +482,8 @@ def grade_answers(paper_source: str, user_answer_text: str, qids: list[str] = No
 
 
 @tool
-def explain_question(paper_source: str, no: list[int] = None, qids: list[str] = None) -> str:
+def explain_question(paper_source: str, no: "list[int] | int | str" = None,
+                     qids: "list[str] | str" = None) -> str:
     """取出题目的原文、参考答案和评分要点，用来给学生讲题。
 
     学生说不会 / 没思路 / 让你讲讲 / 问为什么，或者你要讲解某道错题时调用它。
@@ -460,8 +501,8 @@ def explain_question(paper_source: str, no: list[int] = None, qids: list[str] = 
                                "candidates": candidates}, ensure_ascii=False)
         return json.dumps({"error": "习题库为空"}, ensure_ascii=False)
 
-    return json.dumps(quiz_service.explain_payload(paper, no=no, qids=qids),
-                      ensure_ascii=False)
+    return json.dumps(quiz_service.explain_payload(
+        paper, no=_as_list(no), qids=_as_list(qids)), ensure_ascii=False)
 
 
 @tool

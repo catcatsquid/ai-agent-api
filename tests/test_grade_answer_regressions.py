@@ -65,6 +65,84 @@ class TestQidsInPaperSource:
         assert d["correct"] + d["wrong"] + d["needs_manual"] == 5
 
 
+class TestListArgsTolerateTheWaysModelsWriteThem:
+    """缺陷 5（2026-10-16 评测 `dont_know_calls_explain` 抓到）：
+
+    模型讲第 1 题时调成 `explain_question(paper_source=…, no="1")`，
+    而 schema 写的是 `list[int]` → pydantic `ValidationError: Input should be a
+    valid list`，工具**根本没执行**，学生只得到一段绕开题目的泛泛而谈。
+
+    与 `read_section` 的 `"int | str"` 同一条纪律：schema 层放行现实里的写法，
+    容错放实现里。下面既测"收敛函数本身"，也**真的调工具**（否则 schema 层
+    还可能挡在外面 —— 这正是当初那条 bug 的形态）。
+    """
+
+    def test_single_value_becomes_a_one_item_list(self):
+        assert tools._as_list(1) == [1]
+        assert tools._as_list(1.0) == [1]
+        assert tools._as_list("1") == ["1"]
+        assert tools._as_list("1,2") == ["1", "2"]
+        assert tools._as_list("1、2") == ["1", "2"]
+        assert tools._as_list("[1,2]") == [1, 2]
+        assert tools._as_list('["a","b"]') == ["a", "b"]
+
+    def test_lists_and_none_pass_through(self):
+        assert tools._as_list(["2025OS_Q1"]) == ["2025OS_Q1"]
+        assert tools._as_list(None) is None
+        assert tools._as_list([]) == []
+
+    def test_explain_question_accepts_a_single_number(self):
+        """实测那个坏输入：no="1"（字符串单值）必须能**进到工具里**
+
+        注意判据不是"一定讲出题"：这个题库里题号 1 在选择题/综合题里都有，
+        `explain_payload` 会**按设计**报"题号在不同题型里重复，需要指明是哪一道"。
+        要守的是"schema 没把它挡在外面" —— 所以只要不是 pydantic 的
+        ValidationError（那种连工具都没执行）就算过。
+        """
+        d = json.loads(tools.explain_question.invoke(
+            {"paper_source": PAPER, "no": "1", "qids": QIDS[0]}))
+        assert "error" not in d, d
+        assert d.get("questions"), f"没讲出题来：{str(d)[:200]}"
+
+    def test_explain_question_accepts_a_comma_string_no(self):
+        d = json.loads(tools.explain_question.invoke(
+            {"paper_source": PAPER, "no": "1,2", "qids": QIDS[0]}))
+        assert "error" not in d, d
+        assert d.get("questions"), str(d)[:200]
+
+    def test_explain_question_reports_ambiguity_instead_of_crashing(self):
+        """只给一个歧义题号、不给 qids 时：要给"请指明"的**人话**，而不是 ValidationError"""
+        raw = tools.explain_question.invoke({"paper_source": PAPER, "no": 1})
+        d = json.loads(raw)
+        assert d.get("error") == "题号在不同题型里重复，需要指明是哪一道", d
+
+    def test_grade_answers_accepts_a_string_qids(self, monkeypatch):
+        """批改那边同类错法：qids 传成 JSON 字符串 / 逗号串
+
+        判据是**传进 quiz_service 的到底是什么**，不是最终批改结果：
+        qids 没被收敛成 list 时，`normalize_grade_args` 里的 `[q for q in (qids or [])]`
+        会把字符串当**可迭代对象逐字符遍历**（`["2","0","2","5",…]`）。
+        实测过：这种情况下 total/correct 可能**碰巧一样**（字符都不匹配 → 静默退化成
+        "整卷按题型分段解析"，而 '1.C' 正好还是第 1 题）—— 所以拿批改结果当判据
+        是个安慰剂（变异验证时抓到），必须直接看参数。
+        """
+        seen = []
+        real = quiz_service.normalize_grade_args
+
+        def spy(paper_source, qids=None, *a, **k):
+            seen.append(qids)
+            return real(paper_source, qids, *a, **k)
+
+        monkeypatch.setattr(quiz_service, "normalize_grade_args", spy)
+        for raw in (json.dumps([QIDS[0]], ensure_ascii=False), QIDS[0]):
+            d = json.loads(tools.grade_answers.invoke(
+                {"paper_source": PAPER, "user_answer_text": "1.C", "qids": raw}))
+            assert "error" not in d, (raw, d)
+
+        assert seen == [[QIDS[0]], [QIDS[0]]], (
+            f"qids 没被收敛成 list 就传进 quiz_service 了（会被逐字符遍历）：{seen}")
+
+
 class TestHallucinatedToolNameIsStripped:
     """缺陷 3：模型编造的工具名不能泄漏给学生"""
 
