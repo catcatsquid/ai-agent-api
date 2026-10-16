@@ -364,7 +364,12 @@ REACT_PROMPT = """你是「知识寻回BOT」，一位耐心、专业的课程�
 输出格式：
 - 用 Markdown 格式
 - 题目图片用 ![题目](图片URL) 格式
-- 保持自然流畅"""
+- 保持自然流畅
+
+⚠️ 工具调用必须走真正的 function calling，**绝不要**把调用过程写进正文：
+不许输出 `工具名(...)`、不许输出 `{"query": ...}` 这种参数 JSON、
+不许输出 `finish_reason` / `delta` / `tool_calls` 这类协议字段。
+如果你发现自己在正文里"打算调用"某个工具，那就**直接调用它**，正文只写给学生看的话。"""
 
 
 # ============================================================
@@ -524,6 +529,15 @@ def planner_node(state: AgentState, config=None) -> dict:
         # 不能当成"不需要工具"，否则会绕过检索直接作答
         if not normalized and steps:
             raise ValueError("steps 里没有可用的工具调用")
+        # 【1.7.3】合法 JSON 但**没明说"不用工具"**时，也不能当"不需要工具"。
+        # 实测（离线打桩 planner）：模型回一个 `{}` 或漏掉 need_tools 时，
+        # steps 是空数组、上面那条判据不触发 → normalized=[] →
+        # route_after_plan 直接进 synthesizer → **一个工具都不调就凭记忆作答**。
+        # prompt 里写死了"必须返回 need_tools"，所以"缺失"= 不合规，不是"不用工具"；
+        # 只有**显式** `need_tools: false` 才是真的不需要工具（闲聊、学生交答案
+        # 那两轮由守卫 2 单独处理，不受影响）。照旧回退到检索。
+        if not normalized and plan_data.get("need_tools", True) is not False:
+            raise ValueError("计划里没有任何可用的工具调用，且没有明确 need_tools=false")
     except (json.JSONDecodeError, ValueError, TypeError, AttributeError) as e:
         logger.warning("planner 返回的计划无法解析，回退默认计划: %s", e)
         normalized = [{"tool": "search_knowledge", "args": {"query": user_content}}]
@@ -905,6 +919,149 @@ def web_search_fallback_node(state: AgentState) -> dict:
 
 
 # ============================================================
+# 回答的收尾清理（**两条路共用**）
+# ============================================================
+
+def strip_protocol_frames(text: str) -> str:
+    """摘掉正文里混进来的**原始协议帧**（模型把工具调用协议当普通文本打出来）
+
+    ## 实测长什么样（2026-10-16，ReAct 模式，3 次里命中 1 次）
+
+    这一轮模型**没有真的调工具**（`tool_calls` 是空的），而是把协议当正文写了：
+
+    ```
+    好的，我们来复习死锁……我会调用一下知识库来获取更详细的信息。
+    {"course": "操作系统", "query": "死锁的四个必要条件"}      ← 工具参数被写成普通文本
+    ```{"index":0,"finish_reason":"tool_calls","delta":{"role":"assistant",…
+    ```
+
+    最后那段是**原始 API 响应**（`finish_reason` / `delta` / `tool_calls`），
+    它是模型的"幻觉续写"，不是我们漏播的——但学生看到的就是一坨协议。
+
+    ## 判据：**解析出来的 JSON 必须命中"协议字段"**，不是关键词匹配
+
+    只按字面量（如 `"tool_calls" in text`）会误伤教学文本（"这个 JSON 里的
+    tool_calls 字段…"）。所以这里扫 `{` 起点、逐层配对括号取出完整片段、
+    `json.loads` 成功、且顶层/一层里命中 ≥2 个协议字段，才动手摘。
+    配不成对的（文本里本来就有个孤立花括号）一律不动。
+    """
+    if not text:
+        return text
+    out, i, n = [], 0, len(text)
+    while i < n:
+        if text[i] != "{":
+            out.append(text[i])
+            i += 1
+            continue
+        end = _json_object_end(text, i)
+        candidate = text[i:end] if end else ""
+        if candidate and _is_protocol_frame(candidate):
+            # 连同紧邻的 ``` 围栏与空行一起清掉（实测那一段就裹在围栏里）
+            while out and out[-1] in ("`", "\n", " ", "\t"):
+                out.pop()
+            i = end
+            if text.startswith("```", i):
+                i += 3
+            logger.warning("摘掉正文里的原始协议帧（%d 字符）", len(candidate))
+            continue
+        out.append("{" if not candidate else candidate)
+        i = (i + 1) if not candidate else end
+    return re.sub(r"\n{3,}", "\n\n", "".join(out)).strip()
+
+
+_PROTOCOL_FRAME_KEYS = frozenset({
+    "delta", "finish_reason", "tool_calls", "tool_call_id", "reasoning_content",
+})
+
+
+def _json_object_end(text: str, start: int):
+    """从 `start` 处的 `{` 开始配对括号，返回**含**结尾 `}` 的下标；配不成对返回 None
+
+    字符串字面量与转义要跳过 —— 否则正文里一个 `"}"` 就会让配对错位，
+    把一个正常句子吞掉。
+    """
+    depth, i, n = 0, start, len(text)
+    in_str = esc = False
+    while i < n:
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return None
+
+
+def _is_protocol_frame(candidate: str) -> bool:
+    """这段 JSON 是不是"原始协议帧"（顶层或一层嵌套里命中 ≥2 个协议字段）"""
+    if len(candidate) > 20000:
+        return False
+    try:
+        obj = json.loads(candidate)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(obj, dict):
+        return False
+    keys = set(obj)
+    for value in obj.values():
+        if isinstance(value, dict):
+            keys |= set(value)
+    return len(keys & _PROTOCOL_FRAME_KEYS) >= 2
+
+
+def clean_answer_text(text: str, state: dict = None) -> str:
+    """摘掉回答里不该给学生看的东西（工具调用原文 / 编造的图片链接 / 学习收尾标记）
+
+    ## 为什么必须是共用函数（1.7.3 修的真问题）
+
+    原来这三件事只写在 `synthesizer_node` 里（只有 plan 模式那条路），
+    ReAct 的 `llm_node` **只筛选文本、什么都不清** —— 于是 ReAct 模式下
+    `explain_question {"question_index": 1}` 这种工具的调用原文会**直接进学生气泡**
+    （评测用例 `react_mode_streams` 抓到过一次）。清理逻辑分散写就会出现这种
+    "只修好一条路"的分叉，所以这里提成一个函数，两条路都调。
+
+    ## 与流式的关系（必须知情）
+
+    清理作用于**节点返回的那条消息**。流式已经把逐字 chunk 发出去了，
+    所以清理**救不了打字机过程中闪过去的那一段**；但 `done.answer` 是清理后的
+    权威值，前端在 done 时会用 answer 覆盖一次，最终气泡是干净的（这条兜底
+    见 `server.py::qa_stream` 的注释）。要彻底不让它出现，得在生成时就拦住
+    （提示词实测拦不住）。
+
+    Args:
+        text: 模型写出来的回答
+        state: 会话状态；给了才做"学习模式补「本节结束」"这一步
+    """
+    cleaned = strip_tool_call_text(str(text or ""))
+    # 再摘"原始协议帧"（模型把工具调用协议当正文打出来，实测 ReAct 3 次里 1 次）
+    cleaned = strip_protocol_frames(cleaned)
+    # 编造的图片链接（合法图片只有题库题图 /qb_images/…）：提示词写了不许编、
+    # 实测照样编，所以这里用代码兜住
+    cleaned, dropped = quiz_service.sanitize_images(cleaned)
+    if dropped:
+        logger.warning("摘掉回答里编造的图片链接 %d 个: %s", len(dropped), dropped[:3])
+    # 学习/复习时，收尾标记由代码保证（模型只有 3/4 会写，而它必须可靠）
+    if (state or {}).get("session", {}).get("study", {}).get("course"):
+        cleaned, added = quiz_service.ensure_closing(cleaned)
+        if added:
+            logger.info("模型没写「本节结束」→ 已由代码补上")
+    if cleaned != text:
+        logger.info("清理回答里不该给学生看的内容 (%d → %d 字符)", len(str(text)), len(cleaned))
+    return cleaned
+
+
+# ============================================================
 # Synthesizer Node
 # ============================================================
 
@@ -971,23 +1128,12 @@ def synthesizer_node(state: AgentState) -> dict:
 
     try:
         response = safe_llm_invoke(llm, messages, context="synthesizer")
-        # 兜底：把泄漏成正文的工具调用片段摘掉（正解是允许一次重规划，见文件头注释）
+        # 兜底：把泄漏成正文的工具调用片段、编造的图片链接、学习收尾标记都处理掉
+        # （正解是允许一次重规划，见文件头注释）。清理逻辑与 ReAct 侧共用
+        # `clean_answer_text` —— 分散写就会出现"只修好一条路"。
         if isinstance(response, AIMessage) and response.content:
-            cleaned = strip_tool_call_text(str(response.content))
-            # 再摘掉**编造的图片链接**（合法图片只有题库题图 /qb_images/…）。
-            # 提示词里写了不许编、实测照样编，所以这里用代码兜住。
-            cleaned, dropped = quiz_service.sanitize_images(cleaned)
-            if dropped:
-                logger.warning("摘掉回答里编造的图片链接 %d 个: %s",
-                               len(dropped), dropped[:3])
-            # 学习/复习时，收尾标记由代码保证（模型只有 3/4 会写，而它必须可靠）
-            if (state.get("session") or {}).get("study", {}).get("course"):
-                cleaned, added = quiz_service.ensure_closing(cleaned)
-                if added:
-                    logger.info("模型没写「本节结束」→ 已由代码补上")
+            cleaned = clean_answer_text(str(response.content), state)
             if cleaned != response.content:
-                logger.info("摘掉回答里泄漏的工具调用片段 (%d → %d 字符)",
-                            len(str(response.content)), len(cleaned))
                 response = AIMessage(content=cleaned)
         return {"messages": [response]}
     except LLMError:
@@ -1030,6 +1176,14 @@ def llm_node(state: AgentState) -> dict:
     try:
         response = safe_llm_invoke(llm if exhausted else llm_with_tools,
                                    messages, context="react_llm")
+        # 【1.7.3】ReAct 这条路的回答也要清理 —— 原来这里**什么都不清**，
+        # 于是 `explain_question {"question_index": 1}` 这种工具调用原文
+        # 会直接进学生气泡（评测用例 react_mode_streams 抓到过）。
+        # 与 synthesizer 共用 `clean_answer_text`，避免再分叉。
+        if isinstance(response, AIMessage) and response.content:
+            cleaned = clean_answer_text(str(response.content), state)
+            if cleaned != response.content:
+                response = AIMessage(content=cleaned)
         return {"messages": [response]}
     except LLMError:
         return {"messages": [AIMessage(content="抱歉，处理请求时遇到服务问题，请稍后重试。")]}

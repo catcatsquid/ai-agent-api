@@ -208,8 +208,15 @@ def run_checks(expect: dict, turn: dict, truth: dict) -> list[dict]:
     def add(name, ok, detail=""):
         checks.append({"check": name, "ok": bool(ok), "detail": detail})
 
-    for name in expect.get("tools_any_of", []):
-        add(f"调用了 {name}", name in tools, f"实际工具轨迹: {tools}")
+    # `tools_any_of` 的字面意思就是**任一命中即可**。原来写成了逐项断言
+    # （"调用了 A" "调用了 B" 都要求真），于是多元素时**必然红** ——
+    # 在 `react_no_tool_call_leak`（三种取材料方式任选）上暴露出来：
+    # 模型调了 search_knowledge，却被判"没调 read_section / list_course_sections"。
+    any_of = expect.get("tools_any_of") or []
+    if any_of:
+        hit = [name for name in any_of if name in tools]
+        add(f"调用了 {' / '.join(any_of)} 中的任意一个",
+            bool(hit), f"命中 {hit}；实际工具轨迹: {tools}")
     for name in expect.get("tools_none_of", []):
         add(f"没有调用 {name}", name not in tools, f"实际工具轨迹: {tools}")
 
@@ -269,7 +276,7 @@ def run_checks(expect: dict, turn: dict, truth: dict) -> list[dict]:
 
     if expect.get("max_ttft_ms"):
         ttft = turn["ttft_ms"]
-        add(f"首响 ≤ {expect['max_ttft_ms']} ms",
+        add(f"首字 ≤ {expect['max_ttft_ms']} ms",
             ttft is not None and ttft <= expect["max_ttft_ms"],
             f"实际 {ttft if ttft is not None else '没有任何 content 事件'} ms"
             f"（总时长 {turn['total_ms']} ms）")

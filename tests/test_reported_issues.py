@@ -284,6 +284,15 @@ class TestToolCallTextIsStripped:
         assert nodes.strip_tool_call_text(text) == text.strip() if text else True
 
     def test_synthesizer_applies_the_stripper(self):
+        """守**意图**：写回答的那个节点必须真的走兜底清理
+
+        1.7.3 起清理提成了共用函数 `nodes.clean_answer_text`
+        （原来直接写 `cleaned = strip_tool_call_text(...)`，ReAct 那条路漏了）。
+        所以这里不再钉函数名，而是钉"它调了那个共用清理器" ——
+        函数名一改就误报，正是这个项目反复栽过的那类假红
+        （见 1.7.1「守字词 → 守意图」）。内容级判据在
+        `tests/test_answer_cleanup.py`，那边还额外守了 ReAct 那条路。
+        """
         src = (ROOT / "course_agent/nodes.py").read_text(encoding="utf-8")
         i = src.index("def synthesizer_node")
         # 取到**下一个顶层 def** 为止。原来写死 2600 字符窗口，
@@ -291,6 +300,6 @@ class TestToolCallTextIsStripped:
         # （教训：别用"字符数窗口"当函数边界，那就是一种数据快照。）
         nxt = re.search(r"\ndef \w", src[i + 10:])
         body = src[i:i + 10 + nxt.start()] if nxt else src[i:]
-        assert "strip_tool_call_text" in body, "synthesizer 没有应用兜底清理"
+        assert "clean_answer_text" in body, "synthesizer 没有应用兜底清理"
         # 收紧一点：不能只是"提到了"，必须真的调用了
-        assert "cleaned = strip_tool_call_text(" in body
+        assert "clean_answer_text(str(response.content), state)" in body

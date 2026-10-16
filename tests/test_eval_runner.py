@@ -137,6 +137,44 @@ class TestTransportRetry:
         assert len(state["seen"]) == 2, "retries=1 应该总共试 2 次"
 
 
+class TestToolsAnyOfMeansAnyOne:
+    """`tools_any_of` 是"任一命中即可" —— 原来被实现成"每个都要命中"
+
+    2026-10-16 在 `react_no_tool_call_leak` 上暴露：用例允许三种取材料方式任选
+    （search_knowledge / read_section / list_course_sections），模型调了
+    search_knowledge，却被判"没调 read_section / list_course_sections" 而红。
+    单元素用例一直没暴露这个 bug。
+    """
+
+    def _checks(self, tools, expect):
+        turn = {"answer": "答案", "tools": tools, "content_events": 1,
+                "answer_source": "content", "ttft_ms": 100, "total_ms": 200}
+        return runner.run_checks(expect, turn, {})
+
+    def test_one_hit_is_enough(self):
+        checks = self._checks(["search_knowledge"],
+                              {"tools_any_of": ["search_knowledge",
+                                                "read_section",
+                                                "list_course_sections"]})
+        assert len(checks) == 1, checks
+        assert checks[0]["ok"] is True, checks
+
+    def test_no_hit_fails(self):
+        checks = self._checks(["grade_answers"],
+                              {"tools_any_of": ["search_knowledge", "read_section"]})
+        assert checks[0]["ok"] is False, checks
+
+    def test_single_element_still_works(self):
+        assert self._checks([], {"tools_any_of": ["search_knowledge"]})[0]["ok"] is False
+        assert self._checks(["search_knowledge"],
+                            {"tools_any_of": ["search_knowledge"]})[0]["ok"] is True
+
+    def test_ttft_label_shows_the_real_threshold(self):
+        """报告里那条判据必须写出**真实**门槛（原来是写死的 8000，成了假信息）"""
+        checks = self._checks([], {"max_ttft_ms": 15000})
+        assert "15000" in checks[0]["check"], checks[0]["check"]
+
+
 class TestConsoleEncoding:
     """中文 Windows 的控制台是 cp936，打印 `▶`/`✗` 曾直接 UnicodeEncodeError
 
