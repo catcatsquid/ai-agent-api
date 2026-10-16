@@ -14,6 +14,46 @@
 
 （下一次改动先写在这里，发版时移到下面并补上版本号与日期）
 
+## [1.7.1] - 2026-10-16
+
+**把两条"守字词"的守卫改成"守意图"** —— 起因是一个真实误报。
+
+### 问题：守卫拿字词当代理，文案一改就红
+
+用户把 `group_payload` 里**面向学生**的一句提示改成「请享用。」，结果两条测试红了：
+
+| 测试 | 它其实想守的 | 它用的代理（字词） |
+|---|---|---|
+| `test_reply_text_is_the_shared_one` | 助教的成品文本**来自共享层**（不许各写一份） | `"答案怎么写都行" in reply_text` |
+| `test_get_paper_questions_ships_ready_to_send_text` | 出题必须给**成品文本**（否则模型只回"好的，这是下一组"却不贴题） | `"请慢慢做" in reply` |
+
+**守字词 = 一改文案就红，而真正的不变量没被守住。** 这与项目之前栽过的坑同类
+（`find_chapter` 加个下划线就能躲过守卫）。
+
+### 改法
+
+- `test_tutor_reply_text_comes_from_the_shared_layer`：与共享层对**同一组**的输出
+  **逐题对齐结构化字段**（image_url / topic），并要求成品文本带上题号与图片 ——
+  措辞随便改都不会误报
+- `test_get_paper_questions_ships_ready_to_send_text`：删掉措辞断言，保留"完整到不可能是
+  只回了一句好的"（长度门槛 + 每题的题号与图片都在）
+- **新增** `test_freeform_answers_stay_supported_where_the_model_can_see_it`：
+  把"自由格式作答必须被支持"这条**行为约束**守在对的地方 —— `grade_answers` 的
+  **工具描述**（模型每轮必看）里必须仍有"原样传入/工具自动解析"的意思
+
+### 顺带查清的一件事（写进注释，免得后人再猜）
+
+那句"答案怎么写都行"**只面向学生**：真正让模型接受任意答案格式的是**工具描述**
+（`支持多种答案格式：1.A 2.B、ABCDA、1.对 2.错等，工具会自动解析` +
+`user_answer_text: 原样传入即可，工具会自动解析`）。而且这句话在描述里**出现了两次** ——
+删掉一处，行为约束仍在（变异验证过：两处都删才会红）。
+
+### 验证
+
+- Python **674 passed**（用改后的文案）；把文案换回原版再跑那 2 个文件也**87 passed**
+  —— 两个方向都绿，证明守卫确实与措辞无关
+- 变异验证：把工具描述里两处格式容错的措辞**都**删掉 → 新守卫变红；还原 → 变绿
+
 ## [1.7.0] - 2026-10-16
 
 **两件用户提的事：导出目录可配置、导入文件不再受"必须先在 data/ 里"的限制。**
@@ -838,7 +878,8 @@ Python **605 passed**（原 595 + 新契约测试 3 条 + 契约/守卫相关新
 
 ---
 
-[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.7.0...HEAD
+[未发布]: https://github.com/catcatsquid/ai-agent-api/compare/v1.7.1...HEAD
+[1.7.1]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.7.1
 [1.7.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.7.0
 [1.6.0]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.6.0
 [1.5.4]: https://github.com/catcatsquid/ai-agent-api/releases/tag/v1.5.4
