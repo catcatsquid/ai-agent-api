@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from course_agent import qbank, tutor_agent
+from course_agent import qbank, tools, tutor_agent
 
 
 @pytest.fixture(autouse=True)
@@ -185,7 +185,11 @@ class TestToolLayer:
         assert sess["current_paper"] == "2019秋本部计算机网络模拟题"
 
     def test_get_paper_questions_ships_ready_to_send_text(self):
-        """出题必须给成品文本，否则模型可能只回一句「好的，这是下一组」却不贴题"""
+        """出题必须给成品文本，否则模型可能只回一句「好的，这是下一组」却不贴题
+
+        **刻意不断言具体措辞**：这段是面向学生的文案，可以改（原来钉的是
+        「请慢慢做」，用户把它改掉是合理的）。要守的是"成品、且完整"。
+        """
         sess = tutor_agent._get_session("t1b")
         r = tutor_agent.TOOL_HANDLERS["get_paper_questions"](
             {"paper_source": "2019秋本部计算机网络模拟题"}, sess)
@@ -193,8 +197,22 @@ class TestToolLayer:
         for q in r["questions"]:
             assert f"{q['no']}." in reply
             assert q["image_url"] in reply
-        assert "请慢慢做" in reply
         assert "题目必须整组出现在回复里" in r["_guide"]
+        # 完整到不可能是"只回了一句好的"
+        assert len(reply) > 100, f"成品文本太短，像是没贴题: {reply[:60]!r}"
+
+    def test_freeform_answers_stay_supported_where_the_model_can_see_it(self):
+        """**自由格式作答**这条行为约束，必须留在模型每轮都看得到的地方
+
+        为什么单独守这条：用户改 `reply_text` 措辞时担心"会不会让模型又开始要求
+        特定答案格式"。查清了：真正让模型接受任意格式的是**工具描述**（模型每轮必看），
+        `reply_text` 里那句只是给学生看的安抚。所以守工具描述 —— 它丢了，
+        历史上那种"「AAAAA」被拒"就会回来。
+        """
+        desc = tools.tools_by_name["grade_answers"].description or ""
+        assert "原样" in desc or "自动解析" in desc, (
+            "grade_answers 的工具描述必须告诉模型「原样传入、工具自己解析」，"
+            f"否则模型会要求特定格式：{desc[:120]!r}")
 
 
 class TestMissedQuestionsRecovery:

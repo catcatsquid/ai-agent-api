@@ -57,12 +57,27 @@ class TestBothSurfacesShareOneImplementation:
         assert [q["topic"] for q in mode_a["questions"]] == \
                [q["topic"] for q in mode_b["questions"]]
 
-    def test_reply_text_is_the_shared_one(self):
-        """助教的成品文本来自共享层（含"答案怎么写都行"那句）"""
+    def test_tutor_reply_text_comes_from_the_shared_layer(self):
+        """助教的成品文本必须来自共享层 —— 比对**结构**，不比对文案
+
+        原来这条用的是 `"答案怎么写都行" in reply_text`：那是拿字词当代理，
+        于是**面向学生的措辞一改就红**，而"到底是不是同一份实现"并没被守住
+        （实测：用户把一句面向学生的提示改成「请享用。」就让这条红了，那本是允许的）。
+
+        现在改成与共享层对**同一组**的输出逐题对齐，并要求成品文本真的带上
+        题号与图片 —— 措辞随便改，这条都不会误报。
+        """
         sess = tutor_agent._get_session("shared-reply")
         r = tutor_agent.TOOL_HANDLERS["get_paper_questions"](
             {"paper_source": PAPER, "qtype": "选择题"}, sess)
-        assert "答案怎么写都行" in r["reply_text"]
+
+        paper, _ = quiz_service.resolve_paper(PAPER)
+        shared = quiz_service.group_payload(paper, qtype="选择题",
+                                            group_index=r["group_index"])
+        assert [q["image_url"] for q in r["questions"]] == \
+               [q["image_url"] for q in shared["questions"]], "助教没走共享层"
+        assert [q["topic"] for q in r["questions"]] == \
+               [q["topic"] for q in shared["questions"]]
         assert r["reply_text"].count("![题目](") == len(r["questions"])
 
     def test_nobody_reintroduces_a_private_grader(self):
