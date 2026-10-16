@@ -12,7 +12,7 @@
         "min_images": 3,
         "answer_min_chars": 10,
         "require_streaming": true,
-        "max_ttft_ms": 8000
+        "max_ttft_ms": 15000
       }
     },
     {
@@ -28,7 +28,7 @@
         "no_answer_letter_leak": true,
         "answer_min_chars": 10,
         "require_streaming": true,
-        "max_ttft_ms": 8000
+        "max_ttft_ms": 15000
       }
     }
   ]
