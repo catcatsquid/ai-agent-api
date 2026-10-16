@@ -1,0 +1,19 @@
+{
+  "id": "react_no_tool_call_leak",
+  "why": "ReAct 模式下模型会把工具调用协议写成正文（实测 `explain_question\\n{\"question_index\": 1}` 和整段原始 API 帧）。1.7.3 之前这条路上**没有任何清理** —— 清理只写在 plan 侧的 synthesizer 里，所以同一个判据在 react 这条图上从来没被守过。这条用例把它钉住（与 quiz_no_leak 的「正文里没有工具调用原文」是同一个判据，只是换了另一条图）。注意 tools_any_of 是**三种取材料方式任选**：我原先只接受 search_knowledge，而模型很合理地选了 list_course_sections + read_section —— 那是我的用例写死了，不是产品不变量。",
+  "mode": "react",
+  "turns": [
+    {
+      "user": "给我讲讲死锁的四个必要条件，要按我们课程资料讲。",
+      "expect": {
+        "tools_any_of": ["search_knowledge", "read_section", "list_course_sections"],
+        "tools_none_of": ["grade_answers", "get_paper_questions"],
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 50,
+        "require_streaming": true,
+        "max_ttft_ms": 15000
+      }
+    }
+  ]
+}
