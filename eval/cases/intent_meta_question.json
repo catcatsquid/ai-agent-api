@@ -1,0 +1,22 @@
+{
+  "id": "intent_meta_question",
+  "mode": "plan",
+  "why": "意图矩阵·元问题：「你能干什么」—— 应当**不检索**直接介绍能力；去检索课件或列试卷都算答偏。硬判据：不调检索/题库工具；正文 20 字以上。",
+  "turns": [
+    {
+      "user": "你能干什么？",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 20,
+        "require_streaming": true,
+        "tools_none_of": [
+          "search_knowledge",
+          "list_papers",
+          "get_paper_questions",
+          "grade_answers"
+        ]
+      }
+    }
+  ]
+}

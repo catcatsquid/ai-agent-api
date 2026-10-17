@@ -1,0 +1,24 @@
+{
+  "id": "review_r2_topic_drill",
+  "mode": "plan",
+  "why": "复习支线 R2：复习 + 要练真题（「复习死锁，顺便来几道真题」）→ 要用 practice_by_topic 按知识点抽题（跨卷子），**不要**拉试卷清单。抽题呈现沿用刷题防泄题纪律：只给题号+知识点+图，不许出现题面。（注意：这条是**跨卷抽题**，没有单一真值，所以不挂 no_stem_leak 这类真值判据；题目内容不进正文由「抽题工具只返回题号+知识点+图」+ 正文无工具调用原文来保证。）",
+  "turns": [
+    {
+      "user": "复习一下死锁，顺便来几道真题练练",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 20,
+        "require_streaming": true,
+        "tools_any_of": [
+          "practice_by_topic"
+        ],
+        "tools_none_of": [
+          "list_papers",
+          "grade_answers"
+        ],
+        "min_images": 1
+      }
+    }
+  ]
+}

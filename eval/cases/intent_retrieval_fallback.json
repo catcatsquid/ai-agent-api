@@ -1,0 +1,32 @@
+{
+  "id": "intent_retrieval_fallback",
+  "mode": "plan",
+  "why": "意图矩阵·检索回退：问一个**课程资料里没有**的东西（量子纠缠）—— 允许联网或诚实说「课程资料里没有」，但**不许**装作是本课内容、也不许去碰题库。硬判据守工具范围；观察档看有没有出现「没找到/不属于本课」这类诚实措辞。",
+  "turns": [
+    {
+      "user": "我们课上讲过量子纠缠吗？它是什么",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "tools_any_of": [
+          "search_knowledge",
+          "web_search",
+          "get_course_info"
+        ],
+        "tools_none_of": [
+          "list_papers",
+          "get_paper_questions",
+          "grade_answers"
+        ],
+        "observe": {
+          "must_contain": [
+            "没",
+            "资料"
+          ]
+        }
+      }
+    }
+  ]
+}

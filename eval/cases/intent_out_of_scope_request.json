@@ -1,0 +1,22 @@
+{
+  "id": "intent_out_of_scope_request",
+  "mode": "plan",
+  "why": "意图矩阵·域外：学生让「写一首诗」—— 可以陪聊/写，但**不许**去检索课程资料、也不许拿题库工具当挡箭牌。硬判据：工具范围；正文非空。",
+  "turns": [
+    {
+      "user": "帮我写一首关于秋天的诗",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "tools_none_of": [
+          "list_papers",
+          "get_paper_questions",
+          "grade_answers",
+          "get_answers"
+        ]
+      }
+    }
+  ]
+}

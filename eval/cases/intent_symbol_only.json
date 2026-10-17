@@ -1,0 +1,24 @@
+{
+  "id": "intent_symbol_only",
+  "mode": "plan",
+  "why": "意图矩阵·表达变体：只发一串符号（「？？？」）—— 不许崩、不许乱调工具；应该反问一句或引导他说清楚。硬判据：正文非空、不碰题库；观察档：这一轮不调任何工具（最理想）。",
+  "turns": [
+    {
+      "user": "？？？",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "tools_none_of": [
+          "list_papers",
+          "get_paper_questions",
+          "grade_answers"
+        ],
+        "observe": {
+          "tools_exactly_empty": true
+        }
+      }
+    }
+  ]
+}
