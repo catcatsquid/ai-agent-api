@@ -25,7 +25,10 @@
         "no_reference_leak": true,
         "no_answer_letter_leak": true,
         "answer_min_chars": 10,
-        "require_streaming": true
+        "require_streaming": true,
+        "observe": {
+          "forbid_tool_call_text_in_stream": true
+        }
       }
     }
   ]

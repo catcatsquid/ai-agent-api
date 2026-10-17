@@ -43,7 +43,10 @@
           "grade_answers"
         ],
         "no_stem_leak": true,
-        "no_reference_leak": true
+        "no_reference_leak": true,
+        "observe": {
+          "forbid_tool_call_text_in_stream": true
+        }
       }
     }
   ]

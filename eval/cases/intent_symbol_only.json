@@ -16,7 +16,8 @@
           "grade_answers"
         ],
         "observe": {
-          "tools_exactly_empty": true
+          "tools_exactly_empty": true,
+          "forbid_tool_call_text_in_stream": true
         }
       }
     }

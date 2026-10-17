@@ -41,7 +41,10 @@
         ],
         "must_contain": [
           "内存"
-        ]
+        ],
+        "observe": {
+          "forbid_tool_call_text_in_stream": true
+        }
       }
     }
   ]

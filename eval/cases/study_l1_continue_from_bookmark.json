@@ -42,7 +42,8 @@
         "observe": {
           "must_contain": [
             "死锁"
-          ]
+          ],
+          "forbid_tool_call_text_in_stream": true
         }
       }
     }

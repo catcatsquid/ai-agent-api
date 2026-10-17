@@ -12,7 +12,10 @@
         "require_streaming": true,
         "tools_none_of": [
           "list_papers"
-        ]
+        ],
+        "observe": {
+          "forbid_tool_call_text_in_stream": true
+        }
       }
     },
     {
@@ -28,7 +31,10 @@
         ],
         "tools_none_of": [
           "list_papers"
-        ]
+        ],
+        "observe": {
+          "forbid_tool_call_text_in_stream": true
+        }
       }
     },
     {
@@ -44,7 +50,8 @@
         "observe": {
           "must_contain": [
             "死锁"
-          ]
+          ],
+          "forbid_tool_call_text_in_stream": true
         }
       }
     }

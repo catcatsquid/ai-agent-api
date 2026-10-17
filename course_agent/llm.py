@@ -75,7 +75,8 @@ def stream_chat(messages, temperature=None):
                 continue
 
 
-def chat_with_tools(messages, tools=None, temperature=None, max_tokens=2000):
+def chat_with_tools(messages, tools=None, temperature=None, max_tokens=2000,
+                    tool_choice="auto"):
     """调用智谱 API，支持 function calling。非流式。
 
     Returns:
@@ -91,7 +92,7 @@ def chat_with_tools(messages, tools=None, temperature=None, max_tokens=2000):
     }
     if tools:
         payload["tools"] = tools
-        payload["tool_choice"] = "auto"
+        payload["tool_choice"] = tool_choice
 
     for attempt in range(3):
         try:
@@ -118,7 +119,8 @@ def chat_with_tools(messages, tools=None, temperature=None, max_tokens=2000):
 # （给 nodes.py 用，graph.py/nodes.py 无需改动）
 # ============================================================
 
-def _iter_stream_events(api_messages, tools=None, temperature=None):
+def _iter_stream_events(api_messages, tools=None, temperature=None,
+                        tool_choice="auto"):
     """流式调智谱 API，yield 两种事件：
 
       ("content", str)                     —— 正文增量（token）
@@ -135,7 +137,7 @@ def _iter_stream_events(api_messages, tools=None, temperature=None):
     }
     if tools:
         payload["tools"] = tools
-        payload["tool_choice"] = "auto"
+        payload["tool_choice"] = tool_choice
 
     resp = requests.post(ZHIPU_CHAT_URL, headers=_headers, json=payload,
                          stream=True, timeout=120)
@@ -178,8 +180,11 @@ class SimpleLLM(BaseChatModel):
     是为了与非流式调用方保持行为一致。
     """
 
-    def __init__(self, tools=None, **kwargs):
+    def __init__(self, tools=None, tool_choice="auto", **kwargs):
         super().__init__(**kwargs)
+        # "auto" 让模型自己决定；"required" 强制这一轮必须发起工具调用
+        # （ReAct 的"嘴上说要调却没调"补一轮时用）
+        self._tool_choice = tool_choice
         # 已转成智谱 function 格式的工具定义；None = 这次调用不带工具
         self._tools = [_tool_to_zhipu_format(t) for t in tools] if tools else None
 
@@ -206,10 +211,22 @@ class SimpleLLM(BaseChatModel):
         bound._tools = [_tool_to_zhipu_format(t) for t in tools] if tools else None
         return bound
 
+    def with_tool_choice(self, choice: str):
+        """返回一个"强制/放开工具调用"的新实例（不改动这个对象）
+
+        ReAct 用它在"文字里说要调、实际没调"时补一轮 `tool_choice="required"`。
+        """
+        import copy
+
+        bound = copy.copy(self)
+        bound._tool_choice = choice
+        return bound
+
     def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
         """非流式调用：一次性拿完整结果"""
         api_messages = _lc_messages_to_zhipu(messages)
-        result = chat_with_tools(api_messages, tools=self._tools)
+        result = chat_with_tools(api_messages, tools=self._tools,
+                                 tool_choice=self._tool_choice)
         return ChatResult(generations=[
             ChatGeneration(message=_zhipu_response_to_ai_message(result))])
 
@@ -234,7 +251,8 @@ class SimpleLLM(BaseChatModel):
         temperature = kwargs.get("temperature")
 
         for event in _iter_stream_events(api_messages, tools=tools,
-                                         temperature=temperature):
+                                         temperature=temperature,
+                                         tool_choice=self._tool_choice):
             if event[0] == "content":
                 yield ChatGenerationChunk(message=AIMessageChunk(content=event[1]))
             else:
