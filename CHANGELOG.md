@@ -14,6 +14,78 @@
 
 （下一次改动先写在这里，发版时移到下面并补上版本号与日期）
 
+## [1.9.0] - 2026-10-17
+
+**把"答题的三种形态"和"按知识点练习"做成代码保证的行为**，把 B 类话术规范收进代码，
+并让评测能测"跨会话开场"。工具 14 → 17。
+
+### 答题三形态（D1/D2 定稿）
+
+| 学生这轮说 | 现在保证的行为 | 靠什么保证 |
+|---|---|---|
+| 只答了部分 | 只批已答的，并**指出还没答的题号** | `grade_answers` 返回新增 `未答题号`（题号由题库算） |
+| 部分作答 + 其余"不会" | 批已答的 + **给那几道答案并讲解** | 同一返回里的 `提示` 指引调 `explain_question` |
+| 直接问答案 | **不批改**，直接给题库原文 | 新工具 `get_answers`；说明写明"原样转述、不要顺带批改" |
+
+- 没传 `qids`（= 批整卷）时**不猜**未答题号，有用例守着
+- 顺手修掉：`qids` / `no` 传 `None` 会被 pydantic 拒绝（schema 缺 `| None`）——
+  模型把可选参数写成 `null` 很常见，失败还是静默的
+
+### 按知识点抽题（A2 / D5 轻量方案）
+
+新工具 **`practice_by_topic(topic, course?, count?, qtype?)`**：跨**所有卷子**按知识点收集再随机抽
+（上限 10）；课程精确过滤；章节走"topic 包含式 + 同义词小表"（死锁 → 银行家算法/资源分配）。
+只给**题号+知识点+图片**（防泄题）；匹配不到返回 `count:0` + hint 让人改用 `prepare_custom_quiz`。
+
+> 第一次评测跑出来是 **2/2 次都调了 `prepare_custom_quiz`** —— 工具加了但提示词还写着旧规则，
+> 等于没接上。已改 PLANNER 规则 5 并加守意图的测试。教训：**新工具必须同时改"指路"的那句话**。
+
+### 重做错题（A5 / D4）
+
+- 批改时把错题 qid 记进账本（`correct is False` 才算；`None`=需人工判定，不记）
+- **做对就移出、做错保留**；`summary()` 显示"错题 N 道待重做"
+- 新工具 **`practice_wrong(paper_source)`**：把错题**原题**取回来重做，不给题干与答案
+
+### B 类行为规范：收进代码，三条链路共用
+
+`nodes.QUIZ_BEHAVIOR_RULES`（8 条）+ `nodes.STUDY_BEHAVIOR_RULES`（6 条），拼进
+`PLANNER_PROMPT` / `SYNTHESIZER_PROMPT` / `REACT_PROMPT`，覆盖 B1~B11。
+
+为什么写成常量：**评测判据直接 import 它**（规范与判据不各写一份），三条提示词也不各抄一份。
+落点选在**工具返回值**（模型对它比对系统提示更服从）：
+- `record_study_position` 新增 `next_action`（已通过 → 出小测 + 问下一章/休息；待巩固 → 重讲）
+- `prepare_custom_quiz` 返回新增 `要求`（出题必须同时给标准答案与评分要点）
+
+### 评测：能测"跨会话开场"了
+
+- 用例可声明 **`seed`**（study / quiz / grade 三段），runner 跑前写进评测专用进度文件；
+  **fail-closed**：声明了 seed 却没设 `PROGRESS_FILE` → 直接退出
+- 新判据：`tools_all_of`、`tools_exactly_empty`、`must_contain`、`forbid_phrases`
+- 新用例 7 条：`entry_kickoff_from_progress`、`quiz_f1_all_answered`、`quiz_f2_partial_unknown`、
+  `quiz_f4_partial_only`、`quiz_f6_ask_answer`、`quiz_a2_topic_practice`、`quiz_b11_wrong_redo`
+- **`max_ttft_ms` 从所有用例里删掉**：按决策「首响暂时接受」，只做观测（汇总仍有 p50/p95），
+  之前它一直在制造边界误报（16.0 / 15.6 / 16.6 秒全判红）
+
+### 修掉一个自己引入的回归
+
+"新会话一律注入进度块"之后，**概念题**也会被注入"某卷做到第 1 组"，planner 误判成刷题，
+真的调了 `get_paper_questions + grade_answers`（`knowledge_answer_streams` 抓到的）。
+改成**只按意图注入**（想学/复习/进度/继续/错题/重做），空会话不再是理由，并补了回归用例。
+
+### 验证
+
+- Python **831 passed**（1.8.0 是 772）
+- **变异验证全红**：错题三态、出题选项不带章节、规范缺失、planner 不带学习规范、
+  去掉 next_action、自拟题不要求答案、四个新判据各自失效、A2/A3/A5 五个关键行为
+- 评测单条复验：`quiz_a2` 12/12、`knowledge_answer_streams` 14/14、`entry_kickoff` 14/14、
+  `quiz_f2` 28/28；F1/F4/F6/B11 全通过
+
+### 已知限制
+
+- 首响仍约 6~8 秒（观测项，不卡发版）
+- "提醒还剩几道"的具体措辞仍是观察项（D3：先跑 3 版再用真实措辞写判据）
+- 按知识点抽题的章节匹配是"包含式 + 同义词表"，不是语义匹配（D5 的彻底方案留作后手）
+
 ## [1.8.0] - 2026-10-17
 
 **新功能：全局学习进度。** 开新窗口说"我想学习"时，Agent 不再问"你之前学到哪了"，

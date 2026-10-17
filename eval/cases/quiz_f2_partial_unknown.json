@@ -1,0 +1,42 @@
+{
+  "mode": "plan",
+  "truth": {
+    "paper_source": "2025年秋操作系统期末试题（回忆版）",
+    "group_index": 1
+  },
+  "id": "quiz_f2_partial_unknown",
+  "why": "刷题支线 F2：学生**答了一部分，其余说不会**。必须①批已答的（grade_answers）②把不会的几道答案给出来并讲解（explain_question）—— 两个工具都要调，只做一个都算没满足需求（这是 D1/D2 定稿的行为）。",
+  "turns": [
+    {
+      "user": "给我出《2025年秋操作系统期末试题（回忆版）》的第 1 组题",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 20,
+        "require_streaming": true,
+        "tools_any_of": [
+          "get_paper_questions"
+        ],
+        "min_images": 3,
+        "no_stem_leak": true,
+        "no_reference_leak": true
+      }
+    },
+    {
+      "user": "1.C 2.B，剩下两道不会，教教我",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 20,
+        "require_streaming": true,
+        "tools_all_of": [
+          "grade_answers",
+          "explain_question"
+        ],
+        "tools_none_of": [
+          "get_answers"
+        ]
+      }
+    }
+  ]
+}

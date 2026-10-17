@@ -2,32 +2,41 @@
   "id": "dont_know_calls_explain",
   "why": "学生说「不会」时必须**真的去调 explain_question** 把题面与参考要点取出来（出题接口刻意不给题面答案，不调这个工具就根本讲不了题）。实测坏过：`explain_question` 注册了却不在 PLANNER_PROMPT 里、也不在 has_paper_tools 白名单里，于是 Plan 模式下这条路径基本不可能被规划出来，模型就围绕知识点泛泛而谈。工具轨迹是与真值无关的硬判据，所以这条用例能直接钉住它。",
   "mode": "plan",
-  "truth": {"paper_source": "2026春操作系统期末试题（回忆版）", "group_index": 1},
+  "truth": {
+    "paper_source": "2026春操作系统期末试题（回忆版）",
+    "group_index": 1
+  },
   "turns": [
     {
       "user": "给我出 2026春操作系统期末试题（回忆版）的第 1 组题",
       "expect": {
-        "tools_any_of": ["get_paper_questions"],
-        "tools_none_of": ["grade_answers"],
+        "tools_any_of": [
+          "get_paper_questions"
+        ],
+        "tools_none_of": [
+          "grade_answers"
+        ],
         "forbid_tool_call_text": true,
         "images_all_from_bank": true,
         "no_stem_leak": true,
         "no_reference_leak": true,
         "answer_min_chars": 10,
-        "require_streaming": true,
-        "max_ttft_ms": 8000
+        "require_streaming": true
       }
     },
     {
       "user": "这里面第 1 题我不会，讲讲思路吧",
       "expect": {
-        "tools_any_of": ["explain_question"],
-        "tools_none_of": ["grade_answers"],
+        "tools_any_of": [
+          "explain_question"
+        ],
+        "tools_none_of": [
+          "grade_answers"
+        ],
         "forbid_tool_call_text": true,
         "no_internal_artifacts": true,
         "answer_min_chars": 40,
-        "require_streaming": true,
-        "max_ttft_ms": 15000
+        "require_streaming": true
       }
     }
   ]

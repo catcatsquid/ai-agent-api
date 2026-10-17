@@ -8,7 +8,7 @@ Week 4 工具调用能力 + 刷题扩展能力。
 不要再往这个文件里加业务逻辑 —— 历史上这里和 tutor_agent.py 各写了一份，
 已经真实分叉过（这一侧的阅卷缺 basis_warning、题号也没按题型内序号算）。
 
-工具列表（**14 个**，按用途分组）:
+工具列表（**17 个**，按用途分组）:
 
   检索 / 知识库
     - search_knowledge: 检索 Chroma 知识库（计网+OS 课程笔记）
@@ -18,8 +18,11 @@ Week 4 工具调用能力 + 刷题扩展能力。
   刷题
     - list_papers: 列出习题库中的试卷
     - get_paper_questions: 获取指定试卷某组的题目
-    - grade_answers: 批量批改学生答案
+    - grade_answers: 批量批改学生答案（**会回报"还没答的题号"**）
     - explain_question: 取题面与参考答案用于讲题
+    - get_answers: **只取答案**（学生直接索要答案时用）
+    - practice_wrong: 把做错过的题取回来重做（重出原题）
+    - practice_by_topic: 按知识点从题库抽几道题
     - prepare_custom_quiz: 为「临时出题」取素材（给素材，不给成品题）
 
   学习 / 复习
@@ -446,7 +449,7 @@ def _as_list(value):
 
 @tool
 def grade_answers(paper_source: str, user_answer_text: str,
-                  qids: "list[str] | str" = None) -> str:
+                  qids: "list[str] | str | None" = None) -> str:
     """批量批改学生答案。学生提交答案后，调用此工具获取批改结果。
 
     支持多种答案格式：1.A 2.B、ABCDA、1.对 2.错等，工具会自动解析。
@@ -474,19 +477,36 @@ def grade_answers(paper_source: str, user_answer_text: str,
             "message": "没能从这段话里认出答案，请让学生用「题号+答案」的形式再说一次",
         }, ensure_ascii=False)
 
-    return json.dumps({
+    out = {
         "total": graded["total"],
         "correct": graded["correct"],
         "wrong": graded["wrong"],
         "needs_manual": graded["needs_manual"],
         "accuracy": graded["accuracy"],
         "results": graded["results"],
-    }, ensure_ascii=False)
+    }
+    # A3 ①/②：**只批已答的 + 指出未答的哪几道**（题号从题库算，不靠模型记）
+    #   · 学生只答了一部分 → 提醒还剩哪几道
+    #   · 他说"剩下不会" → 用这几道去 explain_question 给答案并讲解
+    if qids:
+        try:
+            _, numbers, _ = quiz_service.paper_index(paper["source"])
+            graded_qids = {str(r.get("qid")) for r in graded.get("results") or []}
+            missing = [numbers.get(str(q)) for q in qids
+                       if str(q) not in graded_qids and numbers.get(str(q)) is not None]
+            if missing:
+                out["未答题号"] = missing
+                out["提示"] = ("这几道学生还没答 → 只批已答的，并**提醒他还有哪几道没答**；"
+                             "如果他说不会/教教我，就调 explain_question 把这几道的答案"
+                             "给出来并讲解（不要再要求学生补答）")
+        except Exception:                               # noqa: BLE001
+            logger.warning("算未答题号失败（不影响批改结果）", exc_info=True)
+    return json.dumps(out, ensure_ascii=False)
 
 
 @tool
-def explain_question(paper_source: str, no: "list[int] | int | str" = None,
-                     qids: "list[str] | str" = None) -> str:
+def explain_question(paper_source: str, no: "list[int] | int | str | None" = None,
+                     qids: "list[str] | str | None" = None) -> str:
     """取出题目的原文、参考答案和评分要点，用来给学生讲题。
 
     学生说不会 / 没思路 / 让你讲讲 / 问为什么，或者你要讲解某道错题时调用它。
@@ -525,6 +545,10 @@ def prepare_custom_quiz(topic: str, course: str = "", qtype: str = "选择题",
     """
     payload = quiz_service.prepare_custom_quiz(
         topic=topic, course=course, qtype=qtype, count=count, difficulty=difficulty)
+    # B7：自拟题必须自带答案（模型自己出的题没有答案就无法可靠批改）
+    if isinstance(payload, dict):
+        payload["要求"] = ("出题时必须**同时给出标准答案与评分要点**；"
+                        "批改学生作答时以你给出的答案为依据，不要临时改答案。")
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -583,6 +607,15 @@ def record_study_position(course: str, section: "str | int" = "", mode: str = "�
             "- 确认学生真懂了再进下一节（再用本工具记一次新位置）；"
             "学生卡住就停下来解决，不要硬推。"
         ),
+        # B3（章末收尾）：status 决定下一步，写在**返回值**里最可靠
+        # （模型对"工具自己说的下一步"比对系统提示更服从）
+        "next_action": {
+            "已通过": ("本节/本章已讲完 → 出一份**覆盖本章考点**的小测；"
+                     "批改完之后问一句「下一章，还是先休息？」"),
+            "已讲完": ("本章已讲完 → 出覆盖本章考点的小测；批改完问「下一章，还是先休息？」"),
+            "待巩固": "学生卡在这一节 → 先用别的方式把这节重讲一遍，不要往下推",
+            "讲解中": "继续讲这一节，讲完明确说「本节结束」",
+        }.get(pos["status"], "按你判断的节奏继续"),
     }, ensure_ascii=False)
 
 
@@ -624,6 +657,80 @@ def get_learning_progress() -> str:
     }, ensure_ascii=False)
 
 
+@tool
+def get_answers(paper_source: str, no: "list[int] | int | str | None" = None,
+                qids: "list[str] | str | None" = None) -> str:
+    """**只取答案**（学生直接索要答案时用它，别自己写）
+
+    学生说"答案是什么 / 直接给答案 / 我不想做了告诉我对错答案"时调它：
+    返回的是**题库答案原文**，原样转述即可 —— 自己写会把字母写错，
+    **编一个答案比不给更糟**。
+
+    Args:
+        paper_source: 试卷来源名称
+        no: 题号（题型内序号），不传则整卷
+        qids: 也可以按 qid 指定（get_paper_questions 返回过）
+    """
+    paper, candidates = quiz_service.resolve_paper(paper_source)
+    if paper is None:
+        if candidates:
+            return json.dumps({"error": f"没能确定试卷: {paper_source}",
+                               "candidates": candidates}, ensure_ascii=False)
+        return json.dumps({"error": "习题库为空"}, ensure_ascii=False)
+    return json.dumps(quiz_service.answers_payload(
+        paper, no=_as_list(no), qids=_as_list(qids)), ensure_ascii=False)
+
+
+@tool
+def practice_wrong(paper_source: str) -> str:
+    """把这份卷子里**做错过的题**取回来重做（重出原题，不是新编题）
+
+    什么时候用：整套卷子做完、学生说"重做错题"；或学生问"我还有哪些题没弄懂"。
+    错题来自全局进度账本（做对过的会自动移出）。返回**题号+知识点+图片**，
+    不返回题干与答案；学生作答后用 grade_answers(qids=[...]) 批改。
+
+    Args:
+        paper_source: 试卷来源名称
+    """
+    from course_agent import progress
+
+    paper, candidates = quiz_service.resolve_paper(paper_source)
+    if paper is None:
+        if candidates:
+            return json.dumps({"error": f"没能确定试卷: {paper_source}",
+                               "candidates": candidates}, ensure_ascii=False)
+        return json.dumps({"error": "习题库为空"}, ensure_ascii=False)
+    rec = (progress.load().get("papers") or {}).get(paper["source"]) or {}
+    return json.dumps(quiz_service.wrong_questions_payload(
+        paper, rec.get("wrong_qids") or []), ensure_ascii=False)
+
+
+@tool
+def practice_by_topic(topic: str, course: str = "", count: int = 5,
+                      qtype: str = "") -> str:
+    """按**知识点/章节**从题库里抽几道题（跨所有卷子，不是整份卷子）
+
+    学生说"想练几道**死锁**的题""练练**调度**"这类**按知识点**的练习时用它 ——
+    题库没有按知识点组卷，去列试卷清单等于没满足需求。
+    只返回**题号+知识点+图片**（题干与答案不给，防泄题）。
+
+    匹配不上时返回 `count: 0` 和一个 hint：这时改用 prepare_custom_quiz 取素材、自己出题
+    （**自带标准答案**）。
+
+    Args:
+        topic: 知识点/章节，如「死锁」「进程调度」「TCP 拥塞控制」
+        course: 可选，限定课程：操作系统 / 计算机网络
+        count: 抽几道，默认 5（上限 10）
+        qtype: 可选，题型：选择题 / 判断题 / 填空题 / 综合题
+    """
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        n = 5
+    return json.dumps(quiz_service.pick_questions_by_topic(
+        topic=topic, course=course, count=n, qtype=qtype), ensure_ascii=False)
+
+
 # ============================================================
 # 导出
 # ============================================================
@@ -643,6 +750,9 @@ tools = [
     get_practice_stats,
     record_practice,
     get_learning_progress,
+    get_answers,
+    practice_wrong,
+    practice_by_topic,
 ]
 
 tools_by_name = {t.name: t for t in tools}

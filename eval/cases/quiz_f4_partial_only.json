@@ -1,0 +1,42 @@
+{
+  "mode": "plan",
+  "truth": {
+    "paper_source": "2025年秋操作系统期末试题（回忆版）",
+    "group_index": 1
+  },
+  "id": "quiz_f4_partial_only",
+  "why": "刷题支线 F4：学生**只答了三道、没说不会**。必须只批已答的（grade_answers），并且**不要**去调 explain_question（他还可能自己答）。D3 决定「提醒还剩几道」的措辞先当观察项，所以这里只硬判『批了、没去讲』。",
+  "turns": [
+    {
+      "user": "给我出《2025年秋操作系统期末试题（回忆版）》的第 1 组题",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 20,
+        "require_streaming": true,
+        "tools_any_of": [
+          "get_paper_questions"
+        ],
+        "min_images": 3,
+        "no_stem_leak": true,
+        "no_reference_leak": true
+      }
+    },
+    {
+      "user": "1.C 2.B 3.D",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 20,
+        "require_streaming": true,
+        "tools_any_of": [
+          "grade_answers"
+        ],
+        "tools_none_of": [
+          "explain_question",
+          "get_answers"
+        ]
+      }
+    }
+  ]
+}

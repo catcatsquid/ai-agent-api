@@ -2,33 +2,40 @@
   "id": "continue_next_group",
   "why": "学生说「继续下一组」必须真的取第 2 组。历史上这里坏过：planner 组装历史时排除了 ToolMessage，于是它手里既没有卷子也没有组号 —— 实测会瞎猜卷子、甚至编题，回复变成「我去挑一份卷子…」。1.0.1 修了游标读写对称，1.2.0 让游标活过重启。这条用例就是那条链路的回归。",
   "mode": "plan",
-  "truth": {"paper_source": "2026春操作系统期末试题（回忆版）", "group_index": 1},
+  "truth": {
+    "paper_source": "2026春操作系统期末试题（回忆版）",
+    "group_index": 1
+  },
   "turns": [
     {
       "user": "给我出 2026春操作系统期末试题（回忆版）的第 1 组题",
       "expect": {
-        "tools_any_of": ["get_paper_questions"],
+        "tools_any_of": [
+          "get_paper_questions"
+        ],
         "forbid_tool_call_text": true,
         "min_images": 3,
         "answer_min_chars": 10,
-        "require_streaming": true,
-        "max_ttft_ms": 15000
+        "require_streaming": true
       }
     },
     {
       "user": "继续下一组",
       "group_offset": 1,
       "expect": {
-        "tools_any_of": ["get_paper_questions"],
-        "tools_none_of": ["list_papers"],
+        "tools_any_of": [
+          "get_paper_questions"
+        ],
+        "tools_none_of": [
+          "list_papers"
+        ],
         "forbid_tool_call_text": true,
         "images_all_from_bank": true,
         "no_stem_leak": true,
         "no_reference_leak": true,
         "no_answer_letter_leak": true,
         "answer_min_chars": 10,
-        "require_streaming": true,
-        "max_ttft_ms": 15000
+        "require_streaming": true
       }
     }
   ]

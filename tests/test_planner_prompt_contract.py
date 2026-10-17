@@ -82,6 +82,21 @@ class TestPlannerPromptDoesNotLieAboutTools:
         assert re.search(r"继续[^\n]*get_paper_questions|get_paper_questions[^\n]*继续", prompt), \
             "没有把「继续」和 get_paper_questions 关联起来"
 
+    def test_topic_practice_maps_to_practice_by_topic(self):
+        """按知识点的练习必须指向 practice_by_topic（不是拉清单、也不是直接自拟）
+
+        实测（评测用例 `quiz_a2_topic_practice`）：工具加了但提示词还写着
+        prepare_custom_quiz，模型就照旧去自拟（2/2 次），新功能等于没接上。
+        判据看**那条规则所在的段落**（规则会折行，不能只比一行）。
+        """
+        lines = nodes.PLANNER_PROMPT.splitlines()
+        hits = [i for i, ln in enumerate(lines) if "practice_by_topic" in ln]
+        assert hits, "按知识点的练习没指向 practice_by_topic"
+        # 任一处出现都要满足：附近同时写了「不要」和 list_papers（规则会折行）
+        blocks = ["\n".join(lines[i:i + 5]) for i in hits]
+        assert any("list_papers" in b and "不要" in b for b in blocks), (
+            "没在同一条规则里说明「按知识点练习不要拉试卷清单」：" + repr(blocks[0]))
+
 
 class TestNoFabricationRules:
     @pytest.mark.parametrize("prompt_name", ["PLANNER_PROMPT", "SYNTHESIZER_PROMPT"])

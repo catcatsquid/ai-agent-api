@@ -1134,3 +1134,143 @@ def record_practice(paper_source: str) -> int:
         _STATS_FILE.write_text(json.dumps(stats, ensure_ascii=False, indent=2),
                                encoding="utf-8")
         return stats[paper_source]
+
+
+# ============================================================
+# 9. 按知识点抽题 / 重做错题 / 只取答案（A2 · A5 · A3-③）
+# ============================================================
+
+# 章节抽题的**同义词小表**（D5 轻量方案）：题库没有 chapter 字段，
+# 只能靠 topic 包含式匹配；这张表是"用户嘴里的章名 → 题库里的 topic 词"。
+_TOPIC_SYNONYMS = {
+    "死锁": ("死锁", "银行家算法", "资源分配", "死锁与饥饿"),
+    "调度": ("调度", "进程调度", "作业调度", "多级反馈"),
+    "同步": ("同步", "信号量", "互斥", "临界区", "并发"),
+    "内存": ("内存", "页表", "分页", "虚拟内存", "分段"),
+    "文件": ("文件", "目录"),
+    "进程": ("进程", "线程", "上下文切换", "进程管理"),
+    "传输层": ("传输层", "TCP", "UDP", "拥塞控制", "握手"),
+    "网络层": ("网络层", "IP", "路由", "子网"),
+}
+
+
+def _topic_terms(topic: str) -> list:
+    """把学生嘴里的章名扩成一组可匹配的词（认不出就只用自己的字面）"""
+    t = str(topic or "").strip()
+    if not t:
+        return []
+    terms = [t]
+    for key, syns in _TOPIC_SYNONYMS.items():
+        if key in t or t in key:
+            terms.extend(s for s in syns if s not in terms)
+    return terms
+
+
+def _question_brief(paper: str, q: dict, numbers: dict) -> dict:
+    """一道题的**可展示**信息：题号 + 知识点 + 图片（不给题面、不给答案）"""
+    return {
+        "paper": paper,
+        "qid": q.get("qid"),
+        "no": numbers.get(q.get("qid")),
+        "type": q.get("type") or "",
+        "topic": q.get("topic") or "",
+        "image": qbank.image_url(q),
+    }
+
+
+def pick_questions_by_topic(topic: str, course: str = "", count: int = 5,
+                            qtype: str = "") -> dict:
+    """按知识点从**所有卷子**里抽题（A2 / D5 轻量方案）
+
+    与出题契约一致：只给**题号 + 知识点 + 图片**，不返回题面和答案（防泄题）。
+    批改时用 `grade_answers(paper_source=卷名, qids=[...])`。
+    """
+    terms = _topic_terms(topic)
+    if not terms:
+        return {"count": 0, "hint": "没给知识点，先用 prepare_custom_quiz 或问学生想练什么"}
+    try:
+        n = max(1, min(int(count or 5), 10))
+    except (TypeError, ValueError):
+        n = 5
+
+    pool = []
+    for paper in qbank.list_papers(course or None):
+        source = paper["source"]
+        qs = qbank.paper_questions(source)
+        if not qs:
+            continue
+        numbers = qbank.section_numbers(qs)
+        for q in qs:
+            top = str(q.get("topic") or "")
+            if not top or not any(term in top for term in terms):
+                continue
+            if qtype and (q.get("type") or "") != qtype:
+                continue
+            pool.append(_question_brief(source, q, numbers))
+
+    if not pool:
+        return {
+            "count": 0,
+            "hint": ("题库里没有匹配这个知识点的题 → 改用 prepare_custom_quiz 取素材自己出题，"
+                     "并**自带标准答案**"),
+        }
+
+    import random
+
+    picked = random.sample(pool, min(n, len(pool)))
+    picked.sort(key=lambda x: (x["paper"], x.get("no") or 0))
+    return {
+        "source": "题库",
+        "matched": len(pool),
+        "count": len(picked),
+        "items": picked,
+        "说明": ("这些是题库里的原题（只给题号+知识点+图片，题干与答案不从工具返回）。"
+                 "逐个贴给学生；学生作答后用 grade_answers(paper_source=对应卷名, "
+                 "qids=[该题 qid], user_answer_text=...) 批改。"),
+    }
+
+
+def wrong_questions_payload(paper: dict, wrong_qids: list) -> dict:
+    """把"做错过的题"取回来重做（A5 / D4：重出**原题**，不让模型变体）"""
+    source = paper["source"]
+    qids = [str(q) for q in (wrong_qids or [])]
+    all_qs, numbers, by_qid = paper_index(source)
+    items = [_question_brief(source, by_qid[qid], numbers)
+             for qid in qids if qid in by_qid]
+    items.sort(key=lambda x: (x.get("no") or 0))
+    if not items:
+        return {"count": 0, "hint": "这份卷子没有记录到错题（或错题已全部做对）"}
+    return {
+        "source": "题库",
+        "paper": source,
+        "count": len(items),
+        "items": items,
+        "说明": ("错题重做：只贴题号+知识点+图片，**不要贴题干或答案**。"
+                 "学生作答后用 grade_answers(paper_source=…, qids=[这些 qid], "
+                 "user_answer_text=…) 批改；做对的会被移出错题本。"),
+    }
+
+
+def answers_payload(paper: dict, no=None, qids=None) -> dict:
+    """只取**答案**（A3-③ / B6：学生索要答案时直接给，且必须与题库一致）
+
+    为什么不直接复用 explain_payload 的返回：那个里面带题面与评分要点，
+    "要答案"那一轮不需要；更重要的是**答案必须逐字一致** —— 模型自己写会把
+    字母写错（编答案比不给更糟）。
+    """
+    payload = explain_payload(paper, no=no, qids=qids)
+    if payload.get("error"):
+        return payload
+    items = [{
+        "no": q.get("no"),
+        "qid": q.get("qid"),
+        "type": q.get("type"),
+        "topic": q.get("topic", ""),
+        "answer": q.get("参考答案"),
+    } for q in payload.get("questions", [])]
+    return {
+        "count": len(items),
+        "answers": items,
+        "说明": ("这是题库答案原文 —— **原样转述**，不要改写、不要补充，"
+                 "也不要顺带批改（学生只是要答案）。"),
+    }

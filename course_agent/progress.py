@@ -226,9 +226,25 @@ def record_quiz(payload: dict, thread_id=None) -> None:
 
 
 def record_grade(paper: str, payload: dict, thread_id=None) -> None:
-    """记批改结果（来自 `grade_answers` 的返回）—— 把当前那一组标成"已批改" """
+    """记批改结果（来自 `grade_answers` 的返回）
+
+    两件事：
+      · 把当前那一组标成"已批改"并记分数
+      · **维护错题集合**（A5）：这批做错的 qid 加进来，这批做对的从里面移出
+        —— 决定 D4：「做对就移出、做错保留」。"重做错题"直接读 `wrong_qids`。
+
+    `grade_answers` 的 `results[]` 每条都带 qid / correct（我查过
+    `qbank.grade_answer` 的实现），所以**不需要改任何工具**。
+    `correct is None`（需人工/模型评分但没判出来）**不算错题** —— 不能凭猜。
+    """
     if not paper or not isinstance(payload, dict) or "total" not in payload:
         return
+
+    results = payload.get("results") or []
+    wrong_now = {str(r.get("qid")) for r in results
+                 if r.get("qid") and r.get("correct") is False}
+    right_now = {str(r.get("qid")) for r in results
+                 if r.get("qid") and r.get("correct") is True}
 
     def _apply(data):
         rec = data["papers"].setdefault(str(paper).strip(), {"groups": {}})
@@ -242,10 +258,18 @@ def record_grade(paper: str, payload: dict, thread_id=None) -> None:
             "accuracy": payload.get("accuracy"),
             "at": _now(),
         }
+        # 错题集合：做对的移出、做错的加进来（见 D4）
+        old_wrong = {str(q) for q in (rec.get("wrong_qids") or [])}
+        merged = (old_wrong - right_now) | wrong_now
+        if merged:
+            rec["wrong_qids"] = sorted(merged)
+        else:
+            rec.pop("wrong_qids", None)
         if gi is not None:
             g = rec.setdefault("groups", {}).setdefault(str(gi), {})
             g["status"] = "已批改"
             g["score"] = score
+            g["wrong"] = len(wrong_now)
             g["at"] = _now()
         return True
 
@@ -271,11 +295,14 @@ def _paper_line(rec: dict) -> str:
     last = rec.get("last_grade") or {}
     score = (f"，上次 {last.get('correct')}/{last.get('total')}"
              if last.get("total") else "")
+    # 错题（A5/D4）：做对就移出，所以这里的数量就是"还没弄懂的"
+    wrong = len(rec.get("wrong_qids") or [])
+    wrong_txt = f"，错题 {wrong} 道待重做" if wrong else ""
     if nxt is not None:
-        return f"做到第 {gi} 组，下一组是第 {nxt} 组{score}"
+        return f"做到第 {gi} 组，下一组是第 {nxt} 组{score}{wrong_txt}"
     if cur:
-        return f"已刷完{score}"
-    return f"还没开始{score}"
+        return f"已刷完{score}{wrong_txt}"
+    return f"还没开始{score}{wrong_txt}"
 
 
 def summary(max_lines: int = 8) -> str:
@@ -328,14 +355,24 @@ def brief() -> str:
     opts = []
     # ① 继续学：挑最近活跃的那门课
     active = [(c.get("last_at") or "", c) for c in courses.values() if c.get("last")]
+    last_sec, last_course = None, ""
     if active:
         active.sort(reverse=True)
         bucket = active[0][1]
+        last_course = next((c for c, b in courses.items() if b is bucket), "")
         sec = (bucket.get("sections") or {}).get(bucket.get("last"))
         if sec:
+            last_sec = sec
             opts.append(f"接着学：从 {_section_line(sec)} 继续（学习模式）")
     # ② 自拟练习（**始终给**：用户明确要的四选一里必须有它）
-    opts.append("自拟练习：围绕最近学的知识点出 3~5 道题（AI 出题）")
+    # 带上**当前章节**当 topic —— 否则"出几道题练手"要靠模型自己从进度里猜
+    topic = ""
+    if last_sec:
+        topic = last_sec.get("chapter") or last_sec.get("title") or ""
+    if topic and last_course:
+        opts.append(f"自拟练习：围绕「{last_course} · {topic}」出 3~5 道题（AI 出题）")
+    else:
+        opts.append("自拟练习：围绕最近学的知识点出 3~5 道题（AI 出题）")
     # ③ 整套卷子：优先接上"刷到一半"的那份
     half = [(p, r) for p, r in papers.items() if not r.get("finished")]
     if half:

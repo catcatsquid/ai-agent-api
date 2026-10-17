@@ -1,0 +1,43 @@
+{
+  "mode": "plan",
+  "truth": {
+    "paper_source": "2025年秋操作系统期末试题（回忆版）",
+    "group_index": 1
+  },
+  "id": "quiz_f1_all_answered",
+  "why": "刷题支线 F1：学生把这一组**全答完**，必须真的调 grade_answers 批改（不许自己判对错）。这是整条刷题链路最基本的形态，其它分支都以它为基线。",
+  "turns": [
+    {
+      "user": "给我出《2025年秋操作系统期末试题（回忆版）》的第 1 组题",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 20,
+        "require_streaming": true,
+        "tools_any_of": [
+          "get_paper_questions"
+        ],
+        "min_images": 3,
+        "images_all_from_bank": true,
+        "no_stem_leak": true,
+        "no_reference_leak": true
+      }
+    },
+    {
+      "user": "1.C 2.B 3.D 4.A 5.B",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 20,
+        "require_streaming": true,
+        "tools_any_of": [
+          "grade_answers"
+        ],
+        "tools_none_of": [
+          "explain_question",
+          "get_answers"
+        ]
+      }
+    }
+  ]
+}
