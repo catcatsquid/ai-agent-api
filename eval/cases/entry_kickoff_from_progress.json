@@ -1,0 +1,51 @@
+{
+  "id": "entry_kickoff_from_progress",
+  "why": "这是 1.8.0 那个功能的**唯一验收场景**：新会话只说「我想学习」时，必须①报出真实进度（课程/章节/半刷的卷子）②给出四种模式（接着学/自拟练习/刷题/复习）③**不反问「你之前学到哪」**④**一个工具都不调**（不许直接开讲）。实测不加守卫时它会直接 read_section 讲一整节，学生根本没机会选。判据比对的是 seed 里的真值，不猜关键词。",
+  "mode": "plan",
+  "seed": {
+    "study": [
+      {
+        "mode": "学习",
+        "course": "操作系统",
+        "chapter": "死锁",
+        "section": "死锁的四个必要条件",
+        "source": "03-OS调度.pdf",
+        "status": "讲解中"
+      }
+    ],
+    "quiz": [
+      {
+        "paper": "2025年秋操作系统期末试题（回忆版）",
+        "type": "选择题",
+        "group_index": 1,
+        "next_group_index": 2,
+        "qids": [
+          "2025OS_Q1",
+          "2025OS_Q2"
+        ]
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "我想学习",
+      "expect": {
+        "tools_exactly_empty": true,
+        "must_contain": [
+          "操作系统",
+          "死锁",
+          "自拟练习"
+        ],
+        "forbid_phrases": [
+          "你之前学到哪",
+          "你学到哪了",
+          "我们来看这一节"
+        ],
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 40,
+        "require_streaming": true
+      }
+    }
+  ]
+}

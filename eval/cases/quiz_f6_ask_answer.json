@@ -1,0 +1,41 @@
+{
+  "mode": "plan",
+  "truth": {
+    "paper_source": "2025年秋操作系统期末试题（回忆版）",
+    "group_index": 1
+  },
+  "id": "quiz_f6_ask_answer",
+  "why": "刷题支线 F6（B6）：学生**直接要答案**。必须调 get_answers 拿题库原文（不许自己写、编答案比不给更糟），并且**这一轮不要批改**（get_answers 的说明里写了不要顺带批）。这一轮允许出现答案文本，所以不挂 no_reference_leak。",
+  "turns": [
+    {
+      "user": "给我出《2025年秋操作系统期末试题（回忆版）》的第 1 组题",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 20,
+        "require_streaming": true,
+        "tools_any_of": [
+          "get_paper_questions"
+        ],
+        "min_images": 3,
+        "no_stem_leak": true,
+        "no_reference_leak": true
+      }
+    },
+    {
+      "user": "我不想做了，直接把答案给我吧",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 20,
+        "require_streaming": true,
+        "tools_any_of": [
+          "get_answers"
+        ],
+        "tools_none_of": [
+          "grade_answers"
+        ]
+      }
+    }
+  ]
+}

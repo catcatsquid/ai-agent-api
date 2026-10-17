@@ -220,6 +220,31 @@ def run_checks(expect: dict, turn: dict, truth: dict) -> list[dict]:
     for name in expect.get("tools_none_of", []):
         add(f"没有调用 {name}", name not in tools, f"实际工具轨迹: {tools}")
 
+    # `tools_all_of`：**每一个**都得调（如"批已答的 + 讲不会的"必须同时有
+    # grade_answers 与 explain_question）。`tools_any_of` 是任一命中，别混用。
+    all_of = expect.get("tools_all_of") or []
+    if all_of:
+        missing_all = [name for name in all_of if name not in tools]
+        add(f"同时调用了 {' + '.join(all_of)}", not missing_all,
+            f"缺少 {missing_all}；实际工具轨迹: {tools}")
+
+    # 开场那一轮必须**一个工具都不调**（先展示进度让用户选，不许直接开讲）。
+    # `tools_none_of` 只能列黑名单，列不全就漏 —— 这条是白名单式的硬判据。
+    if expect.get("tools_exactly_empty"):
+        add("这一轮一个工具都没调", not tools, f"实际工具轨迹: {tools}")
+
+    # 正文里必须出现的字符串（确定性；调用方自己负责挑稳定、不会因措辞变化的片段）
+    must = expect.get("must_contain") or []
+    if must:
+        missing = [s for s in must if s not in answer]
+        add(f"正文提到了 {'/'.join(must)}", not missing, f"缺少: {missing}")
+
+    # 正文里**不许**出现的说法（如"你之前学到哪了"—— 进度已知就不该反问）
+    forbid = expect.get("forbid_phrases") or []
+    if forbid:
+        hits = [s for s in forbid if s in answer]
+        add("正文里没有不该出现的反问/说法", not hits, f"命中: {hits}")
+
     for name, want in (expect.get("args") or {}).items():
         # 参数校验：只要生产端点没回传参数，就退化为"至少调了这个工具"
         # （`/qa/stream` 的进度事件里目前不含参数；要精确校验得让端点带上 args）
@@ -321,6 +346,42 @@ def run_case(case: dict, base: str, attempts: int) -> dict:
                          for c in detail if not c["ok"]]}
 
 
+def apply_seed(case: dict) -> str:
+    """把用例声明的"预置进度"写进评测专用的进度文件（跨会话行为才测得到）
+
+    ## 为什么必须 fail-closed
+
+    进度会**改变模型行为**（有进度时开场会先让用户选模式）。所以：
+      · 用例里声明了 `seed`，就**必须**设了 `PROGRESS_FILE` 才能跑 —— 否则直接退出，
+        免得把种子写进用户的真实 `runtime/progress.json`；
+      · 起评测服务时要用**同一个** `PROGRESS_FILE`（服务端读它），见 eval/README。
+
+    返回一句人话说明（写进报告和终端），空 seed 返回 ""。
+    """
+    seed = case.get("seed") or {}
+    if not seed:
+        return ""
+    import os
+
+    if not os.environ.get("PROGRESS_FILE"):
+        raise SystemExit(
+            f"用例 {case['id']} 声明了 seed，但没有设置 PROGRESS_FILE。\n"
+            "请用评测专用的进度文件起服务并跑评测，例如：\n"
+            '  $env:PROGRESS_FILE="$PWD\\.tmp\\eval-progress.json"\n'
+            "（否则种子会写进你真实的学习进度）")
+
+    from course_agent import progress
+
+    progress.reset()
+    for pos in seed.get("study") or []:
+        progress.record_study(pos, thread_id="seed-评测预置")
+    for quiz in seed.get("quiz") or []:
+        progress.record_quiz(quiz, thread_id="seed-评测预置")
+    for g in seed.get("grade") or []:
+        progress.record_grade(g.get("paper", ""), g, thread_id="seed-评测预置")
+    return progress.summary()
+
+
 def delete_threads(base: str, thread_ids: list[str], mode: str = "plan") -> int:
     """删掉评测自己造的会话 —— 评测不该把垃圾留在学生的会话库里
 
@@ -406,6 +467,9 @@ def main() -> int:
     for case in cases:
         print(f"\n>> {case['id']}")
         print(f"   为什么存在: {case.get('why', '(未写)')}")
+        seeded = apply_seed(case)
+        if seeded:
+            print(f"   预置进度:\n{seeded}")
         r = run_case(case, args.base, args.attempts)
         results.append(r)
         for c in r["failures"]:

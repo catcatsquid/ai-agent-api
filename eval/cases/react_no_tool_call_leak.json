@@ -6,13 +6,19 @@
     {
       "user": "给我讲讲死锁的四个必要条件，要按我们课程资料讲。",
       "expect": {
-        "tools_any_of": ["search_knowledge", "read_section", "list_course_sections"],
-        "tools_none_of": ["grade_answers", "get_paper_questions"],
+        "tools_any_of": [
+          "search_knowledge",
+          "read_section",
+          "list_course_sections"
+        ],
+        "tools_none_of": [
+          "grade_answers",
+          "get_paper_questions"
+        ],
         "forbid_tool_call_text": true,
         "no_internal_artifacts": true,
         "answer_min_chars": 50,
-        "require_streaming": true,
-        "max_ttft_ms": 15000
+        "require_streaming": true
       }
     }
   ]

@@ -1,0 +1,22 @@
+{
+  "id": "quiz_a2_topic_practice",
+  "mode": "plan",
+  "why": "刷题支线：学生说「想练几道**死锁**的题」—— 这是**按知识点**的练习，必须用practice_by_topic 从题库抽题，**不要**拉试卷清单（题库没有按知识点组卷，给菜单等于没满足需求）。",
+  "turns": [
+    {
+      "user": "想练几道死锁的选择题",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "tools_any_of": [
+          "practice_by_topic"
+        ],
+        "tools_none_of": [
+          "list_papers"
+        ],
+        "answer_min_chars": 20,
+        "require_streaming": true
+      }
+    }
+  ]
+}

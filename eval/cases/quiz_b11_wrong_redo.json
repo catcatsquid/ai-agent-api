@@ -1,0 +1,59 @@
+{
+  "id": "quiz_b11_wrong_redo",
+  "mode": "plan",
+  "why": "刷题收尾（B11/A5）：整套做完后问「重做错题，还是下一套」；学生选**重做错题**时必须调 practice_wrong 把**原题**取回来（不许让模型编新题）。错题本由 seed 预置，判据是工具轨迹 + 不许出现自拟题。",
+  "seed": {
+    "quiz": [
+      {
+        "paper": "2025年秋操作系统期末试题（回忆版）",
+        "type": "选择题",
+        "group_index": 1,
+        "next_group_index": null,
+        "qids": [
+          "2025OS_Q1",
+          "2025OS_Q2"
+        ]
+      }
+    ],
+    "grade": [
+      {
+        "paper": "2025年秋操作系统期末试题（回忆版）",
+        "total": 2,
+        "correct": 0,
+        "wrong": 2,
+        "accuracy": 0.0,
+        "results": [
+          {
+            "qid": "2025OS_Q1",
+            "correct": false,
+            "no": 1
+          },
+          {
+            "qid": "2025OS_Q2",
+            "correct": false,
+            "no": 2
+          }
+        ]
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "我要重做错题",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "tools_any_of": [
+          "practice_wrong",
+          "get_learning_progress"
+        ],
+        "tools_none_of": [
+          "list_papers",
+          "prepare_custom_quiz"
+        ],
+        "answer_min_chars": 20,
+        "require_streaming": true
+      }
+    }
+  ]
+}

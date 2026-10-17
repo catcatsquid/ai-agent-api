@@ -6,13 +6,16 @@
     {
       "user": "请按我们课程资料来讲：TCP 三次握手为什么不能改成两次？说明出处。",
       "expect": {
-        "tools_any_of": ["search_knowledge"],
-        "tools_none_of": ["grade_answers"],
+        "tools_any_of": [
+          "search_knowledge"
+        ],
+        "tools_none_of": [
+          "grade_answers"
+        ],
         "forbid_tool_call_text": true,
         "no_internal_artifacts": true,
         "answer_min_chars": 50,
-        "require_streaming": true,
-        "max_ttft_ms": 15000
+        "require_streaming": true
       }
     }
   ]

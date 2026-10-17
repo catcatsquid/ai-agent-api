@@ -175,6 +175,57 @@ class TestToolsAnyOfMeansAnyOne:
         assert "15000" in checks[0]["check"], checks[0]["check"]
 
 
+class TestOpeningCriteria:
+    """开场那轮的三个新判据（W8/W9）：不调工具、必须说到真值、不许反问"""
+
+    def _checks(self, tools, answer, expect):
+        turn = {"answer": answer, "tools": tools, "content_events": 1,
+                "answer_source": "content", "ttft_ms": 100, "total_ms": 200}
+        return runner.run_checks(expect, turn, {})
+
+    def test_tools_exactly_empty(self):
+        assert self._checks([], "…", {"tools_exactly_empty": True})[0]["ok"] is True
+        assert self._checks(["read_section"], "…",
+                            {"tools_exactly_empty": True})[0]["ok"] is False
+
+    def test_must_contain(self):
+        assert self._checks([], "你学到死锁那节了",
+                            {"must_contain": ["死锁"]})[0]["ok"] is True
+        bad = self._checks([], "继续学吧", {"must_contain": ["死锁"]})
+        assert bad[0]["ok"] is False and "死锁" in bad[0]["detail"]
+
+    def test_forbid_phrases(self):
+        assert self._checks([], "你之前学到哪了？",
+                            {"forbid_phrases": ["你之前学到哪"]})[0]["ok"] is False
+        assert self._checks([], "你上次在死锁这一节",
+                            {"forbid_phrases": ["你之前学到哪"]})[0]["ok"] is True
+
+
+class TestSeedRequiresAnIsolatedProgressFile:
+    """seed 必须 fail-closed：没设 PROGRESS_FILE 就不许跑，否则会写进真实进度"""
+
+    def test_it_refuses_without_progress_file(self, monkeypatch):
+        monkeypatch.delenv("PROGRESS_FILE", raising=False)
+        with pytest.raises(SystemExit, match="PROGRESS_FILE"):
+            runner.apply_seed({"id": "demo", "seed": {"study": [{"course": "操作系统"}]}})
+
+    def test_it_seeds_when_isolated(self, monkeypatch, tmp_path):
+        from course_agent import progress
+
+        target = tmp_path / "p.json"
+        monkeypatch.setenv("PROGRESS_FILE", str(target))
+        monkeypatch.setattr(progress, "PROGRESS_PATH", target)
+        summary = runner.apply_seed({"id": "demo", "seed": {
+            "study": [{"course": "操作系统", "chapter": "死锁",
+                       "section": "死锁四个条件", "source": "03-OS调度.pdf"}],
+            "quiz": [{"paper": "某卷", "group_index": 1,
+                      "next_group_index": 2, "qids": ["q1"]}]}})
+        assert "操作系统" in summary and "某卷" in summary
+
+    def test_no_seed_is_a_no_op(self):
+        assert runner.apply_seed({"id": "x"}) == ""
+
+
 class TestConsoleEncoding:
     """中文 Windows 的控制台是 cp936，打印 `▶`/`✗` 曾直接 UnicodeEncodeError
 

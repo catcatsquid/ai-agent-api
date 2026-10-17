@@ -168,6 +168,53 @@ class TestQuizProgress:
         assert progress.load()["papers"]["某卷"]["last_grade"]["correct"] == 3
 
 
+class TestWrongQuestions:
+    """A5 错题记录（D4）：做错留下、做对移出；需人工判定的（correct=None）不算错"""
+
+    PAPER = "2025年秋操作系统期末试题（回忆版）"
+
+    def _grade(self, rows):
+        progress.record_grade(self.PAPER, {
+            "total": len(rows),
+            "correct": sum(1 for r in rows if r[1] is True),
+            "wrong": sum(1 for r in rows if r[1] is False),
+            "accuracy": 0.5,
+            "results": [{"qid": q, "correct": c, "no": i + 1}
+                        for i, (q, c) in enumerate(rows)]})
+
+    def _wrong(self):
+        return progress.load()["papers"][self.PAPER].get("wrong_qids") or []
+
+    def test_wrong_qids_are_recorded(self):
+        self._grade([("q1", False), ("q2", True), ("q3", False)])
+        assert self._wrong() == ["q1", "q3"]
+
+    def test_getting_it_right_removes_it(self):
+        """D4：做对就移出（否则"重做错题"永远做不完）"""
+        self._grade([("q1", False), ("q2", False)])
+        self._grade([("q1", True)])
+        assert self._wrong() == ["q2"], self._wrong()
+
+    def test_still_wrong_stays(self):
+        self._grade([("q1", False)])
+        self._grade([("q1", False)])
+        assert self._wrong() == ["q1"]
+
+    def test_manual_grading_is_not_counted_as_wrong(self):
+        """correct=None 是"没判出来"，不能凭猜塞进错题"""
+        self._grade([("q1", None), ("q2", False)])
+        assert self._wrong() == ["q2"]
+
+    def test_summary_shows_the_count(self):
+        self._grade([("q1", False), ("q2", False)])
+        assert "错题 2 道" in progress.summary()
+
+    def test_it_is_visible_through_the_tool(self):
+        self._grade([("q1", False)])
+        data = json.loads(tools.get_learning_progress.invoke({}))
+        assert data["detail"]["papers"][self.PAPER]["wrong_qids"] == ["q1"]
+
+
 # ============================================================
 # ⑤ 开场建议（这个功能的本意）
 # ============================================================
@@ -284,6 +331,16 @@ class TestItReachesTheModel:
         prompt = self._capture(monkeypatch, nodes.planner_node)
         assert "已知进度" not in prompt
 
+    def test_a_concept_question_on_a_fresh_thread_gets_no_progress_block(self, monkeypatch):
+        """回归（评测 `knowledge_answer_streams` 抓到的）：新会话里问概念题，
+        进度块一注入就把"某卷做到第 1 组"也带进去 → planner 误判成刷题，
+        真的调了 get_paper_questions + grade_answers。空会话不是注入的理由。
+        """
+        progress.record_study(STUDY)
+        prompt = self._capture(monkeypatch, nodes.planner_node,
+                              user="死锁的四个必要条件是什么？")
+        assert "已知进度" not in prompt, prompt[-300:]
+
     def test_the_tool_returns_the_summary(self):
         progress.record_quiz({"paper": "某卷", "group_index": 1,
                               "next_group_index": 2, "qids": ["q1"]})
@@ -362,10 +419,18 @@ class TestOpeningNeverDropsAnOption:
     def test_ensure_modes_appends_what_is_missing(self):
         progress.record_study(STUDY)
         out, added = progress.ensure_modes("1. 接着学\n2. 刷题\n3. 复习")
-        assert added == ["自拟练习：围绕最近学的知识点出 3~5 道题（AI 出题）"], added
+        assert len(added) == 1 and added[0].startswith("自拟练习"), added
         assert "自拟练习" in out
         assert out.startswith("1. 接着学"), "原有内容不许被重排"
         assert "2. 自拟" not in out, "补进来的那条不许带原编号"
+
+    def test_custom_practice_option_names_the_current_chapter(self):
+        """W2：出题选项要带上**当前章节**，否则模型只能从进度里自己猜 topic"""
+        progress.record_study(STUDY)
+        text = progress.brief()
+        line = next(ln for ln in text.splitlines() if "自拟练习" in ln)
+        assert "死锁" in line, line
+        assert "操作系统" in line, line
 
     def test_nothing_is_added_when_all_four_are_there(self):
         progress.record_study(STUDY)

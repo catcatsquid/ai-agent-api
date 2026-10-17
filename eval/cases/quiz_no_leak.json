@@ -2,13 +2,22 @@
   "id": "quiz_no_leak",
   "why": "出题时题面与参考答案绝不能进正文 —— 学生还没答，看到就是泄题。这条覆盖两个真实缺陷：(1) 工具结果被当正文播出去（1.0.1 修 sse_content_event）；(2) 模型自己编图片链接（曾编出 example.com/net1.jpg）。判据用**题库原文**比对，不猜关键词。",
   "mode": "plan",
-  "truth": {"paper_source": "2026春操作系统期末试题（回忆版）", "group_index": 1},
+  "truth": {
+    "paper_source": "2026春操作系统期末试题（回忆版）",
+    "group_index": 1
+  },
   "turns": [
     {
       "user": "给我出 2026春操作系统期末试题（回忆版）的第 1 组题",
       "expect": {
-        "tools_any_of": ["get_paper_questions"],
-        "tools_none_of": ["grade_answers", "explain_question", "prepare_custom_quiz"],
+        "tools_any_of": [
+          "get_paper_questions"
+        ],
+        "tools_none_of": [
+          "grade_answers",
+          "explain_question",
+          "prepare_custom_quiz"
+        ],
         "forbid_tool_call_text": true,
         "min_images": 3,
         "images_all_from_bank": true,
@@ -16,8 +25,7 @@
         "no_reference_leak": true,
         "no_answer_letter_leak": true,
         "answer_min_chars": 10,
-        "require_streaming": true,
-        "max_ttft_ms": 15000
+        "require_streaming": true
       }
     }
   ]

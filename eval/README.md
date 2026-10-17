@@ -23,6 +23,29 @@ python -m eval.runner --base http://127.0.0.1:8003 --out eval/reports/try.json
 ```
 
 - **不进 CI**：它要真模型、真额度（和 `pytest tests/` 分开，那套必须离线可跑）
+
+### 需要"预置学习进度"的用例（`seed`）
+
+测"开新窗口说想学习"这类跨会话行为，用例要先有进度。做法：
+
+```powershell
+# ① 起服务与跑评测**用同一个**进度文件（不能是用户真实的 runtime/progress.json）
+$env:PROGRESS_FILE="$PWD\.tmp\eval-progress.json"
+python -m uvicorn course_agent.server:app --port 8003
+# ② 另一个窗口，设同一个变量后跑评测
+$env:PROGRESS_FILE="$PWD\.tmp\eval-progress.json"
+python -m eval.runner --case entry_kickoff_from_progress
+```
+
+用例里这样声明（`study` / `quiz` / `grade` 三段都可选）：
+
+```json
+"seed": { "study": [{"course":"操作系统","chapter":"死锁","section":"…","source":"03-OS调度.pdf"}],
+          "quiz":  [{"paper":"某卷","group_index":1,"next_group_index":2,"qids":["q1","q2"]}] }
+```
+
+**fail-closed**：用例声明了 `seed` 但没设 `PROGRESS_FILE` → 直接退出。否则种子会写进你
+真实的学习进度（而且"本机有多少进度"会改变模型行为，结果不可复现）。
 - **每条用例重复 N 次**：历史上那些缺陷全是"时好时坏"，单次通过没有意义
 - 退出码：全部用例"稳定通过"才 0，否则 1 —— 可以直接用来卡发版
 - **跑评测与 `pytest` 别同时来**：评测要往真实会话库写 thread（跑完自动清），
@@ -83,6 +106,9 @@ python -m eval.runner --base http://127.0.0.1:8003 --out eval/reports/try.json
 | **`require_streaming`** | **流式失效** —— 正文来自 `done` 而不是逐字 `content` |
 | **`max_ttft_ms`** | **首响太慢**（学生盯着转圈） |
 | `args`（部分实现） | 工具参数是否正确（当前 `/qa/stream` 不回报参数，退化为"调了这个工具"） |
+| **`tools_exactly_empty`** | **开场那轮不许调工具** —— 只说"我想学习"时应先报进度让用户选，而不是直接开讲（`tools_none_of` 只能列黑名单，列不全就漏） |
+| **`must_contain`** | 正文必须提到某些字符串（确定性；用于"开场必须带出真实进度"这类真值比对，比对的是 `seed` 里的真值） |
+| **`forbid_phrases`** | 正文不许出现某些说法（如"你之前学到哪"—— 进度已知就不该反问） |
 
 ## 四、指标（每次运行都记录）
 
