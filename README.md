@@ -1,173 +1,183 @@
-# AI Agent 学习项目
+# 知识寻回BOT —— 课程答疑与刷题 Agent
 
-> 哈工大CS大三学生 AI Agent 应用层开发实习准备项目（10周学习路线）
->
-> **当前进度**: 第8周 — 混合检索 + Docker 部署 + 压测 + Web 管理界面
->
-> **当前版本**: `v1.0.0` —— 每个版本变了什么见 [CHANGELOG.md](CHANGELOG.md)
->
-> **目标**: AI Agent 应用层开发实习（寒假实习11月下旬投递）
+> **把课件、课本、历年真题 PDF 变成会出题、会批改、会讲题、讲不清就联网查的对话式助教。**
+> 覆盖操作系统 / 计算机网络两门课：4199 块知识分块 + 125 道结构化真题（题图 + 批改依据），
+> 学生一句自然语言即可「刷题 → 交答案 → 被批改 → 听不懂就追问 → 换个话题也行」。
+
+`Python 3.12` · `LangGraph` · `FastAPI` · `ChromaDB` · `rank_bm25` · `GLM-4-Flash` · `Docker`
+
+| 844 项测试 | 29 条行为评测用例 | 17 个工具 | 26 个 API | CI 全绿 |
+|:--:|:--:|:--:|:--:|:--:|
+| 全离线可跑 · 守卫值守 | 判据化 · 分版本存档 | Function Calling | SSE 流式 | Docker 一键 |
 
 ---
 
-## 项目概览
+## Demo
 
-本项目从零构建了一个**课程知识库问答 Agent**，覆盖操作系统和计算机网络两门课程。Agent 能根据问题类型自主选择知识库检索或网络搜索，支持流式输出和多轮对话。配套 Web 管理界面，支持知识库增量导入、题库检索和在线问答。
+<!-- TODO(投递前必做)：放 8–12 秒无声循环 GIF，内容＝下面黄金路径的第 2→4 步。
+     文件 demo/demo.gif，控制在 5 MB 以内。项目页没有动图，招聘方停留通常 < 10 秒。
+     生成 GIF 后，把下面这行取消注释（现在先注释掉，避免仓库首页出现坏图）。 -->
 
-### 核心能力
+<!-- ![演示](demo/demo.gif) -->
 
-| 能力 | 说明 |
+> **演示动图待补**（`demo/demo.gif`）｜录屏与素材清单见 [`demo/README.md`](demo/README.md)
+
+真实会话形态（`exports/` 里导出的真机对话，不是设计稿）：
+
+```text
+你：我想刷操作系统的题
+它：2024年秋操作系统期末试题（回忆版）(26题：选择20 综合6) / 2025年秋… / 2026春…
+    └ list_papers —— 题量与题型构成来自题库，不是模型编的
+
+你：2024 年那份
+它：第 1/10 组（选择题 5 题）1. 进程调度 [题图] 2. 线程状态转换 [题图] … 共 5 张真题原图
+    └ get_paper_questions —— 只返回题号/题型/知识点/题图
+
+你：ACBDA
+它：1.A 正确 / 2.C 正确 / 3.B 正确 / 4.D 正确 / 5.A 错，正确答案 D  ↓ 只讲错的那道
+    └ grade_answers
+
+你：第 5 题为什么选 D
+它：……此刻才去取参考答案
+    └ explain_question
+
+你：死锁的四个必要条件是什么
+它：……带来源引用作答，命中课本/课件原文
+    └ search_knowledge（混合检索 + Rerank）
+
+你：2025 年图灵奖给了谁
+它：库里没有 → 自动联网查，并说明"这不是课程资料里的内容"
+    └ web_search
+```
+
+本地启动后访问 `http://127.0.0.1:8003/chat` 直接体验。完整演示脚本见 [`demo/README.md`](demo/README.md)。
+
+---
+
+## 核心能力
+
+| 能力 | 实现 |
 |------|------|
-| RAG 混合检索 | 向量+BM25融合排序 + LLM Rerank + LLM查询改写 |
-| Plan-and-Execute | planner 生成 JSON 计划 → executor 批量执行 → synthesizer 综合回答 |
-| ReAct 模式 | LLM 循环推理 + 工具调用 + 守卫节点，可切换 `mode=react` |
-| Web 搜索 | 课外问题自动触发 web_search，弥补知识库覆盖不足 |
-| SSE 流式输出 | 节点级进度推送 + LLM token 级逐字输出 |
-| 多轮对话 | 基于 MemorySaver + thread_id 的会话持久化 + 滑动窗口/LLM摘要压缩 |
-| 认证系统 | API Key + JWT 混合认证（默认关闭，见下方"鉴权开关"） |
-| 中间件 | 限流 + CORS + 请求日志 + trace_id 全链路追踪 |
-| Web 管理界面 | 知识库管理(4Tab) + 聊天页面 + 题库检索 |
-| 题库系统 | 125题结构化JSON + VLM图片理解 + 知识点分类 |
-
-> ⚠️ **关于两条 Agent 路径 —— 它们现在都能承载刷题，定位如下**
->
-> | | LangGraph（Plan-and-Execute / ReAct） | 手写循环（`tutor_agent.py`） |
-> |---|---|---|
-> | 定位 | **路线内；推荐作为产品主路径** | **第 9 周「手写 Agent」的实现** + 会话守卫更全 |
-> | 刷题主流程 | ✅ 跨轮游标、自拟题、讲题都已补齐 | ✅ |
-> | 会话守卫 | ❌ 无（没有"没看到题目"重发、没有一次确定性纠偏） | ✅ 有 |
-> | 上下文治理 | 摘要压缩（`memory.py`） | 摘要 + 工具结果压缩 + 历史裁剪 |
->
-> **两条路径的业务逻辑已合并到 `course_agent/quiz_service.py` 一份实现**，
-> 各自只保留"外壳"（一边返回 JSON + 显式参数，一边返回 dict + 会话游标 + `_guide`），
-> 所以维护成本不是双份。
->
-> 关于手写这条，需要如实说明两点：
-> 1. 它最初兼着一个**对照实验**的目的 —— 跟「Python 状态机版学习/复习模式」
->    比一比"LLM 主导是不是更灵活"。这个对照**没有做完**：另一半
->    （LangGraph 版助教 `lg_tutor.py`）从未实现。而状态机版
->    （`learn.py` / `review.py`）已被它取代并删除。
-> 2. 它**不是按路线周次做的**，现在也**不从界面进入** —— 界面上已撤掉模式切换，
->    日常只有 BOT 一条产品路径。手写助教只保留**模块与测试**
->    （`course_agent/tutor_agent.py`、`tests/test_tutor_agent.py`、
->    `tests/test_tutor_reference.py`，测试照跑），**HTTP 面与前端接线都已移除**，
->    定位是**冻结的对照实现**：新能力只加到 BOT，它不再跟着演进。
->    撤掉界面入口的直接原因：两条实现经同题对比后**能力已等价**
->    （同一段学生脚本 5 个场景：16好/3坏 vs 18好/2坏），
->    留两个入口只增加"该用哪个"的困惑，而每加一个能力维护两遍是真实成本。
->    （移除的完整理由与"想恢复要怎么做"见 `chat.html` 侧栏那段注释。）
->
->    完整对比与追平过程已整理成文档，但目前**不随仓库分发**
->    （AI 辅助成稿、作者正在逐篇核实 —— 见 [docs/](docs/README.md)）。
->
-> 另外，Plan 图曾经在刷题流程上是**坏的**（会编造题目和图片链接），
-> 根因是它**主动丢弃工具结果**导致跨轮状态无处安放 —— 排查过程同上。
->
-> 项目现状请以**代码与测试**为准：`tests/` 里的断言是当时真实验证过的不变量。
+| RAG 混合检索 | 向量 + BM25 融合（0.6/0.4）→ LLM 查询改写（保留原查询）→ LLM Rerank；课件/笔记优先，不足回退课本 |
+| Agent 双推理模式 | Plan-and-Execute 与 ReAct 在同一张 LangGraph 图上，`mode` 参数切换 |
+| 工具调用 | 17 个工具（检索 / 刷题 / 学习复习 / 统计 / 进度），Function Calling 由模型自主规划 |
+| 刷题与批改 | 分组出题（选择 5 题/组）、多种答案格式解析（`1.D`、`DBDAC`、`全都选A`）、自动批改、按点讲解 |
+| SSE 流式输出 | `start` / `node` / `content` / `done` / `error` 五类事件：节点进度 + 正文逐字 + done 校准 |
+| 多轮对话 | `thread_id` + checkpoint 持久化；滑动窗口 + LLM 摘要压缩治理长上下文 |
+| Web 管理后台 | 知识库概览 / 检索测试 / 增量导入 / 题库检索（原生 JS，零框架） |
 
 ---
 
-## 技术栈
+## 最值得看的三个设计
 
-- **Python 3.12**
-- **LangGraph + LangChain** — Agent 图结构编排
-- **ChromaDB** — 向量数据库持久化
-- **rank_bm25** — BM25 关键词检索
-- **FastAPI + Uvicorn** — API 服务
-- **智谱 GLM-4-Flash** — LLM（含 web_search 能力）
-- **智谱 Embedding-3** — 向量嵌入
-- **PyMuPDF** — PDF 文字提取
-- **Locust** — 压力测试
+只看三分钟的话，看这三段。
+
+### 1. 评测是地基，不是附属品 —— 它抓出过一个「上线即残废」的 bug
+
+`pytest` 回答"代码对不对"，回答不了"学生是不是 35 秒才看到第一个字"。所以另建一层 [`eval/`](eval/README.md)：
+脚本化用例 + **全部机器可判定**的判据 + 按版本归档、可 `git diff` 的报告。
+
+- 29 条用例覆盖出题 / 批改 / 讲题 / 学习 / 复习 / 意图矩阵，每条必须写 `why`（防的是哪个真实缺陷）
+- 判据示例：`no_stem_leak`（题面不许进正文，用题库原文切片比对）、`images_all_from_bank`（不许编图片链接）、
+  `no_internal_artifacts`（写给模型看的 JSON 不许播给学生）、`require_streaming`、`max_ttft_ms`、`tools_exactly_empty`
+- 三条防自欺纪律：**必须有"最低门槛"判据**（否则空回答会让所有"不许出现 X"的判据真空通过）、
+  **评测集要被变异验证**（改坏代码必须变红）、**不许为了让评测变绿而改判据**
+
+它抓到的那个 bug：
+
+> v1.7.1 的报告里，12 轮对话的 `content` 事件数**全是 0**。根因：自写的 `SimpleLLM` 不是 LangChain ChatModel
+> （只实现 `invoke`/`bind_tools`），而 `stream_mode="messages"` 只认实现了 `_stream` 的 Runnable ——
+> **逐字流式在生产里从未生效**，学生等约 33 秒后整段答案弹出。
+> 640+ 项测试没抓到，因为流式用例用的是自带 `_stream` 的假模型，**从没跑过生产那个 LLM 对象**；
+> 前端又有 `done.answer` 兜底，于是"能用，只是慢"。修完后加纪律：`tests/test_llm_streaming.py`
+> **只对生产 llm 对象**下判据，并做变异验证。
+
+### 2. 把「呈现约束」放进**工具返回值**，而不是 system prompt
+
+刷题 Agent 最容易出三类事故：**泄题**（还没答就写出答案）、**缺图**（真题没图没法做）、
+**编链接**（曾编出 `example.com/net1.jpg`）。常规做法是在 prompt 里写"不许泄题"，本项目换了条路：
+
+- `get_paper_questions` 的返回值只有题号 / 题型 / 知识点 / 题图 —— 题干和参考答案**根本不进上下文**，模型想泄也没得泄
+- 每个工具结果的 `_guide` 字段说明"这一步该怎么呈现"（报出组内几题、把图贴出来、不要念答案）
+- 于是 system prompt 只描述人设与能力，交互保持自然，而硬约束跟着数据走、不会被上下文冲掉
+
+这条设计有 8 条评测用例专门守着。
+
+### 3. 检索阈值：归一化融合分**不能**当判据
+
+融合分按最大值归一化，排名第一恒 ≥ 0.6，**只能排序**；判断"库里到底有没有相关内容"必须用绝对相似度。
+而 ChromaDB 返回的是 L2 **距离**不是相似度，单位向量下要换算 `sim = 1 - d²/2`，否则域外查询（`d>1`）会算出负分。
+
+实测边界：**域内最低 0.665 / 域外最高 0.524** → 阈值取 0.55，不足则两级回退（先回退课本 → 仍不足则联网）。
 
 ---
 
-## 项目结构
+## 架构
+
+```text
+                  ┌───────────── FastAPI (course_agent/server.py) ─────────────┐
+ chat.html        │ /qa/stream SSE   /kb/* 知识库   /qb/* 题库   /auth/login    │
+ kb.html          │ 限流 · CORS · 请求日志 · trace_id · JWT/API Key（默认关闭） │
+                  └───────────────────────────┬───────────────────────────────┘
+                                              │
+                    ┌─────────────────────────┴─────────────────────────┐
+  plan（默认）      │  planner ──▶ executor ──▶ [route] ──▶ synthesizer ──▶ END│
+                    │      │            │                                   │
+  react             │   llm ──▶ should_continue ──▶ tools / force_search     │
+                    │                 └──────循环，轮数硬上限──────┘         │
+                    │        17 个工具：检索 / 刷题 / 学习复习 / 统计 / 进度   │
+                    └───────┬─────────────────────────────┬─────────────────┘
+                            │                             │
+        ┌───────────────────┴──────────┐   ┌──────────────┴──────────────┐
+        │ rag_tool.py                  │   │ qbank.py                    │
+        │ 混合检索 · Rerank · 查询改写   │   │ 125 题 · 题图 · 批改依据      │
+        │ ChromaDB 4199 chunks (2048d) │   │ 6 份真题 · 89 个知识点        │
+        └──────────────────────────────┘   └─────────────────────────────┘
+```
+
+检索流水线：
 
 ```
-ai-agent-learning/
-├── course_agent/                    # LangGraph Agent 核心
-│   ├── graph.py                     # 图结构（Plan-Execute + ReAct 双模式）
-│   ├── state.py                     # AgentState（messages + plan）
-│   ├── nodes.py                     # 节点函数（planner/executor/synthesizer/llm/tools/guard）
-│   ├── tools.py                     # 工具定义（检索/刷题/学习复习/练习统计；完整清单见文件头）
-│   ├── llm.py                       # LLM 配置
-│   ├── server.py                    # FastAPI 服务（/chat + /kb + /qb + /auth + /health）
-│   ├── tutor_agent.py               # LLM 主导的对话式学习助手（路线外实验分支，见上文说明）
-│   ├── qbank.py                     # 题库访问层（加载/分组/批改依据，唯一数据入口）
-│   ├── auth.py                     # 认证系统（API Key + JWT）
-│   ├── middleware.py               # 中间件（限流 + CORS + 请求日志 + trace_id）
-│   ├── memory.py                    # 对话记忆（滑动窗口 + LLM摘要压缩）
-│   ├── errors.py                    # 全局错误处理（重试装饰器 + 安全调用）
-│   ├── logger.py                    # 结构化日志系统（contextvars trace_id）
-│   ├── question_bank.py             # 题库处理脚本（PyMuPDF + VLM + LLM拆题）
-│   └── static/                      # 前端页面
-│       ├── chat.html                # 聊天页面（流式输出 + 推理模式切换）
-│       ├── kb.html                  # 知识库管理页面（4Tab）
-│       └── qb_images/              # 题库图片
-├── knowledge_pipeline/              # 知识处理流水线
-│   ├── pipeline.py                  # 文档调度器
-│   ├── ppt_processor.py             # PPT 处理（文字提取 + VLM 图文理解）
-│   ├── textbook_processor.py        # 课本处理（LLM 生成知识点笔记）
-│   └── image_understanding.py       # VLM 图片理解模块
-├── tests/                           # 单元测试 + 压测
-│   ├── test_errors.py               # 错误处理测试
-│   ├── test_config.py               # 配置管理测试
-│   ├── test_rag_tool.py             # RAG 工具函数测试
-│   ├── test_memory.py              # 对话记忆测试
-│   └── locustfile.py               # Locust 压测脚本
-├── rag_tool.py                      # RAG 工具（混合检索 + Rerank + 查询改写）
-├── build_knowledge.py               # 知识库构建脚本（命令行）
-├── config.py                         # 全局配置（环境变量管理）
-├── Dockerfile                        # Docker 镜像构建
-├── docker-compose.yml               # Docker Compose 编排
-├── data/                            # 课程知识库数据
-│   ├── 操作系统/{ppt,课本,往年题}/
-│   ├── 计算机网络/{lys ppt,往年题}/
-│   └── question_bank/              # 题库（JSON + 图片）
-├── docs/                            # 文档（原有文档已移出仓库，见 docs/README.md）
-├── archive/                         # 归档（旧版本代码）
-└── README.md
+问题 → LLM 查询改写（保留原查询）→ 每个变体混合检索 → 合并去重 + 低质块过滤
+     → 结果不足回退课本 → LLM Rerank → 格式化输出（含补搜提示）
 ```
+
+---
+
+## 可靠性设计（为什么它不是 demo 级玩具）
+
+- **防 Agent 失控**：工具调用轮数硬上限（默认值会放大到数千次调用，实测踩过）；guard node 强制课程问题先检索，防止模型凭记忆作答
+- **防泄题纵深防御**：出题接口只返回题号/知识点/题图，题面与答案不进上下文；仅在批改或学生说「不会」时按需取回
+- **上下文治理**：读时裁剪（state 永保完整历史）、摘要缓存按消息 id 摊还、tool 消息与 `tool_calls` 严格配对
+- **SSE 四层过滤**：来源白名单 + 内部调用标签 + 类型白名单 + 非空过滤，工具返回原文不会泄漏进正文频道
+- **路径安全**：所有文件操作经 `resolve()` + `relative_to(data/)` 校验，防线设在 API 边界而非库层
+- **可观测性**：`contextvars` 存 `trace_id`，贯穿中间件 / 日志 / 错误处理；三层错误模型 + 指数退避重试 + 降级
+
+---
+
+## 量化效果
+
+| 指标 | 结果 | 口径 |
+|------|------|------|
+| 首字响应 TTFT | 33s → **6.5s**（p50） | v1.7.1 → v1.7.2，eval 实测，同上同判据 |
+| `content` 逐字事件 | 0 个/轮 → 517–613 个/轮 | 同上 |
+| 行为评测判据 | 202 / 204 通过 | v1.7.3 存档（6 用例 × 3 attempts） |
+| 补搜提示准确率 | 域内/域外 12 条样本 **12/12** | 修复前 7/12 |
+| 测试 | **844** 项 pytest + 52 项前端断言 + 服务探活 | CI 每次 push 自动跑 |
+
+> 评测走真实 HTTP + SSE + 真模型；判据全部机器可判（工具轨迹 / 泄漏原文比对 / 流式门槛），报告按版本存档可 diff。
+> v1.7.3 之后用例已扩到 29 条，报告待重跑归档 —— 见 Roadmap。
 
 ---
 
 ## 快速开始
 
-### 1. 环境配置
-
 ```bash
-# 安装依赖 —— 用**锁文件**，与 CI、开发机完全一致
-pip install -r requirements.lock
-
-# 配置 .env 文件
-# 需要：智谱 GLM-4-Flash API Key + Embedding-3
-cp .env.example .env
-```
-
-> `requirements.txt` 是人改的**直接依赖**声明；`requirements.lock` 是 uv 生成的**完整锁定**
-> （含所有传递依赖、版本精确、并带环境标记 —— 所以**同一份文件在 Windows 与 Linux 上都对**：
-> `uvloop` 带 `sys_platform != "win32"`、`pywin32` 带 `sys_platform == "win32"`）。
->
-> 改了 `requirements.txt` 之后必须重新生成锁文件：
-> ```bash
-> pip install uv          # uv 只用于生成锁文件，本身不进锁文件（CI / 镜像里不需要它）
-> uv pip compile --universal --python-version 3.12 requirements.txt -o requirements.lock
-> ```
-> 忘了生成会被 `tests/test_lockfile.py` 直接测出来。
-
-### 2. 构建知识库
-
-```bash
+pip install -r requirements.lock   # 锁文件保证与 CI 一致（uv --universal 生成，跨平台）
+cp .env.example .env               # 填智谱 GLM API Key
 python build_knowledge.py --clear --skip-textbook
-```
-
-### 3. 启动服务
-
-```bash
 python -m uvicorn course_agent.server:app --port 8003
 ```
-
-### 4. 访问
 
 | 入口 | URL |
 |------|-----|
@@ -175,13 +185,14 @@ python -m uvicorn course_agent.server:app --port 8003
 | 知识库管理 | http://127.0.0.1:8003/kb |
 | API 文档 | http://127.0.0.1:8003/docs |
 
-### 5. Docker 部署
+Docker：`docker compose up -d --build`（向量库与数据目录经 volume 持久化）。
 
 ```bash
-docker compose up -d --build
+# 一行验证流式是否真在流（看 content 是否逐字出现、TTFT 多少）
+curl -N -X POST http://127.0.0.1:8003/qa/stream \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"进程和线程的区别","mode":"plan"}'
 ```
-
-Docker 部署的详细说明已随文档移出仓库（见 [docs/](docs/README.md)）；上面的命令可直接使用。
 
 ---
 
@@ -189,218 +200,61 @@ Docker 部署的详细说明已随文档移出仓库（见 [docs/](docs/README.m
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/health` | 健康检查（docker-compose 探活用这个，不要用 `/`） |
-| GET | `/` | 跳转到 `/chat` |
-| POST | `/qa/stream` | SSE 流式问答（节点进度 + 逐字输出）—— **唯一的流式问答端点** |
-| POST | `/qa/ask` | 非流式问答（同步返回完整回答） |
-| POST | `/auth/login` | 登录获取 JWT |
-| GET | `/kb` | 知识库管理页面 |
-| GET | `/kb/stats` | 知识库统计 |
-| GET | `/kb/documents` | 文档列表 |
-| POST | `/kb/search` | 知识库检索测试 |
-| GET | `/kb/browse` | 目录浏览 |
-| POST | `/kb/add` | 增量导入单文件 |
-| POST | `/kb/add-directory` | 增量导入目录 |
-| DELETE | `/kb/documents/{source}` | 删除文档 |
-| GET | `/qb/list` | 题库文件列表 |
-| POST | `/qb/search` | 题库搜索 |
-| GET | `/qb/topics` | 题库知识点和来源 |
-| GET | `/chat/conversations` | 服务端保存的会话列表（thread / 标题 / 更新时间） |
-| GET | `/chat/conversations/{thread_id}` | 取回某个会话里**可展示**的消息 |
-| DELETE | `/chat/conversations/{thread_id}` | 删除会话（连同它的 checkpoint） |
-
-> 手写助教**没有 HTTP 端点**（1.5.3 起）：它只保留模块与测试，作为冻结的对照实现。
-> 这个端点来回折腾过三次 —— 1.1.0 被我误删（当时没有任何测试会红）、
-> 1.5.1 按当时的文档恢复、1.5.3 按定位有意移除。
-> 现在由 `tests/test_route_surface.py` 的路由清单与
-> `tests/test_tutor_reference.py::TestTutorHasNoHttpOrFrontendSurface` 两边拦着：
-> 想加回来必须显式改它们。
+| GET | `/health` | 健康检查 |
+| POST | `/qa/stream` | SSE 流式问答（唯一流式端点） |
+| POST | `/qa/ask` | 非流式问答 |
+| POST | `/auth/login` | 登录获取 JWT（默认关闭，本地免登录） |
+| GET/POST/DELETE | `/kb/*` | 知识库管理（统计/文档/检索/浏览/增量导入/上传/删除） |
+| GET/POST | `/qb/*` | 题库（列表/搜索/知识点与来源） |
+| GET/DELETE | `/chat/conversations*` | 会话列表/详情/删除 |
 
 ---
 
-## Agent 架构
+## 工程化
 
-### Plan-and-Execute 模式（默认）
-
-```
-用户问题 → planner → [route] → executor → [route_after_executor] → synthesizer → END
-                         ↓                    ↓
-                    search_knowledge     web_search（自适应追加）
-```
-
-### ReAct 模式
-
-```
-用户问题 → llm → should_continue → tools/force_search/END
-                              ↑       ↓
-                              └───────┘（循环推理）
-```
-
-含守卫节点（force_search）防止 LLM 跳过工具调用，限制1次重试避免无限循环。
-
-### 检索流水线
-
-```
-用户问题 → LLM查询改写 → 每个变体混合检索（向量+BM25）→ 合并去重 + 质量过滤
-         → 不足时回退搜课本 → LLM Rerank → 格式化输出
-```
+- **测试四层**：单元测试（外部依赖全 mock）/ 接口契约测试 / 历史 bug 回归 / 架构守卫（依赖方向、图隔离、锁文件同步）
+- **三条环境守卫**（session 级）：真实会话库不被测试写入、真实 `data/` 不被测试改动、服务运行中拒绝开跑（防 Chroma 并发写损坏）
+- **数据可用性**：300MB 课件/向量库不入库，依赖缺失的用例自动 skip 而非报红，新克隆即可跑通
+- **CI**：GitHub Actions 每次 push 跑 pytest + 前端测试 + 服务冒烟；`txt / lock / 环境`三方一致性有测试守着
+- **压测**：Locust 三级虚拟用户（只读 / 检索 / 问答），问答级默认关闭防烧额度
 
 ---
 
-## 知识库
+## 已知限制与设计取舍
 
-### 统计
-
-| 指标 | 数值 |
-|------|------|
-| 总文档数 | 19 |
-| 总分块数 | **4199** |
-| 课本分块 | **2319**（三本课本，占 55%） |
-| PPT 分块 | 1827（OS 13份 + 计网 7份 + docx 1份） |
-| 笔记分块 | 53（补充知识点笔记） |
-| 向量模型 | 智谱 Embedding-3（2048 维单位向量） |
-| BM25 索引 | rank_bm25（懒加载） |
-
-> 这组数字是**实测值**，可用 `python debug/check_textbook_coverage.py` 复算。
-> 之前这里写的是 1880，是早期建库时的快照，早就过时了。
-
-### 题库
-
-| 指标 | 数值 |
-|------|------|
-| 总题目数 | 125 |
-| 来源数 | 6份试卷（OS 4 + 计网 2） |
-| 知识点 | 89 个 |
-| 图片文件 | **125张**（与题目一一对应） |
-| 题型 | 选择题 80 + 综合题 27 + 整页综合 7 + 填空题 6 + 判断题 5 |
-| 自动批改覆盖 | 125/125 题都有批改依据 |
-
-> **题数变化说明**：题库一度是 191 题 / 8 份卷子，后来人工筛掉了两份 ——
-> `2019秋本部计算机网络期末考试回忆版`（50 题）与
-> `2018秋操作系统期末试题回忆版_WuuTang`（16 题），共 66 题，
-> 连同**只被它们引用**的 66 张题图一并删除，现在是 125 题 / 6 份卷子。
->
-> 巧合的是：这两份正好就是当初那个过期快照 `question_bank.json` 漏掉的两份，
-> 所以删完后题数与该快照一致（都是 125）。但**数据来源完全不同** ——
-> 现在是从 6 个单卷文件合并而来，不再依赖那个快照。
-
-> 图片数也清理过两轮：292 → 191（删掉试卷改名留下的 101 张孤儿图，46 MB）
-> → 125（随上述两份卷子一起删）。现在文件数与引用数**恒等**，
-> 这一点有测试守着（`tests/test_qbank.py`）。
-
-> 题库加载入口是 `course_agent/qbank.py`，它扫描 `data/question_bank/questions_*.json`
-> 并去重合并。`question_bank.json` 那个**过期快照已删除**（它只有 125 题，
-> 却长得像"全部题库"，是当初"只加载到 125/191"的根因 ——
-> 它漏了 2019 计网期末 50 题和 2018 OS WuuTang 16 题）；
-> `/qb/list` 里的"全部题库（合并）"现在是虚拟条目，直接由 `qbank` 提供。
-
-### 两条 Agent 路径的工具
-
-LangGraph 路径（`/qa/stream`）与手写助教（`tutor_agent.py`，**无 HTTP 端点**）
-**共用同一份业务逻辑**（`course_agent/quiz_service.py`），各自只保留外壳。
-两边现在都能完成刷题全流程：
-
-> 下表只列**刷题这条线**上的工具；**完整清单（13 个）见 `tools.py` 文件头** ——
-> 那里的清单有测试守着，不会和实际脱节。
-> （`search_knowledge_base` 是助教侧的命名，BOT 侧同一个能力叫 `search_knowledge`。）
-
-| 工具 | 作用 |
-|------|------|
-| `list_papers` | 按课程列出题库试卷（含题型构成与分组数） |
-| `get_paper_questions` | 取一组题：选择/填空/判断 5 题一组，综合题 1 题一组 |
-| `grade_answers` | 批改：选择/判断精确判定，填空/综合依参考要点由阅卷模型评分 |
-| `explain_question` | 取题面 + 参考答案 + 参考要点（讲题用；出题时刻意不给这些） |
-| `prepare_custom_quiz` | 取"临时出题"的素材（题目由模型自己写） |
-| `search_knowledge_base` | 知识库检索（可按课程过滤） |
-| `get_practice_stats` / `record_practice` | 练习次数统计 |
-
-设计要点：**呈现约束放在工具返回值里，不写死在 system prompt 里。**
-一组的题量由 `get_paper_questions` 决定；出题接口只返回题号/题型/知识点/图片
-（题干和答案根本不进上下文，模型无从泄题）；每个工具结果的 `_guide` 字段说明
-这一步该怎么呈现。因此 system prompt 只描述人设与能力，交互保持自然。
+- 课件/课本 PDF 因版权不入库，知识库需本地构建；题库 JSON 入库可直接体验刷题
+- 另保留一份手写 tool-calling 循环（`tutor_agent.py`）作为冻结的对照实现：与 LangGraph 路径共用 `quiz_service.py`，无 HTTP 入口
+- 首响仍有约 6.5 秒 —— planner + 检索是静默的，模型"检索完才开始写"。方向：压检索耗时 / 把进度也流给学生
+- ReAct 偶发"嘴上说要调工具、实际没调"：协议帧泄漏已兜住，补一轮真调用未做
+- 当前为单用户本地部署设计；多用户需在会话与配额层扩展
+- 模型层依赖智谱 GLM API，未做模型侧微调（应用层定位）
 
 ---
 
-## 测试
+## Roadmap
 
-### 单元测试
-
-```bash
-python -m pytest tests/ -v                 # 413 项
-node tests/js/auth_block_test.mjs          # 前端认证块行为测试（52 项断言，需 Node）
-```
-
-当前 **413 项**通过，覆盖：错误处理、配置管理、RAG 工具、对话记忆、认证与默认拒绝守卫、
-路径包含性校验、题库访问层（加载/分组/批改解析/共享工具层）、ReAct 轮数上限、
-两张图的会话隔离、跨轮会话游标、依赖方向（循环依赖守卫）、LLM 助教主循环与工具层。
-
-### 数据集与 CI
-
-仓库里的 `data/` 只有**题库 JSON**（251 KB，6 份卷子）纳入版本控制 ——
-课本 / 课件 / 题图 / 向量库加起来 300 MB，是刻意 gitignore 的本地数据。
-`tests/conftest.py` 会集中声明哪些数据集可用，**缺数据的用例跳过而不是报红**，
-并在测试开头打印：
-
-```
-数据集: question_bank=有, images=有, vector_store=有
-```
-
-所以新克隆可以直接 `pytest tests/` 看到结果（缺图相关用例会被 skip）。
-CI（`.github/workflows/ci.yml`）跑 pytest + 前端测试 + 服务探活。
-
-### 鉴权开关
-
-默认 **`AUTH_ENFORCE=false`（本地免登录）** —— 服务只绑 `127.0.0.1`，外面访问不到。
-关掉鉴权**不等于**裸奔：真正危险的那条链（`/kb/add` 任意文件入库 → `/kb/search` 外泄）
-靠的是处理函数内部的路径校验 `resolve_within_data()`，与鉴权解耦，
-实测 `README.md` / `.env` / `../../etc/passwd` 在无鉴权模式下依然全部 403。
-
-对外部署前请设置：
-
-```bash
-AUTH_ENFORCE=true
-ADMIN_PASSWORD=<你的管理密码>      # 前端会弹登录框，用它换 JWT
-```
-
-### 压力测试
-
-```bash
-python -m locust -f tests/locustfile.py --host http://localhost:8003 \
-  --users 50 --spawn-rate 10 --run-time 30s --headless --html docs/benchmark_report.html
-```
+- [ ] **重跑 29 条评测用例、归档 v1.11 报告**（当前最该补的一件事）
+- [ ] 检索层 Recall@K / MRR：把"混合检索比纯向量好多少"变成数字
+- [ ] ReAct vs Plan-and-Execute 同题对比：token 消耗 / 轮次 / 正确率
+- [ ] 首响压到 3 秒内
+- [ ] 全局学习进度、刷题位置记忆与错题本
 
 ---
 
-## 学习进度
+## 项目结构
 
-### 已完成
+```
+course_agent/          # Agent 核心：graph / nodes / tools / server / memory / qbank / quiz_service
+knowledge_pipeline/    # 知识处理流水线（PPT/课本 → 分块入库，含 VLM 图片理解）
+rag_tool.py            # 混合检索 + Rerank + 查询改写
+build_knowledge.py     # 知识库构建 CLI（薄壳，逻辑在 KnowledgeBase）
+tests/                 # 844 项测试 + conftest 守卫 + Locust 压测
+eval/                  # 行为评测（runner + 29 条用例 + 按版本存档的报告）
+demo/                  # 演示脚本与素材
+data/                  # 课程数据（gitignore，仅题库 JSON 入库）
+docs/                  # 文档
+archive/               # 历史版本归档
+```
 
-| 周次 | 主题 | 核心产出 |
-|------|------|---------|
-| 第1周 | 基础 API 服务 | FastAPI + SSE 流式响应 |
-| 第2周 | Prompt Engineering | RAG + 向量搜索 |
-| 第3周 | ReAct 多工具 Agent | 工具编排 + Function Calling |
-| 第4周 | LangGraph 课程 Agent | ReAct 循环 + RAG 集成 + 知识库流水线 + 守卫节点 + B3 测试 |
-| 第5周 | 多工具扩展与自主规划 | Web 搜索 + Plan-and-Execute + 多轮对话持久化 |
-| 第6周 | SSE 流式接口 + v1 产出 | 双模式流 + 端到端测试 + 知识库盲区修复 |
-| 第7周 | 健壮性 + 工程化 | 全局错误处理 + 结构化日志 + trace_id + 配置规范化 + 单元测试(88项) |
-| 第8周 | 混合检索 + Docker + 压测 | 向量+BM25融合 + LLM Rerank + 查询改写 + Docker部署 + 压测报告 + Web管理界面 + 题库系统 |
-
-### 路线外（不计入周次）
-
-| 内容 | 性质 | 状态 |
-|------|------|------|
-| LLM 助教 · 对话式刷题 | **需求驱动的产品特性**（我要一个不用反复声明学习流程的学习/复习 Agent），同时兼做状态机版的对照 | 可用；对照未完成（缺 LangGraph 版） |
-| 题库访问层 `qbank.py` | 上面那个特性和已有题库功能的共同底座 | 两个模式共用 |
-| 全局缺陷修复 | 排查过程中顺带产出 | 已整理成文档（当前不随仓库分发，见 [docs/](docs/README.md)） |
-
-### 待完成
-
-| 周次 | 主题 |
-|------|------|
-| 第9周 | 开源阅读 + 手写 Agent |
-| 第10周 | 面试冲刺 |
-
-> 说明：第 9 周是**两件事**——读开源项目 + 手写一个 Agent。
-> `tutor_agent.py` 里那个手写 tool-calling 循环在形式上覆盖了"手写 Agent"，
-> 但它不是按第 9 周的计划做的，也没有配套的开源阅读，所以第 9 周仍算未完成。
+旧版说明（学习路线视角）保留在 [README_old.md](README_old.md)；评测细节见 [eval/README.md](eval/README.md)；
+踩坑与取舍的完整复盘见 [docs/design-decisions.md](docs/design-decisions.md)。

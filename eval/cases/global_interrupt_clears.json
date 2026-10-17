@@ -16,7 +16,10 @@
           "继续讲",
           "确定吗",
           "还要继续"
-        ]
+        ],
+        "observe": {
+          "forbid_tool_call_text_in_stream": true
+        }
       }
     }
   ]

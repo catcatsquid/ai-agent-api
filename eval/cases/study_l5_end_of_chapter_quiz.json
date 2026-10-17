@@ -36,7 +36,10 @@
         "tools_none_of": [
           "grade_answers",
           "list_papers"
-        ]
+        ],
+        "observe": {
+          "forbid_tool_call_text_in_stream": true
+        }
       }
     }
   ]

@@ -24,7 +24,8 @@
           "must_contain": [
             "没",
             "资料"
-          ]
+          ],
+          "forbid_tool_call_text_in_stream": true
         }
       }
     }

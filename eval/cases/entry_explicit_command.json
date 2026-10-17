@@ -29,7 +29,10 @@
         "min_images": 1,
         "images_all_from_bank": true,
         "no_stem_leak": true,
-        "no_reference_leak": true
+        "no_reference_leak": true,
+        "observe": {
+          "forbid_tool_call_text_in_stream": true
+        }
       }
     }
   ]

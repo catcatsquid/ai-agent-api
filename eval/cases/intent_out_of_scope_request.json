@@ -15,7 +15,10 @@
           "get_paper_questions",
           "grade_answers",
           "get_answers"
-        ]
+        ],
+        "observe": {
+          "forbid_tool_call_text_in_stream": true
+        }
       }
     }
   ]

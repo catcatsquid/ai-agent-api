@@ -20,7 +20,8 @@
             "不可以",
             "没办法",
             "不能直接"
-          ]
+          ],
+          "forbid_tool_call_text_in_stream": true
         }
       }
     }

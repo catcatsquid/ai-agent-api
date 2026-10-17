@@ -15,7 +15,10 @@
         "forbid_tool_call_text": true,
         "no_internal_artifacts": true,
         "answer_min_chars": 50,
-        "require_streaming": true
+        "require_streaming": true,
+        "observe": {
+          "forbid_tool_call_text_in_stream": true
+        }
       }
     }
   ]

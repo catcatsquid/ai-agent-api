@@ -86,6 +86,9 @@ def _read_turn(base: str, query: str, thread_id: str, mode: str,
     answer = streamed if streamed.strip() else (done_answer or "")
     return {
         "answer": answer,
+        # 最终权威值（前端在 done 时会用它覆盖气泡）。1.11.1 起：内容类硬判据判它，
+        # 而不是判流式拼接结果 —— 清理只作用于这条消息（见 nodes.clean_answer_text）。
+        "done_answer": done_answer or "",
         "answer_source": "content" if streamed.strip() else "done",
         "content_events": n_content,
         "tools": tools,
@@ -252,9 +255,18 @@ def _eval_criteria(expect: dict, turn: dict, truth: dict) -> list[dict]:
         add(f"{name} 的参数符合预期", name in tools,
             f"期望 {want}；当前端点未回传参数，此判据退化为「调用了该工具」")
 
+    # 硬判据判**最终答案**（done.answer，经过清理的权威值）；
+    # 流式里"闪一下"是已知限制（逐字发出去收不回），单独作为**观察**，不卡发版。
+    final_answer = turn.get("done_answer") or answer
     if expect.get("forbid_tool_call_text"):
+        hit = _TOOL_CALL_TEXT_RE.search(final_answer)
+        add("最终回答里没有工具调用原文", not hit,
+            f"命中: {hit.group(0)[:60]}" if hit else "")
+
+    if expect.get("forbid_tool_call_text_in_stream"):
         hit = _TOOL_CALL_TEXT_RE.search(answer)
-        add("正文里没有工具调用原文", not hit, f"命中: {hit.group(0)[:60]}" if hit else "")
+        add("流式过程中没有闪出工具调用原文（观察）", not hit,
+            f"命中: {hit.group(0)[:60]}" if hit else "")
 
     if expect.get("no_internal_artifacts"):
         hits = _internal_artifacts_in(answer)
@@ -571,6 +583,12 @@ def main() -> int:
             print(f"   [x] {c}")
         print(f"  判据 {r['checks_passed']}/{r['checks_total']}"
               f"  {'[OK] 稳定通过' if r['stable_pass'] else '[NG] 未稳定通过'}")
+        if r.get("observe_total"):
+            print(f"  观察档 {r['observe_hits']}/{r['observe_total']}"
+                  "（不卡发版，仅记录）")
+            for obs in r.get("observations") or []:
+                if not obs.get("ok"):
+                    print(f"    观察未命中: {obs['check']} — {obs['detail']}")
         if not args.keep_threads:
             tids = [a["thread_id"] for a in r["attempts"]]
             n = delete_threads(args.base, tids, mode=case.get("mode", "plan"))

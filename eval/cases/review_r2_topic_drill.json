@@ -17,7 +17,10 @@
           "list_papers",
           "grade_answers"
         ],
-        "min_images": 1
+        "min_images": 1,
+        "observe": {
+          "forbid_tool_call_text_in_stream": true
+        }
       }
     }
   ]

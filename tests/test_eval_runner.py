@@ -274,6 +274,41 @@ class TestObserveTier:
         assert warnings and "拉回主线" in warnings[0], warnings
 
 
+class TestLeakJudgedOnTheFinalAnswer:
+    """硬判据判**最终答案**；流式闪现作为**观察**（用户拍板：不改流式粒度）
+
+    流式是逐字发的，收不回来；`done.answer` 是清理后的权威值，前端会用它覆盖气泡。
+    所以"最终答案里有没有工具调用原文"必须硬；"打字机过程中闪没闪"只记录。
+    """
+
+    def _turn(self, streamed, final):
+        return {"answer": streamed, "done_answer": final, "tools": [],
+                "content_events": 1, "answer_source": "content",
+                "ttft_ms": 100, "total_ms": 200}
+
+    def test_final_answer_leak_is_hard(self):
+        turn = self._turn("好的", '稍等。grade_answers {"qids": ["a"]} 结果如上。')
+        checks = runner.run_checks({"forbid_tool_call_text": True}, turn, {})
+        assert checks[0]["ok"] is False, checks
+
+    def test_stream_only_leak_does_not_fail_the_hard_check(self):
+        turn = self._turn('先看。explain_question {"qids": ["a"]} 然后讲。', "先看。然后讲。")
+        checks = runner.run_checks(
+            {"forbid_tool_call_text": True,
+             "observe": {"forbid_tool_call_text_in_stream": True}}, turn, {})
+        hard = [c for c in checks if not c.get("observe")]
+        obs = [c for c in checks if c.get("observe")]
+        assert hard[0]["ok"] is True, hard
+        assert obs[0]["ok"] is False, "流式闪现必须被观察档记下来（否则等于不测）"
+
+    def test_no_leak_anywhere_is_green(self):
+        turn = self._turn("好的", "好的")
+        checks = runner.run_checks(
+            {"forbid_tool_call_text": True,
+             "observe": {"forbid_tool_call_text_in_stream": True}}, turn, {})
+        assert all(c["ok"] for c in checks), checks
+
+
 class TestConsoleEncoding:
     """中文 Windows 的控制台是 cp936，打印 `▶`/`✗` 曾直接 UnicodeEncodeError
 

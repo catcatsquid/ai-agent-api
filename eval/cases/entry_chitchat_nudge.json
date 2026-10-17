@@ -10,7 +10,10 @@
         "no_internal_artifacts": true,
         "answer_min_chars": 10,
         "require_streaming": true,
-        "tools_exactly_empty": true
+        "tools_exactly_empty": true,
+        "observe": {
+          "forbid_tool_call_text_in_stream": true
+        }
       }
     },
     {
@@ -26,7 +29,8 @@
             "开始学习",
             "刷题",
             "复习"
-          ]
+          ],
+          "forbid_tool_call_text_in_stream": true
         }
       }
     },
@@ -42,7 +46,8 @@
           "must_contain": [
             "学",
             "开始"
-          ]
+          ],
+          "forbid_tool_call_text_in_stream": true
         }
       }
     },
@@ -59,7 +64,8 @@
             "开始学习",
             "刷题",
             "复习"
-          ]
+          ],
+          "forbid_tool_call_text_in_stream": true
         }
       }
     }
