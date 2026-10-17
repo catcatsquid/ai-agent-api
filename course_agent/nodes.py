@@ -27,6 +27,7 @@ from course_agent.errors import safe_llm_invoke, safe_tool_invoke, LLMError
 from course_agent.memory import trim_messages, compress_history, SUMMARY_MARK
 from course_agent.logger import logger
 from course_agent import quiz_service
+from course_agent import progress
 
 llm_with_tools = llm.bind_tools(tools)
 
@@ -181,6 +182,47 @@ def _session_block(session: dict) -> str:
     return ("\n\n--- 当前会话状态（务必据此回答）---\n" + "\n".join(bits)) if bits else ""
 
 
+# 什么时候把"全局进度 + 开场建议"塞进提示词：
+#   · 新会话（还没有任何会话状态）—— 这就是这个功能的本意：开窗就能接着上次
+#   · 学生明确要学/要复习/问进度/说继续 —— 这时不注入，它就得反问"你学到哪了"
+_PROGRESS_INTENT_RE = re.compile(
+    r"学习|复习|学到哪|学到第|进度|继续|接着|上次|建议|开始学|想学|学过")
+
+# 「只说想学/想复习」的开场（还没选模式、也没说具体章节）
+_STUDY_KICKOFF_RE = re.compile(r"(想|要|准备|开始)\s*(学习|复习)|^学(习|一下)")
+# 说了具体目标就不算开场：这类应该照常规划（直接讲那一节 / 出那几道题）
+_STUDY_TARGET_RE = re.compile(
+    r"题|卷|章|节|课件|课本|笔记|继续|接着|讲|解释|为什么|是什么|怎么|"
+    r"第[一二三四五六七八九十\d]|死锁|调度|进程|线程|内存|传输层|网络层|握手")
+
+
+def _is_study_kickoff(text: str) -> bool:
+    """学生是不是"刚开口说想学/想复习"，还没说学什么、怎么学
+
+    这种轮次**不该直接开讲**（实测：它一上来就 read_section 讲了一整节），
+    而应该先把已知进度摆出来、让他在四种模式里选一条。
+    """
+    t = str(text or "").strip()
+    if not t or len(t) > 20:
+        return False
+    return bool(_STUDY_KICKOFF_RE.search(t) and not _STUDY_TARGET_RE.search(t))
+
+
+def _progress_block(user_content: str, session: dict) -> str:
+    """取"已知进度 + 四选一建议"的提示块（无进度时返回空串）
+
+    只在**相关**的轮次注入：每轮都塞进去既费 token，又会让学生正在答题时
+    被"你上次复习到死锁"带偏。
+    """
+    try:
+        if not (not session or _PROGRESS_INTENT_RE.search(str(user_content or ""))):
+            return ""
+        return progress.brief()
+    except Exception:                                   # noqa: BLE001
+        logger.warning("读全局学习进度失败（不影响本轮）", exc_info=True)
+        return ""
+
+
 # ============================================================
 # 学习/复习相关工具（先定义给 planner 用）
 # ============================================================
@@ -204,7 +246,7 @@ PLANNER_PROMPT = """你是「知识寻回BOT」的规划师。分析用户当前
 - 用户说"下一节/继续"且上一轮在学课程 → 用 record_study_position 的书签定位，
   继续讲**下一节**（不要重新列章节清单，也不要跳着讲）
 
-你有 13 个工具可用：
+你有 14 个工具可用：
 1. search_knowledge(query, course?, source?) — 搜索课程知识库，用于回答知识点问题
    **讲解课程内容时务必带 course**（知道具体哪份课件时带 source），这样检索才不会串课
 2. list_course_sections(course?) — 列出某门课**实际有哪些课件/课本/笔记**（带章节名与内容量）
@@ -237,6 +279,9 @@ PLANNER_PROMPT = """你是「知识寻回BOT」的规划师。分析用户当前
     它不返回题目，只返回素材，题目由你自己写（并在题前说明是自拟题）。
 12. get_practice_stats(paper_source) — 获取试卷练习次数统计
 13. record_practice(paper_source) — 记录完成一次试卷练习
+14. get_learning_progress() — 查学生**跨会话**的学习/刷题进度
+    学生问「我学到哪了 / 我哪套卷子没做完 / 上次复习到哪」→ 调它，照着说；
+    **不要**反问"你之前学到哪了"（进度已经注入在你的提示里了，没有才调它）
 
 【强制规则 - 必须严格遵守】
 1. 用户说"刷题/做题/写题/答题/练习/做卷子/考试/自测/找题/出题目/题库/卷子/试卷" → 必须调用 list_papers，绝对不能用 search_knowledge
@@ -450,6 +495,12 @@ def planner_node(state: AgentState, config=None) -> dict:
                      "「试卷来源名称」这种中文卷名（见上一行）。"
                      "实测填错会导致批改直接失败。")
 
+    # 全局进度（跨会话）：新会话或学生说想学/复习/问进度时给 planner 看。
+    # 不注入的话，新窗口说"我想学习"时它手里什么都没有，只能反问"你学到哪了"。
+    _pblock = _progress_block(user_content, state.get("session") or {})
+    if _pblock:
+        prompt += "\n\n" + _pblock
+
     # 学习/复习书签（与刷题游标同一套机制，互不干扰）。
     # 有了它，学生说"下一节"时才知道该从哪继续；也顺带解决"两门课切换串味"。
     study = drill.get("study") or {}
@@ -584,6 +635,16 @@ def planner_node(state: AgentState, config=None) -> dict:
             logger.info("听课/复习但计划里没有取材料 → 补一步 read_section(%s)", _args)
             normalized = [{"tool": "read_section", "args": _args}] + normalized
 
+    # 【守卫 4·1.8.0】学生只是"刚开口说想学/想复习"、还没选模式 → **这一轮不调工具**
+    #
+    # 本意（用户明确要求）：新窗口说"我想学习"时，先展示已知进度 + 给出四种模式建议，
+    # 让他在"接着学 / 自拟练习 / 刷整套卷子 / 复习"里挑一个。
+    # 实测不加这条：它直接 read_section 讲了一整节（《03-OS调度.pdf》），
+    # 学生根本没机会选。有进度才这么收，没有进度时保持原来的行为（先给资料地图）。
+    if progress.has_any() and _is_study_kickoff(user_content):
+        logger.info("学生只说想学/想复习 → 先展示进度并让他选模式，本轮不规划工具")
+        normalized = []
+
     out: dict = {"plan": normalized}
 
     # 【守卫 2】状态上限：MemorySaver 原来**没有任何裁剪**（审查文档 F2），
@@ -705,6 +766,7 @@ def executor_node(state: AgentState, config=None) -> dict:
     base_session = state.get("session") or {}
     new_session = _extract_drill_session(base_session,
                                         state.get("plan") or [], results)
+    quiz_changed = new_session is not None
     study = _extract_study_session(new_session if new_session is not None
                                    else base_session,
                                    state.get("plan") or [], results)
@@ -712,7 +774,64 @@ def executor_node(state: AgentState, config=None) -> dict:
         new_session = study
     if new_session is not None:
         out["session"] = new_session
+
+    # 把这一轮的进度**镜像到全局账本**（跨会话，见 course_agent/progress.py）。
+    # 只在"这一轮真的更新了书签/游标"时写 —— 否则每轮都写会把 visits 刷成天文数字。
+    _mirror_to_global_progress(
+        new_session if new_session is not None else base_session,
+        results,
+        thread_id=_thread_id(config),
+        study_changed=study is not None,
+        quiz_changed=quiz_changed,
+    )
     return out
+
+
+def _thread_id(config) -> str:
+    return str(((config or {}).get("configurable") or {}).get("thread_id") or "")
+
+
+def _mirror_to_global_progress(session, results, thread_id, study_changed, quiz_changed):
+    """把会话状态镜像到全局进度账本（跨会话）
+
+    为什么镜像"会话状态"而不是重新解析工具返回：`context`/`state` 里的 session
+    已经是**合并归一后**的唯一真源（游标合并、空值不覆盖都在里面做过了）。
+    再解析一遍工具返回就会出现两套判据。
+
+    **任何异常都不许影响这一轮问答** —— 进度是附带收益，不是主链路。
+    """
+    try:
+        study = (session or {}).get("study") or {}
+        if study_changed and study.get("course"):
+            progress.record_study({
+                "mode": study.get("mode"),
+                "course": study.get("course"),
+                "chapter": study.get("chapter"),
+                "section": study.get("section"),
+                "source": study.get("last_source") or study.get("source"),
+                "status": study.get("status"),
+            }, thread_id=thread_id)
+        if study.get("course") and study.get("last_source"):
+            progress.record_read(study["course"], study["last_source"],
+                                 study.get("next_offset"), thread_id=thread_id)
+        if quiz_changed and (session or {}).get("paper"):
+            progress.record_quiz({
+                "paper": session.get("paper"),
+                "type": session.get("type"),
+                "group_index": session.get("group_index"),
+                "next_group_index": session.get("next_group_index"),
+                "qids": session.get("qids") or [],
+            }, thread_id=thread_id)
+        paper = (session or {}).get("paper") or ""
+        for msg in results or []:
+            try:
+                data = json.loads(getattr(msg, "content", "") or "")
+            except (TypeError, ValueError):
+                continue
+            if isinstance(data, dict) and "total" in data and "correct" in data:
+                progress.record_grade(paper, data, thread_id=thread_id)
+    except Exception:                                   # noqa: BLE001
+        logger.warning("写全局学习进度失败（不影响本轮问答）", exc_info=True)
 
 
 def _extract_drill_session(current: dict, plan: list, results: list):
@@ -1091,6 +1210,11 @@ def synthesizer_node(state: AgentState) -> dict:
     # 原来只注入了 planner —— 而"本节结束 / 出小测 / 小测自己批"这些是写给
     # 最终回答的契约，学生交小测答案那一轮更是一个工具都不调（走 CHITCHAT_PROMPT）。
     base_prompt += _session_block(state.get("session") or {})
+    # 「全局进度 + 四选一建议」：新会话或学生说想学/复习/问进度时才注入。
+    # 这就是"开窗不用再说一遍学到哪"的落点（文案由 progress.brief() 用代码生成）。
+    _pblock = _progress_block(user_content, state.get("session") or {})
+    if _pblock:
+        base_prompt += "\n\n" + _pblock
     if summary_text:
         base_prompt = f"{base_prompt}\n\n{SUMMARY_MARK}\n{summary_text}"
     # 收尾动作放在**最末尾**（连摘要都在它前面）。
@@ -1133,6 +1257,11 @@ def synthesizer_node(state: AgentState) -> dict:
         # `clean_answer_text` —— 分散写就会出现"只修好一条路"。
         if isinstance(response, AIMessage) and response.content:
             cleaned = clean_answer_text(str(response.content), state)
+            # 开场那轮：四种模式必须都在（模型实测会漏掉「自拟练习」）
+            if progress.has_any() and _is_study_kickoff(user_content):
+                cleaned, added = progress.ensure_modes(cleaned)
+                if added:
+                    logger.info("开场建议漏了 %d 条 → 已用代码补上", len(added))
             if cleaned != response.content:
                 response = AIMessage(content=cleaned)
         return {"messages": [response]}

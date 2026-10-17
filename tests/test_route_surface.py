@@ -22,6 +22,7 @@ from course_agent.server import app
 EXPECTED_ROUTES = {
     ("GET", "/"),
     ("GET", "/health"),
+    ("GET", "/progress"),
     ("GET", "/chat"),
     ("GET", "/kb"),
     ("POST", "/auth/login"),

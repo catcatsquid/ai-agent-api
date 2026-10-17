@@ -35,7 +35,7 @@ from course_agent.auth import any_auth, create_jwt
 from course_agent.logger import logger
 from course_agent.memory import INTERNAL_LLM_TAG
 from course_agent.middleware import setup_middlewares
-from course_agent import qbank, quiz_service
+from course_agent import qbank, quiz_service, progress
 from config import APP_VERSION
 from rag_tool import get_knowledge_base
 
@@ -249,6 +249,19 @@ class LoginResponse(BaseModel):
     token: str = None
     token_type: str = "bearer"
     expires_in: int = 0
+
+
+@app.get("/progress")
+def learning_progress():
+    """跨会话的学习/刷题进度（只读，给调试与将来前端用）
+
+    数据在 `runtime/progress.json`，由 `course_agent/progress.py` 维护。
+    这里**不做前端**：学生问进度时走的是 `get_learning_progress` 工具
+    或开场注入，不靠点按钮查。
+    """
+    data = progress.snapshot()
+    return {"code": 0, "msg": "ok",
+            "data": {"summary": progress.summary(), **data}}
 
 
 @app.get("/health")
