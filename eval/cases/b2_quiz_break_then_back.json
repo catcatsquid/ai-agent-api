@@ -1,0 +1,52 @@
+{
+  "id": "b2_quiz_break_then_back",
+  "mode": "plan",
+  "why": "B2：学习中途插播做题，做完要**回到学习主线**。硬判据守「插播那轮真的出了题/取了题」；观察档看「回到主线那轮是否又提到当前章节（死锁）」——同样是话术级行为。",
+  "turns": [
+    {
+      "user": "我在学操作系统死锁这一章",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "tools_none_of": [
+          "list_papers"
+        ]
+      }
+    },
+    {
+      "user": "先给我几道死锁的题练练",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "tools_any_of": [
+          "practice_by_topic",
+          "prepare_custom_quiz"
+        ],
+        "tools_none_of": [
+          "list_papers"
+        ]
+      }
+    },
+    {
+      "user": "做完了，我们接着学吧",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "tools_none_of": [
+          "grade_answers"
+        ],
+        "observe": {
+          "must_contain": [
+            "死锁"
+          ]
+        }
+      }
+    }
+  ]
+}

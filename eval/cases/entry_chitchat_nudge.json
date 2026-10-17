@@ -1,0 +1,67 @@
+{
+  "id": "entry_chitchat_nudge",
+  "mode": "plan",
+  "why": "入口①（B4）：学生先闲聊。硬判据只守「不调工具、正文非空」——这是产品硬约束（闲聊不该去检索/出题）。「第 3 轮才轻推一次、他仍不学就不再推」属于话术节奏，没有客观真值 → 放观察档（第 3 轮出现引导词、第 4 轮不再出现）。",
+  "turns": [
+    {
+      "user": "你好呀",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "tools_exactly_empty": true
+      }
+    },
+    {
+      "user": "今天天气真不错",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "tools_exactly_empty": true,
+        "observe": {
+          "forbid_phrases": [
+            "开始学习",
+            "刷题",
+            "复习"
+          ]
+        }
+      }
+    },
+    {
+      "user": "你平时都干嘛",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "tools_exactly_empty": true,
+        "observe": {
+          "must_contain": [
+            "学",
+            "开始"
+          ]
+        }
+      }
+    },
+    {
+      "user": "好吧，先不学",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "tools_exactly_empty": true,
+        "observe": {
+          "forbid_phrases": [
+            "开始学习",
+            "刷题",
+            "复习"
+          ]
+        }
+      }
+    }
+  ]
+}

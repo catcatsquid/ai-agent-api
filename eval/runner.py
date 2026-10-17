@@ -200,7 +200,8 @@ def _internal_artifacts_in(answer: str) -> list:
     return [marker for marker in _INTERNAL_ARTIFACTS if marker in (answer or "")]
 
 
-def run_checks(expect: dict, turn: dict, truth: dict) -> list[dict]:
+def _eval_criteria(expect: dict, turn: dict, truth: dict) -> list[dict]:
+    """算一组判据（不含 observe 分档）"""
     answer = turn["answer"]
     tools = turn["tools"]
     checks = []
@@ -309,12 +310,33 @@ def run_checks(expect: dict, turn: dict, truth: dict) -> list[dict]:
     return checks
 
 
+def run_checks(expect: dict, turn: dict, truth: dict) -> list[dict]:
+    """硬判据 + **观察档**（`expect.observe`）
+
+    ## 为什么要观察档
+
+    B 类行为（岔开提问要拉回主线、闲聊第 3 轮才轻推一次…）**没有客观真值**，
+    写成硬红只会产生噪声（用户拍板：先观察，连续 3 版命中率 ≥90% 且措辞稳定才升档）。
+    但"不写"更糟 —— 规范没人看就腐烂。
+
+    所以：`observe` 里的判据**照样计算、照样进报告**，只是**不计入稳定通过**
+    （`stable_pass` 只看硬判据），并在结果里打 `"observe": True`。
+    同时报告会跟踪它们的历史（连续 3 版下滑要警告，见 `observe_trend`）。
+    """
+    hard = _eval_criteria({k: v for k, v in (expect or {}).items() if k != "observe"},
+                          turn, truth)
+    obs_expect = (expect or {}).get("observe") or {}
+    observed = [{**c, "observe": True}
+                for c in _eval_criteria(obs_expect, turn, truth)]
+    return hard + observed
+
+
 # ============================================================
 # 跑用例
 # ============================================================
 
 def run_case(case: dict, base: str, attempts: int) -> dict:
-    detail, per_attempt = [], []
+    detail, per_attempt, observed = [], [], []
     for i in range(attempts):
         tid = f"eval-{case['id']}-{i}-{uuid.uuid4().hex[:6]}"
         attempt = {"attempt": i + 1, "thread_id": tid, "turns": []}
@@ -334,7 +356,9 @@ def run_case(case: dict, base: str, attempts: int) -> dict:
             turn["checks"] = checks
             turn["user"] = turn_spec["user"]
             attempt["turns"].append(turn)
-            detail += [c for c in checks]
+            # 硬判据决定"稳定通过"；观察档只进报告（见 run_checks 的说明）
+            detail += [c for c in checks if not c.get("observe")]
+            observed += [c for c in checks if c.get("observe")]
         per_attempt.append(attempt)
 
     total = len(detail)
@@ -342,6 +366,9 @@ def run_case(case: dict, base: str, attempts: int) -> dict:
     return {"id": case["id"], "attempts": per_attempt,
             "checks_total": total, "checks_passed": passed,
             "stable_pass": passed == total,
+            "observe_total": len(observed),
+            "observe_hits": sum(1 for c in observed if c["ok"]),
+            "observations": observed,
             "failures": [f"{c['check']}: {c['detail']}"
                          for c in detail if not c["ok"]]}
 
@@ -435,6 +462,46 @@ def _display_path(path: Path) -> str:
         return str(path)
 
 
+def observe_trend(current: dict = None) -> list:
+    """检查观察档**连续 3 版下滑**，返回警告文字列表（不参与退出码）
+
+    用户拍板：观察档**永不卡发版**，但"连续 3 版下滑"要报警 —— 否则没人看它。
+
+    做法：把 `eval/reports/*.json` 按 `started_at` 排好，对同一个
+    （用例, 观察判据）算每版的命中率；最近 3 版**严格递减**就报。
+    只读历史报告，不需要额外状态文件。
+    """
+    try:
+        # (用例, 判据) -> [(报告时间, 该版本命中率)]
+        per_report = {}
+        for path in sorted(REPORTS_DIR.glob("*.json")):
+            try:
+                rep = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            stamp = rep.get("started_at") or rep.get("app_version") or path.stem
+            acc = {}
+            for case in rep.get("cases") or []:
+                for obs in case.get("observations") or []:
+                    key = (case.get("id"), obs.get("check"))
+                    hit, tot = acc.get(key, (0, 0))
+                    acc[key] = (hit + (1 if obs.get("ok") else 0), tot + 1)
+            for key, (hit, tot) in acc.items():
+                per_report.setdefault(key, []).append((stamp, hit / tot))
+        warnings = []
+        for (case_id, check), rows in per_report.items():
+            rows.sort(key=lambda r: r[0])
+            if len(rows) < 3:
+                continue
+            rates = [r[1] for r in rows[-3:]]
+            if rates[0] > rates[1] > rates[2]:     # 严格递减 = 连续 3 版下滑
+                shown = "→".join(f"{r:.0%}" for r in rates)
+                warnings.append(f"{case_id} / {check}：最近 3 版 {shown}")
+        return warnings
+    except Exception:                            # noqa: BLE001
+        return []
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="行为评测 runner")
     ap.add_argument("--base", default="http://127.0.0.1:8003")
@@ -482,7 +549,8 @@ def main() -> int:
             print(f"  已清理 {n}/{len(tids)} 个评测会话（不留在会话库里）")
 
     all_checks = [c for r in results for a in r["attempts"]
-                  for t in a["turns"] for c in t["checks"]]
+                  for t in a["turns"] for c in t["checks"] if not c.get("observe")]
+    all_obs = [c for r in results for c in (r.get("observations") or [])]
     ttfts = [t["ttft_ms"] for r in results for a in r["attempts"]
              for t in a["turns"] if t["ttft_ms"]]
     totals = [t["total_ms"] for r in results for a in r["attempts"] for t in a["turns"]]
@@ -491,26 +559,36 @@ def main() -> int:
         "cases_stable_pass": sum(1 for r in results if r["stable_pass"]),
         "checks_total": len(all_checks),
         "checks_passed": sum(1 for c in all_checks if c["ok"]),
+        # 观察档：**不参与发版判断**，只记命中率（连续 3 版下滑会在下面报警）
+        "observe_total": len(all_obs),
+        "observe_hits": sum(1 for c in all_obs if c["ok"]),
         "ttft_p50_ms": int(statistics.median(ttfts)) if ttfts else None,
         "ttft_p95_ms": int(sorted(ttfts)[int(len(ttfts) * 0.95) - 1]) if ttfts else None,
         "turn_total_p50_ms": int(statistics.median(totals)) if totals else None,
     }
 
-    print("\n" + "=" * 78)
-    print("汇总")
-    for k, v in summary.items():
-        print(f"  {k}: {v}")
-
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    out = Path(args.out) if args.out else REPORTS_DIR / f"{APP_VERSION}.json"
-    out.write_text(json.dumps({
+    report = {
         "app_version": APP_VERSION,
         "started_at": started.isoformat(),
         "base": args.base,
         "attempts": args.attempts,
         "summary": summary,
         "cases": results,
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    }
+
+    print("\n" + "=" * 78)
+    print("汇总")
+    for k, v in summary.items():
+        print(f"  {k}: {v}")
+    warnings = observe_trend(report)
+    if warnings:
+        print("\n[警告] 观察档连续下滑（按用户的决定：观察档不卡发版，但这个信号要人看）:")
+        for line in warnings:
+            print(f"  - {line}")
+
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    out = Path(args.out) if args.out else REPORTS_DIR / f"{APP_VERSION}.json"
+    out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n报告已写入 {_display_path(out)}")
     return 0 if summary["cases_stable_pass"] == summary["cases"] else 1
 

@@ -1,0 +1,23 @@
+{
+  "id": "global_interrupt_clears",
+  "mode": "plan",
+  "why": "B9 全局中断：学生说「不学了/算了」时必须**无条件清空当前任务态**，回自由对话 —— 不许追问「确定吗」，也不许继续讲下一节。这条有明确的可观测后果（不调工具 + 不出现续讲措辞），所以是硬判据。",
+  "turns": [
+    {
+      "user": "不学了，算了",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "tools_exactly_empty": true,
+        "forbid_phrases": [
+          "下一节",
+          "继续讲",
+          "确定吗",
+          "还要继续"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "id": "entry_explicit_command",
+  "mode": "plan",
+  "truth": {
+    "paper_source": "2025年秋操作系统期末试题（回忆版）",
+    "group_index": 2
+  },
+  "why": "入口③：学生**明确指名**要哪份卷子的第几组 —— 必须直接调 get_paper_questions，不许反问「你想做哪套/要几道」（反问＝缺陷），也不许只念清单。这条守的是「不多问就照做」。",
+  "turns": [
+    {
+      "user": "给我出《2025年秋操作系统期末试题（回忆版）》的第 2 组题",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "tools_any_of": [
+          "get_paper_questions"
+        ],
+        "tools_none_of": [
+          "list_papers",
+          "prepare_custom_quiz"
+        ],
+        "forbid_phrases": [
+          "哪一套",
+          "哪一套卷子",
+          "你想做哪"
+        ],
+        "min_images": 1,
+        "images_all_from_bank": true,
+        "no_stem_leak": true,
+        "no_reference_leak": true
+      }
+    }
+  ]
+}

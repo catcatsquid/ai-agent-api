@@ -226,6 +226,54 @@ class TestSeedRequiresAnIsolatedProgressFile:
         assert runner.apply_seed({"id": "x"}) == ""
 
 
+class TestObserveTier:
+    """观察档（用户拍板：永不卡发版，但连续 3 版下滑要报警）
+
+    B 类话术行为（岔开提问拉回主线…）没有客观真值，写成硬红只会产生噪声；
+    但"不写"就等于没观测。所以：照样算、照样进报告，只是**不计入稳定通过**。
+    """
+
+    def _turn(self, tools=(), answer="好的", **over):
+        turn = {"answer": answer, "tools": list(tools), "content_events": 1,
+                "answer_source": "content", "ttft_ms": 100, "total_ms": 200}
+        turn.update(over)
+        return turn
+
+    def test_observe_checks_are_marked_and_excluded_from_hard(self):
+        checks = runner.run_checks(
+            {"answer_min_chars": 1, "observe": {"must_contain": ["死锁"]}},
+            self._turn(answer="换个讲法吧"), {})
+        hard = [c for c in checks if not c.get("observe")]
+        obs = [c for c in checks if c.get("observe")]
+        assert len(hard) == 1 and hard[0]["ok"] is True
+        assert len(obs) == 1 and obs[0]["ok"] is False, checks
+
+    def test_observe_failure_does_not_fail_the_case(self, monkeypatch):
+        """观察档全红也不许把 stable_pass 弄成 False"""
+        monkeypatch.setattr(runner, "stream_turn",
+                            lambda *a, **k: self._turn(answer="好的"))
+        case = {"id": "demo", "mode": "plan", "turns": [
+            {"user": "你好",
+             "expect": {"answer_min_chars": 1,
+                        "observe": {"must_contain": ["死锁"]}}}]}
+        result = runner.run_case(case, "http://x", attempts=1)
+        assert result["stable_pass"] is True, result
+        assert result["observe_hits"] == 0 and result["observe_total"] == 1
+
+    def test_trend_warns_only_on_three_strict_declines(self, monkeypatch, tmp_path):
+        def make(stamp, hits):
+            return {"started_at": stamp, "cases": [{
+                "id": "c", "observations": [
+                    {"check": "拉回主线", "ok": i < hits} for i in range(2)]}]}
+
+        monkeypatch.setattr(runner, "REPORTS_DIR", tmp_path)
+        for stamp, hits in (("1", 2), ("2", 1), ("3", 0)):
+            (tmp_path / f"{stamp}.json").write_text(
+                json.dumps(make(stamp, hits), ensure_ascii=False), encoding="utf-8")
+        warnings = runner.observe_trend()
+        assert warnings and "拉回主线" in warnings[0], warnings
+
+
 class TestConsoleEncoding:
     """中文 Windows 的控制台是 cp936，打印 `▶`/`✗` 曾直接 UnicodeEncodeError
 
