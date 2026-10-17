@@ -1,0 +1,43 @@
+{
+  "id": "b1_offtopic_then_back",
+  "mode": "plan",
+  "why": "B1：讲课时学生**岔开提问** —— 必须先把他的问题答完，再主动拉回主线。「拉回主线」没有唯一真值（措辞会变），所以：硬判据只守「真的去检索了、正文非空」，观察档看「回答里有没有出现当前章节名（死锁）」——连续 3 版稳定后才升档。",
+  "turns": [
+    {
+      "user": "我想学操作系统里的死锁那一章",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "tools_none_of": [
+          "list_papers",
+          "grade_answers"
+        ]
+      }
+    },
+    {
+      "user": "先说个别的：死锁和饥饿有什么区别？",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "tools_any_of": [
+          "search_knowledge",
+          "read_section",
+          "explain_question"
+        ],
+        "tools_none_of": [
+          "grade_answers",
+          "get_paper_questions"
+        ],
+        "observe": {
+          "must_contain": [
+            "死锁"
+          ]
+        }
+      }
+    }
+  ]
+}

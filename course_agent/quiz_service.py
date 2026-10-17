@@ -392,8 +392,8 @@ def group_payload(paper: dict, qtype: str = None, group_index: int = None,
     reply_text = (
         f"这是《{source}》的{group['type']}，{group['progress']}：\n\n"
         f"{shown}\n\n"
-        "请慢慢做。答案怎么写都行 —— 比如 `1.D 2.B 3.D`、`DBDAC`、`全都选A`，"
-        "直接把选项发给我就行，**不用照上面的格式**，我来批改。"
+        "请享用。"
+        "直接把答案发给我吧，我来帮你看看有没有做对。"
     )
     return {
         "paper": source,
@@ -1134,7 +1134,6 @@ def record_practice(paper_source: str) -> int:
         _STATS_FILE.write_text(json.dumps(stats, ensure_ascii=False, indent=2),
                                encoding="utf-8")
         return stats[paper_source]
-
 
 # ============================================================
 # 9. 按知识点抽题 / 重做错题 / 只取答案（A2 · A5 · A3-③）
