@@ -315,6 +315,33 @@ def _real_data_dir_stays_clean():
         "请把 server.DATA_ROOT 指到临时目录，别往用户的课程资料目录里写。")
 
 
+def _local_progress_bytes():
+    """真实 runtime/progress.json 的字节（只读；不存在返回 None）"""
+    path = ROOT / "runtime" / "progress.json"
+    return path.read_bytes() if path.exists() else None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _real_progress_store_is_isolated(tmp_path_factory):
+    """测试绝不读写用户**真实的**全局学习进度（1.8.0 起）
+
+    为什么必须隔离：进度会改变模型行为 —— 一旦本机存在真实进度，
+    `planner` 的"开场先让用户选模式"那条守卫就会生效，于是**测试结果取决于
+    用户机器上有多少学习记录**（今天跑绿、明天跑红）。这是最隐蔽的一类
+    "测试依赖本地数据"。
+    """
+    from course_agent import progress
+
+    before = _local_progress_bytes()
+    tmp = tmp_path_factory.mktemp("progress") / "progress.json"
+    original = progress.PROGRESS_PATH
+    progress.PROGRESS_PATH = tmp
+    yield
+    progress.PROGRESS_PATH = original
+    assert _local_progress_bytes() == before, (
+        "测试改动了**真实的** runtime/progress.json —— 那会改掉用户的学习进度。")
+
+
 def _local_server_is_running() -> bool:
     """本机是不是我们那个服务在跑（用 /health 的特征字段认，避免误判别的程序）"""
     import json

@@ -8,7 +8,7 @@ Week 4 工具调用能力 + 刷题扩展能力。
 不要再往这个文件里加业务逻辑 —— 历史上这里和 tutor_agent.py 各写了一份，
 已经真实分叉过（这一侧的阅卷缺 basis_warning、题号也没按题型内序号算）。
 
-工具列表（**13 个**，按用途分组）:
+工具列表（**14 个**，按用途分组）:
 
   检索 / 知识库
     - search_knowledge: 检索 Chroma 知识库（计网+OS 课程笔记）
@@ -30,6 +30,9 @@ Week 4 工具调用能力 + 刷题扩展能力。
   练习统计
     - get_practice_stats: 获取试卷练习统计
     - record_practice: 记录一次试卷练习
+
+  进度
+    - get_learning_progress: 查**跨会话**进度（学到哪、哪套卷子刷到一半）—— 学生问进度时用它
 
 ⚠️ 这份清单**腐烂过一次**：原来写 9 个，加了「学习/复习三件套 + 自拟题」之后
 实际变成 13 个，而文件头一直没跟着改 —— 照着它数工具就会数错。
@@ -605,6 +608,22 @@ def record_practice(paper_source: str) -> str:
                       ensure_ascii=False)
 
 
+@tool
+def get_learning_progress() -> str:
+    """查学生**跨会话**的学习进度：学过哪些节、刷过哪些卷子、哪套刷到一半。
+
+    学生问「我学到哪了」「我哪套卷子还没做完」「上次复习到哪」时用它。
+    返回的是**账本原文**（与开场注入给模型的进度一致），照着说就行 ——
+    不要自己推测进度，也不要反问"你之前学到哪了"。
+    """
+    from course_agent import progress
+
+    return json.dumps({
+        "summary": progress.summary() or "（还没有任何学习记录）",
+        "detail": progress.snapshot(),
+    }, ensure_ascii=False)
+
+
 # ============================================================
 # 导出
 # ============================================================
@@ -623,6 +642,7 @@ tools = [
     prepare_custom_quiz,
     get_practice_stats,
     record_practice,
+    get_learning_progress,
 ]
 
 tools_by_name = {t.name: t for t in tools}

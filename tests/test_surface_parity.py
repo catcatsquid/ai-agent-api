@@ -32,7 +32,9 @@ from course_agent import nodes, quiz_service, tools, tutor_agent
 ROOT = Path(__file__).resolve().parent.parent
 
 # 有意保留的差异：这两条路的历史定位不同（BOT 有联网/统计，助教没有）
-INTENTIONAL_BOT_ONLY = {"web_search", "get_course_info"}
+INTENTIONAL_BOT_ONLY = {"web_search", "get_course_info", "get_learning_progress"}
+# ↑ `get_learning_progress`（1.8.0）：跨会话学习进度是 BOT 侧新加的能力；
+#   手写助教是**冻结的对照实现**，不追这个功能 —— 想加就得显式改这一行。
 # 同一个能力在两个面上叫不同名字
 ALIASES = {"search_knowledge": "search_knowledge_base"}
 
