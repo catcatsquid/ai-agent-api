@@ -402,6 +402,10 @@ def apply_seed(case: dict) -> str:
     progress.reset()
     for pos in seed.get("study") or []:
         progress.record_study(pos, thread_id="seed-评测预置")
+    # 「读到第几块」：L1（继续讲）要靠它验证"接着上次的地方读"
+    for rd in seed.get("read") or []:
+        progress.record_read(rd.get("course", ""), rd.get("source", ""),
+                             rd.get("offset"), thread_id="seed-评测预置")
     for quiz in seed.get("quiz") or []:
         progress.record_quiz(quiz, thread_id="seed-评测预置")
     for g in seed.get("grade") or []:
@@ -502,6 +506,29 @@ def observe_trend(current: dict = None) -> list:
         return []
 
 
+_TRUTH_BASED = ("no_stem_leak", "no_reference_leak", "images_all_from_bank")
+
+
+def validate_cases(cases: list) -> None:
+    """加载期校验：用了**真值型判据**却没有 `truth` → 直接退出
+
+    踩过：`review_r2_topic_drill` 声明了 `no_stem_leak` 但没给 `truth`，
+    跑到一半 `KeyError: 'stems'` —— 前面几条用例的时间全白费。
+    配置错误必须在**开跑之前**说清楚。
+    """
+    problems = []
+    for case in cases:
+        has_truth = bool(case.get("truth"))
+        for i, turn in enumerate(case.get("turns") or [], 1):
+            expect = turn.get("expect") or {}
+            used = [k for k in _TRUTH_BASED if k in expect]
+            used += [k for k in _TRUTH_BASED if k in (expect.get("observe") or {})]
+            if used and not has_truth:
+                problems.append(f"{case['id']} 第 {i} 轮用了 {used}，但用例没有 truth")
+    if problems:
+        raise SystemExit("用例配置有误：\n  " + "\n  ".join(problems))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="行为评测 runner")
     ap.add_argument("--base", default="http://127.0.0.1:8003")
@@ -525,6 +552,7 @@ def main() -> int:
     if not cases:
         print("没有匹配的用例")
         return 2
+    validate_cases(cases)
 
     print(f"行为评测：{len(cases)} 条用例 × {args.attempts} 次  →  {args.base}")
     print("=" * 78)

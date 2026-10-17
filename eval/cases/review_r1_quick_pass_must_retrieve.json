@@ -1,0 +1,50 @@
+{
+  "id": "review_r1_quick_pass_must_retrieve",
+  "mode": "plan",
+  "truth": {
+    "paper_source": "2025年秋操作系统期末试题（回忆版）",
+    "group_index": 1
+  },
+  "why": "复习支线 R1：学生要「快速过一遍核心考点」→ 必须**真的去检索/读课件**，不许凭记忆干讲（这条是复习支线的铁则）。硬判据看工具轨迹，外加不泄漏题库内容（它不该去碰卷子）。",
+  "seed": {
+    "study": [
+      {
+        "mode": "学习",
+        "course": "操作系统",
+        "chapter": "死锁",
+        "section": "死锁的四个必要条件",
+        "source": "03-OS调度.pdf",
+        "status": "讲解中"
+      }
+    ],
+    "read": [
+      {
+        "course": "操作系统",
+        "source": "03-OS调度.pdf",
+        "offset": 15
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "帮我把死锁的核心考点快速过一遍",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 20,
+        "require_streaming": true,
+        "tools_any_of": [
+          "search_knowledge",
+          "read_section"
+        ],
+        "tools_none_of": [
+          "list_papers",
+          "get_paper_questions",
+          "grade_answers"
+        ],
+        "no_stem_leak": true,
+        "no_reference_leak": true
+      }
+    }
+  ]
+}

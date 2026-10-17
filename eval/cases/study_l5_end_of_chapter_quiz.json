@@ -1,0 +1,43 @@
+{
+  "id": "study_l5_end_of_chapter_quiz",
+  "mode": "plan",
+  "why": "学习支线 L5（B3）：学生说「这节讲完了」→ 应主动出**覆盖本节考点的小测**（B3 的落点在 record_study_position 的 next_action 里），并且**不要**去批改（他还没答）。判据：出了自拟题 / 抽题，且没调 grade_answers。",
+  "seed": {
+    "study": [
+      {
+        "mode": "学习",
+        "course": "操作系统",
+        "chapter": "死锁",
+        "section": "死锁的四个必要条件",
+        "source": "03-OS调度.pdf",
+        "status": "讲解中"
+      }
+    ],
+    "read": [
+      {
+        "course": "操作系统",
+        "source": "03-OS调度.pdf",
+        "offset": 15
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "这一节讲完了，出几道题测测我吧",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 20,
+        "require_streaming": true,
+        "tools_any_of": [
+          "prepare_custom_quiz",
+          "practice_by_topic"
+        ],
+        "tools_none_of": [
+          "grade_answers",
+          "list_papers"
+        ]
+      }
+    }
+  ]
+}

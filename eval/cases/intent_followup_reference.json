@@ -1,0 +1,50 @@
+{
+  "id": "intent_followup_reference",
+  "mode": "plan",
+  "why": "意图矩阵·纯问答：第一轮问概念、第二轮用**指代**追问（「那怎么预防？」）—— 必须接着上一轮的话题继续检索/讲解，不能反问「你说的是什么」。硬判据看第二轮真的去检索了；观察档看有没有把话题词（死锁）带出来。",
+  "turns": [
+    {
+      "user": "死锁是怎么产生的？",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "tools_any_of": [
+          "search_knowledge",
+          "read_section"
+        ],
+        "tools_none_of": [
+          "list_papers",
+          "grade_answers"
+        ]
+      }
+    },
+    {
+      "user": "那怎么预防？",
+      "expect": {
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "tools_any_of": [
+          "search_knowledge",
+          "read_section"
+        ],
+        "tools_none_of": [
+          "list_papers",
+          "grade_answers"
+        ],
+        "forbid_phrases": [
+          "你指的是",
+          "你说的是哪"
+        ],
+        "observe": {
+          "must_contain": [
+            "死锁"
+          ]
+        }
+      }
+    }
+  ]
+}
