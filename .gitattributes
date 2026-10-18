@@ -1,0 +1,18 @@
+# 统一换行符：仓库内一律 LF，检出时由各人 core.autocrlf 决定
+# 目的：避免"文件看起来改了、其实只有换行符差异"这种噪音（曾经出现过）
+* text=auto
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.html text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.css text eol=lf
+*.yml text eol=lf
+*.sh text eol=lf
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.zip binary

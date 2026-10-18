@@ -1,0 +1,53 @@
+{
+  "id": "session_mode_switch_continuity",
+  "mode": "plan",
+  "why": "会话侧（此前完全没测）：**plan 出完题，切到 ReAct 说「继续下一组」**。两个模式各有一个 checkpoint 库（plan / react），所以状态其实不共享 —— 这一轮能不能接上，靠的是**全局进度账本**（卷子/下一组）被注入。硬判据：ReAct 那一轮必须调 get_paper_questions，且不许反问「哪一套卷子」（反问＝上下文丢了）。（注：ReAct 那轮不经过 planner，所以守卫管不到它 —— 工具选择放观察档，硬判据只守「没有丢上下文地反问哪套卷子」+ 正文非空。）",
+  "truth": {
+    "paper_source": "2025年秋操作系统期末试题（回忆版）",
+    "group_index": 1
+  },
+  "turns": [
+    {
+      "user": "给我出《2025年秋操作系统期末试题（回忆版）》的第 1 组题",
+      "expect": {
+        "tools_any_of": [
+          "get_paper_questions"
+        ],
+        "forbid_tool_call_text": true,
+        "min_images": 1,
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "observe": {
+          "forbid_tool_call_text_in_stream": true
+        }
+      }
+    },
+    {
+      "mode": "react",
+      "user": "继续下一组",
+      "expect": {
+        "forbid_phrases": [
+          "哪一套卷子",
+          "哪一套",
+          "你想做哪"
+        ],
+        "answer_min_chars": 10,
+        "require_streaming": true,
+        "observe": {
+          "forbid_tool_call_text_in_stream": true,
+          "must_contain": [
+            "第 2 组",
+            "下一组"
+          ],
+          "tools_any_of": [
+            "get_paper_questions",
+            "get_learning_progress"
+          ],
+          "tools_none_of": [
+            "list_papers"
+          ]
+        }
+      }
+    }
+  ]
+}
