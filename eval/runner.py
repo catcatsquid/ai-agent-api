@@ -300,6 +300,16 @@ def _eval_criteria(expect: dict, turn: dict, truth: dict) -> list[dict]:
         hit = _ANSWER_LETTER_RE.search(answer)
         add("没有直接给出选项答案", not hit, f"命中: {hit.group(0)}" if hit else "")
 
+    # 给答案那一轮：**答案必须与题库一致**（B6：编答案比不给更糟）。
+    #   真值来自 bank_truth 的 letters（题库里的正确答案字母）。
+    if expect.get("must_match_bank"):
+        letters = [str(x).strip().upper() for x in (truth.get("letters") or []) if x]
+        missing_letters = [x for x in letters if x not in (answer or "")]
+        add(f"答案与题库一致（{len(letters)} 个字母都在）",
+            bool(letters) and not missing_letters,
+            f"题库答案 {letters}；正文里缺少 {missing_letters}" if letters
+            else "用例没给 truth（拿不到题库答案）")
+
     if expect.get("answer_min_chars"):
         add(f"正文至少 {expect['answer_min_chars']} 字",
             len(answer) >= expect["answer_min_chars"], f"实际 {len(answer)} 字")
@@ -349,12 +359,15 @@ def run_checks(expect: dict, turn: dict, truth: dict) -> list[dict]:
 
 def run_case(case: dict, base: str, attempts: int) -> dict:
     detail, per_attempt, observed = [], [], []
+    # 逐轮可以切模式（plan / react 各有一个 checkpoint 库，清理时要都删）
+    modes_used = {case.get("mode", "plan")}
     for i in range(attempts):
         tid = f"eval-{case['id']}-{i}-{uuid.uuid4().hex[:6]}"
         attempt = {"attempt": i + 1, "thread_id": tid, "turns": []}
         for turn_spec in case["turns"]:
-            turn = stream_turn(base, turn_spec["user"], tid,
-                               mode=case.get("mode", "plan"))
+            mode = turn_spec.get("mode") or case.get("mode", "plan")
+            modes_used.add(mode)
+            turn = stream_turn(base, turn_spec["user"], tid, mode=mode)
             # 传输重试会换 thread_id（见 stream_turn）；记录**实际**用的那个，
             # 否则清理会话时会漏掉重试留下的那一条
             tid = turn.get("thread_id", tid)
@@ -378,6 +391,7 @@ def run_case(case: dict, base: str, attempts: int) -> dict:
     return {"id": case["id"], "attempts": per_attempt,
             "checks_total": total, "checks_passed": passed,
             "stable_pass": passed == total,
+            "modes_used": sorted(modes_used),
             "observe_total": len(observed),
             "observe_hits": sum(1 for c in observed if c["ok"]),
             "observations": observed,
@@ -541,6 +555,76 @@ def validate_cases(cases: list) -> None:
         raise SystemExit("用例配置有误：\n  " + "\n  ".join(problems))
 
 
+def _report_rows() -> list:
+    """按时间读历史报告 → [(版本, 汇总)]"""
+    rows = []
+    for path in sorted(REPORTS_DIR.glob("*.json")):
+        try:
+            rep = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        rows.append((rep.get("app_version") or path.stem,
+                     rep.get("started_at") or "", rep.get("summary") or {}))
+    rows.sort(key=lambda r: r[1] or r[0])
+    return rows
+
+
+def promotion_candidates() -> list:
+    """观察档**升档候选**：连续 3 版命中率都 >=90%
+
+    用户定的规则是"连续 3 版 >=90% 且措辞稳定 → 升 P1"。
+    "措辞稳定"机器判不了，所以这里只给候选，**最后一步必须人看一眼措辞**。
+    """
+    series = {}
+    for _ver, _stamp, summary in [(v, t, s) for v, t, s in _report_rows()]:
+        pass                                    # 汇总里没有逐判据数据，走下面
+    per_version = {}
+    for path in sorted(REPORTS_DIR.glob("*.json")):
+        try:
+            rep = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        stamp = rep.get("started_at") or rep.get("app_version") or path.stem
+        acc = {}
+        for case in rep.get("cases") or []:
+            for obs in case.get("observations") or []:
+                key = (case.get("id"), obs.get("check"))
+                hit, tot = acc.get(key, (0, 0))
+                acc[key] = (hit + (1 if obs.get("ok") else 0), tot + 1)
+        for key, (hit, tot) in acc.items():
+            per_version.setdefault(key, []).append((stamp, hit / tot))
+    out = []
+    for (case_id, check), rows in per_version.items():
+        rows.sort(key=lambda r: r[0])
+        if len(rows) < 3:
+            continue
+        last3 = [r[1] for r in rows[-3:]]
+        if all(r >= 0.9 for r in last3):
+            shown = "→".join(f"{r:.0%}" for r in last3)
+            out.append(f"{case_id} / {check}：最近 3 版 {shown}（可考虑升 P1，需人工确认措辞稳定）")
+    return sorted(out)
+
+
+def write_index() -> str:
+    """生成 eval/reports/INDEX.md（每版一行），返回文件文字"""
+    lines = ["# 评测报告索引（自动生成，别手改）", "",
+             "| 版本 | 用例 | 稳定通过 | 判据 | 观察命中 | 首字 p50 | 轮时长 p50 |",
+             "|---|---|---|---|---|---|---|"]
+    for ver, _stamp, s in _report_rows():
+        lines.append(
+            f"| {ver} | {s.get('cases', '-')} | {s.get('cases_stable_pass', '-')} "
+            f"| {s.get('checks_passed', '-')}/{s.get('checks_total', '-')} "
+            f"| {s.get('observe_hits', '-')}/{s.get('observe_total', '-')} "
+            f"| {s.get('ttft_p50_ms', '-')} ms | {s.get('turn_total_p50_ms', '-')} ms |")
+    cand = promotion_candidates()
+    lines += ["", "## 观察档升档候选（连续 3 版 ≥90%，需人工确认措辞稳定）", ""]
+    lines += [f"- {c}" for c in cand] or ["- （暂无）"]
+    text = "\n".join(lines) + "\n"
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    (REPORTS_DIR / "INDEX.md").write_text(text, encoding="utf-8")
+    return text
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="行为评测 runner")
     ap.add_argument("--base", default="http://127.0.0.1:8003")
@@ -591,7 +675,9 @@ def main() -> int:
                     print(f"    观察未命中: {obs['check']} — {obs['detail']}")
         if not args.keep_threads:
             tids = [a["thread_id"] for a in r["attempts"]]
-            n = delete_threads(args.base, tids, mode=case.get("mode", "plan"))
+            n = 0
+            for mode in r.get("modes_used") or [case.get("mode", "plan")]:
+                n += delete_threads(args.base, tids, mode=mode)
             print(f"  已清理 {n}/{len(tids)} 个评测会话（不留在会话库里）")
 
     all_checks = [c for r in results for a in r["attempts"]
@@ -636,6 +722,14 @@ def main() -> int:
     out = Path(args.out) if args.out else REPORTS_DIR / f"{APP_VERSION}.json"
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n报告已写入 {_display_path(out)}")
+    index_path = REPORTS_DIR / "INDEX.md"
+    write_index()
+    print(f"报告索引已更新 {_display_path(index_path)}")
+    cand = promotion_candidates()
+    if cand:
+        print("\n观察档升档候选（连续 3 版 ≥90%，措辞要人看一眼）:")
+        for line in cand:
+            print(f"  - {line}")
     return 0 if summary["cases_stable_pass"] == summary["cases"] else 1
 
 

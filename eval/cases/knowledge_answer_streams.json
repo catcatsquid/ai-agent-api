@@ -7,7 +7,9 @@
       "user": "操作系统里死锁的四个必要条件是什么？请结合本课资料讲一下。",
       "expect": {
         "tools_any_of": [
-          "search_knowledge"
+          "search_knowledge",
+          "read_section",
+          "list_course_sections"
         ],
         "tools_none_of": [
           "grade_answers",

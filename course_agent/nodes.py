@@ -254,6 +254,37 @@ def _is_partial_unknown_request(text: str) -> bool:
     return bool(re.search(r"不会|教教我|教教我|没做|没写|不懂", t))
 
 
+# 「重做错题」：账本里有错题就必须走 practice_wrong（重出原题），
+# 不能拿 get_paper_questions 把整组重发一遍（实测踩过，1.11.1 满配 1/3 次）。
+_WRONG_REDO_RE = re.compile(r"重做(错题|一遍错|错的)|错题(重做|再做)|再做一遍错题|练错题")
+
+# 「指代追问」：短句 + 指代 + 问号，且句子里没有具体知识点
+# （实测「那怎么预防？」时 planner 计划为空 → 一个工具都没调，凭记忆作答）
+_ANAPHORA_RE = re.compile(r"^(那|那么|那这个|这个|它|其|还有)|^(那|那么)")
+
+
+_CONTINUE_RE = re.compile(r"(继续|接着做|下一组|下一套|接着往下)")
+
+
+def _is_continue_request(text: str) -> bool:
+    return bool(_CONTINUE_RE.search(str(text or "")))
+
+
+def _is_wrong_redo_request(text: str) -> bool:
+    return bool(_WRONG_REDO_RE.search(str(text or "")))
+
+
+def _is_anaphora_question(text: str) -> bool:
+    t = str(text or "").strip()
+    if not t or len(t) > 18:
+        return False
+    if not re.search(r"[?？]|吗|呢|怎么|为什么|如何", t):
+        return False
+    if not _ANAPHORA_RE.search(t):
+        return False
+    return not _topic_in_text(t)          # 句子里没有具体知识点才算"纯指代"
+
+
 def _is_compound_practice_request(text: str) -> bool:
     return bool(_COMPOUND_PRACTICE_RE.search(str(text or "")))
 
@@ -816,6 +847,52 @@ def planner_node(state: AgentState, config=None) -> dict:
                       "qids": _qids}},
             {"tool": "explain_question", "args": {"paper_source": _paper, "qids": _qids}},
         ]
+
+    # 【守卫 10·1.11.2】"继续/下一组" + 账本里有卷子 → 强制取下一组
+    #   跨模式时（plan 出题 → react 继续）ReAct 拿不到 plan 的会话状态，
+    #   只能靠全局账本；实测 3 次里 1 次会去 list_papers。
+    if _is_continue_request(user_content) and not _is_wrong_redo_request(user_content):
+        try:
+            from course_agent import progress as _pg
+            _papers = _pg.load().get("papers") or {}
+            _rows = [(p, r) for p, r in _papers.items()
+                     if isinstance(r, dict) and r.get("next_group_index")]
+            if _rows:
+                _paper, _rec = sorted(
+                    _rows, key=lambda x: x[1].get("at") or "", reverse=True)[0]
+                logger.info("继续下一组 → 强制 get_paper_questions(%s, 第 %s 组)",
+                            _paper, _rec["next_group_index"])
+                normalized = [{"tool": "get_paper_questions",
+                               "args": {"paper_source": _paper,
+                                        "group_index": _rec["next_group_index"]}}]
+        except Exception:                              # noqa: BLE001
+            logger.warning("继续下一组守卫失败（不影响本轮）", exc_info=True)
+
+    # 【守卫 8·1.11.2】"重做错题" + 账本里确有错题 → 强制 practice_wrong（重出原题）
+    if _is_wrong_redo_request(user_content):
+        try:
+            from course_agent import progress as _pg
+            _papers = _pg.load().get("papers") or {}
+            _with_wrong = [(p, r) for p, r in _papers.items() if r.get("wrong_qids")]
+            if _with_wrong:
+                _paper = sorted(_with_wrong,
+                                key=lambda x: (x[1].get("last_grade") or {}).get("at") or "",
+                                reverse=True)[0][0]
+                logger.info("学生要重做错题 → 强制 practice_wrong(%s)", _paper)
+                normalized = [{"tool": "practice_wrong",
+                               "args": {"paper_source": _paper}}]
+        except Exception:                              # noqa: BLE001
+            logger.warning("重做错题守卫失败（不影响本轮）", exc_info=True)
+
+    # 【守卫 9·1.11.2】指代追问（"那怎么预防？"）→ 用上一句去检索
+    #   实测：planner 计划为空 → 一个工具都没调 → 凭记忆作答（评测 intent_followup_reference）
+    if _is_anaphora_question(user_content):
+        _prev = [m.content for m in (state.get("messages") or [])
+                 if isinstance(m, HumanMessage)]
+        if len(_prev) >= 2:
+            logger.info("指代追问 → 用上一句作检索词")
+            normalized = [{"tool": "search_knowledge",
+                           "args": {"query": str(_prev[-2])[:80]}}]
 
     # 【守卫 6·1.11.1】「复习 + 要真题/练几道」复合意图 → 强制按知识点抽题
     #

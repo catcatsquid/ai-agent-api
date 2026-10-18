@@ -58,6 +58,40 @@ def is_ephemeral(thread_id) -> bool:
 # 读写
 # ============================================================
 
+def _migrate(data: dict) -> dict:
+    """把账本升级到当前结构（只升不降）
+
+    · 旧文件缺字段 → 补齐（version 从 0 升到 1）
+    · 文件版本**比程序新** → 只警告，原样返回（强行改会被下一次保存抹掉新字段）
+    """
+    try:
+        version = int(data.get("version") or 0)
+    except (TypeError, ValueError):
+        version = 0
+
+    if version > _VERSION:
+        logger.warning("进度文件版本 %s 高于本程序支持的 %s —— 按旧逻辑读，"
+                       "新字段会被忽略（不会丢，但看不见）", version, _VERSION)
+        return data
+
+    if version < 1:
+        data.setdefault("user", "local")
+        data.setdefault("courses", {})
+        data.setdefault("papers", {})
+        # 逐课程/逐卷补齐子结构（旧文件可能只有顶层键）
+        for bucket in (data.get("courses") or {}).values():
+            if isinstance(bucket, dict):
+                bucket.setdefault("sections", {})
+                bucket.setdefault("last", "")
+        for rec in (data.get("papers") or {}).values():
+            if isinstance(rec, dict):
+                rec.setdefault("groups", {})
+        logger.info("进度账本从版本 %s 升级到 %s", version, _VERSION)
+
+    data["version"] = _VERSION
+    return data
+
+
 def load() -> dict:
     """读进度（文件不存在/损坏都返回空账本，**绝不抛异常**）"""
     if not PROGRESS_PATH.exists():
@@ -69,6 +103,7 @@ def load() -> dict:
         return {"version": _VERSION, "user": "local", "courses": {}, "papers": {}}
     if not isinstance(data, dict):
         return {"version": _VERSION, "user": "local", "courses": {}, "papers": {}}
+    data = _migrate(data)
     data.setdefault("version", _VERSION)
     data.setdefault("user", "local")
     data.setdefault("courses", {})
