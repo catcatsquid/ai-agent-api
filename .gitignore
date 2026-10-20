@@ -121,3 +121,5 @@ eval/backlog.md
 # 这条用例本身是给「守卫 12·零步兜底」配的，但用户明确要求不入库
 # （守卫 12 的代码与单测已经在 tests/test_planner_guards_2026_10_18.py 里）
 eval/cases/plan_zero_step_must_retrieve.json
+docker-compose.yml
+.scratch/
