@@ -124,3 +124,4 @@ eval/cases/plan_zero_step_must_retrieve.json
 docker-compose.yml
 .scratch/
 _notes/
+demo/demo-full.mov

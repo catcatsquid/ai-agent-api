@@ -6,7 +6,7 @@
 
 `Python 3.12` · `LangGraph` · `FastAPI` · `ChromaDB` · `rank_bm25` · `GLM-4-Flash` · `Docker`
 
-| 955 项测试 | 34 条行为评测用例 | 17 个工具 | 24 个路由 | CI 全绿 |
+| 974 项测试 | 34 条行为评测用例 | 17 个工具 | 24 个路由 | CI 全绿 |
 |:--:|:--:|:--:|:--:|:--:|
 | 全离线可跑 · 守卫值守 | 判据化 · 分版本存档 | Function Calling | SSE 流式 | Docker 一键 |
 
@@ -18,15 +18,17 @@
 - [稳定性与安全](#稳定性与安全) — 怎么不让 Agent 跑飞
 - [量化效果](#量化效果) — 数字与口径
 - [快速开始](#快速开始从零复现) — 从零怎么跑起来
+- [Docker](#docker一条命令跑起来) — 一条命令跑起来
 - [测试与工程化](#测试与工程化) — 怎么保证不退化
 - [已知限制与设计取舍](#已知限制与设计取舍) — 边界在哪
 - [Roadmap](#roadmap) — 下一步
+- [这个项目为什么长这样](#这个项目为什么长这样) — 几条设计判断
 
 ---
 
 ## Demo
 
-**视频（52 秒）：[demo/demo-full.mov](demo/demo-full.mov)**
+**视频（52 秒）：[demo/demo-full.mp4](demo/demo-full.mp4)**
 
 | RAG混合检索 | 问答：先检索再作答（1 个工具调用） |
 |---|---|
@@ -77,31 +79,30 @@
 
 ### 代码结构
 
-| 位置 | 负责什么 |
-|---|---|
-| `course_agent/server.py` | HTTP 入口：路由、SSE 推流、中间件挂载、静态页 |
-| `course_agent/graph.py` | 两张图的组装与 checkpointer（Plan / ReAct 各一套库文件） |
-| `course_agent/nodes.py` | 节点实现：planner / executor / synthesizer / llm / tool，以及各类行为守卫 |
-| `course_agent/tools.py` | 17 个 `@tool` 的薄适配；业务逻辑一律下沉到 `quiz_service`，不在这里写 |
-| `course_agent/quiz_service.py` | 刷题业务的唯一实现：取题、分组、批改、讲题、按知识点抽题 |
-| `course_agent/qbank.py` | 题库读取层：扫描 `questions_*.json`、按课程索引、解析答案与分组 |
-| `course_agent/question_bank.py` | 离线题库构建：PDF → 题号定位 → 裁图 → VLM/LLM → 结构化 JSON |
-| `course_agent/memory.py` | 上下文治理：滑动窗口、摘要压缩、摘要缓存按消息 id 摊还 |
-| `course_agent/progress.py` | 学习进度账本：书签、刷题位置、错题，跨会话与跨窗口 |
-| `course_agent/llm.py` | 智谱 HTTP 直调 + `SimpleLLM`（`BaseChatModel` 子类）+ 流式 |
-| `course_agent/auth.py` · `middleware.py` · `logger.py` · `errors.py` | 鉴权 / 限流与 trace_id / 结构化日志 / 三层错误模型与退避 |
-| `course_agent/state.py` | `AgentState` 定义 |
-| `course_agent/tutor_agent.py` | 冻结的手写 tool-calling 循环（对照实现，无 HTTP 入口） |
-| `course_agent/static/` | `chat.html` / `kb.html`（原生 JS，零框架） |
-| `rag_tool.py` | 全项目唯一检索入口：混合检索、rerank、查询改写、两级回退 |
-| `doc_utils.py` | 文档加载 / 清洗 / 分类（ppt · textbook · notes）、章节推断 |
-| `build_knowledge.py` | 建库 CLI：增量（md5 跳过未变）/ 全量 / 单文件 |
-| `knowledge_pipeline/` | 离线流水线：PPT 按页 + 课本分块 + VLM 图表理解 |
-| `tests/` | 单元 · 契约 · 历史回归 · 架构守卫，全离线可跑 |
-| `eval/` | 行为评测用例与按版本归档的报告（走真实 HTTP + SSE） |
-| `demo/` | 演示脚本、演示数据集（`seed/`） |
+| 层 | 位置 | 负责什么 |
+|---|---|---|
+| 入口 | `course_agent/server.py` | HTTP 入口：24 个路由、SSE 推流、中间件挂载、静态页 |
+| 编排 | `course_agent/graph.py` | 两张图的组装与 checkpointer（Plan / ReAct 各一套库文件） |
+| | `course_agent/state.py` | `AgentState` 定义 |
+| | `course_agent/nodes.py` | 节点实现：planner / executor / synthesizer / llm / tool，以及各类行为守卫 |
+| 业务 | `course_agent/quiz_service.py` | 刷题业务的唯一实现：取题、分组、批改、讲题、按知识点抽题 |
+| | `course_agent/tools.py` | 17 个 `@tool` 的薄适配；业务逻辑一律下沉到 `quiz_service` |
+| | `course_agent/qbank.py` | 题库读取层：扫描 `questions_*.json`、按课程索引、解析答案与分组 |
+| | `course_agent/question_bank.py` | 离线题库构建：PDF → 题号定位 → 裁图 → VLM/LLM → 结构化 JSON |
+| 状态 | `course_agent/progress.py` | 学习进度账本：书签、刷题位置、错题，跨会话与跨窗口 |
+| | `course_agent/memory.py` | 上下文治理：滑动窗口、摘要压缩、摘要缓存按消息 id 摊还 |
+| | `course_agent/courses.py` | 课程注册表：课程名来自 `data/*/` 目录，加课不改代码 |
+| 检索 | `rag_tool.py` | 全项目唯一检索入口：混合检索、rerank、查询改写、两级回退 |
+| | `doc_utils.py` | 文档加载 / 清洗 / 分类（ppt · textbook · notes）、章节推断 |
+| | `build_knowledge.py` | 建库 CLI：增量（md5 跳过未变）/ 全量 / 单文件 |
+| | `knowledge_pipeline/` | 离线流水线：PPT 按页 + 课本分块 + VLM 图表理解 |
+| 横切 | `course_agent/llm.py` | 智谱 HTTP 直调 + `SimpleLLM`（`BaseChatModel` 子类）+ 流式 |
+| | `course_agent/auth.py` · `middleware.py` · `logger.py` · `errors.py` | 鉴权 / 限流与 trace_id / 结构化日志 / 三层错误模型与退避 |
+| 前端 | `course_agent/static/` | `chat.html` / `kb.html`（原生 JS，零框架） |
+| 对照 | `course_agent/tutor_agent.py` | 冻结的手写 tool-calling 循环（对照实现，无 HTTP 入口） |
+| 测试 | `tests/` · `eval/` · `demo/` | 单元/契约/守卫（全离线）· 行为评测用例与归档报告 · 演示脚本与数据集 |
 
-一条纪律：`tools.py` 与 `tutor_agent.py` 都只是外壳，业务逻辑只有 `quiz_service.py` 一份.
+一条纪律：`tools.py` 与 `tutor_agent.py` 都只是外壳，业务逻辑只有 `quiz_service.py` 一份。
 
 ### 对外接口
 
@@ -109,10 +110,10 @@
 
 | 组 | 端点 | 说明 |
 |---|---|---|
-| 问答 | `POST /qa/stream` · `POST /qa/ask` | 流式 / 非流式。|
+| 问答 | `POST /qa/stream` · `POST /qa/ask` | 流式 / 非流式 |
 | 知识库 | `GET·POST·DELETE /kb/*` | 统计 / 文档 / 检索测试 / 增量导入 / 上传 / 浏览 / 删除 |
 | 题库 | `GET·POST /qb/*` | 列表 / 搜索 / 知识点与来源 |
-| 会话 | `GET·DELETE /chat/conversations*` | 列表 / 详情/ 删除 |
+| 会话 | `GET·DELETE /chat/conversations*` · `POST /chat/export` | 列表 / 详情 / 删除 / 导出 |
 | 认证 | `POST /auth/login` | 换 JWT（默认关闭，本地免登录） |
 | 运维 | `GET /health` · `GET /progress` | 探活 / 只读进度快照 |
 
@@ -123,7 +124,7 @@
 
 - **防 Agent 失控**：工具调用轮数硬上限；guard node 强制课程问题先检索，防止模型凭记忆作答
 - **上下文治理**：读时裁剪、摘要缓存按消息 id 摊还、tool 消息与 `tool_calls` 严格配对
-- **SSE 四层过滤**：来源白名单 + 内部调用标签 + 类型白名单 + 非空过滤，工具返回原文不会泄漏进正文频道
+- **SSE 正文过滤（四层判据）**：来源白名单 + 内部调用标签 + 类型白名单 + 非空过滤，工具返回原文不会泄漏进正文频道
 - **路径安全**：所有文件操作经 `resolve()` + `relative_to(data/)` 校验，防线设在 API 边界而非库层
 - **可观测性**：`contextvars` 存 `trace_id`，贯穿中间件 / 日志 / 错误处理；三层错误模型 + 指数退避重试 + 降级
 
@@ -247,15 +248,26 @@ curl -N -X POST http://127.0.0.1:8003/qa/stream \
 | 端口 8003 被占 | 上一次的服务没关 | 换 `--port 8004`，或关掉旧进程 |
 | 出题没有图 | 题图未入库（`.gitignore`） | 属预期，见第 3 步 |
 
-### Docker（一条命令跑起来）
+### Docker（两种，别混用）
 
-镜像是给**别人不必自备课件就能复现**用的：容器里带一份 mini 知识库（`demo/seed/`，4 份笔记 + 11 道原创题 + 预建向量库），以只读方式挂进去。
+仓库带两份构建文件，用途不同：
+
+| | 演示镜像 | 自己的完整部署 |
+|---|---|---|
+| 构建文件 | `Dockerfile.demo` + `docker-compose.demo.yml` | `Dockerfile` |
+| 数据 | 挂 `demo/seed/`（随仓库分发：5 份自写笔记 + 11 道原创题 + 预建向量库） | 挂你自己的 `data/` 与 `vector_store/` |
+| 需要 API Key | 不需要，向量库已预建 | 需要，建库要调 embedding |
+| 用途 | 别人 clone 下来一条命令就能看到检索与刷题在工作 | 装自己的课件，当日常工具用 |
+
+演示镜像：
 
 ```bash
 docker compose -f docker-compose.demo.yml up -d --build
 ```
 
-起来就能看 `/chat`，不用建库、不用准备 PDF。data 只读，所以 `/kb/add`、`/kb/upload` 会失败 —— 故意的。
+起来就能看 `/chat`。`demo/seed/data` 是**只读**挂载，所以 `/kb/add`、`/kb/upload` 会失败 —— 故意的，防止演示时改坏数据集；`demo/seed/vector_store` 可写（Chroma 打开 sqlite 要写 `-wal`/`-shm`），`runtime` 用命名卷保存会话与进度，删掉卷就清空演示状态。
+
+自己的完整部署：`Dockerfile` 装了 gcc/g++ 并 `COPY data/`，它对应的编排不随仓库分发（各人挂载路径不同），用 `docker run` 或自己的 compose 挂 `./data` 与 `./vector_store` 即可。**前提是宿主机先建过库**，否则起来检索全空（`/health` 会显示 `knowledge_chunks: 0`）。
 
 ---
 
@@ -289,8 +301,6 @@ docker compose -f docker-compose.demo.yml up -d --build
 
 ## Roadmap
 
-> 这份清单的用途不是承诺，而是说明"我知道下一步该做什么、以及为什么是这个顺序"。
-> 前两条直接决定这个项目能不能拿出**检索质量的数字**，是目前最缺的。
 
 - [ ] **重跑全部评测用例、归档当前版本报告**（当前最该补的一件事）
 - [ ] 检索层 Recall@K / MRR：把"混合检索比纯向量好多少"变成数字
@@ -302,10 +312,9 @@ docker compose -f docker-compose.demo.yml up -d --build
 
 ## 这个项目为什么长这样
 
-
 - **题库用历年真题，不用模型自拟题** —— 我要做的是考试题，模型自己出的题不解决问题
 - **进度存在服务端账本** —— 
-- **评测写到 34 条用例、200+ 条判据** —— 模型行为会漂；我需要同一套标准回答"这一版是不是变差了"
-- **课程问题强制检索** —— 模型对教科书问题会凭记忆直接答，那样答案对、但检索这个卖点整轮不存在
+- **评测写到 34 条用例、200+ 条判据** —— 
+- **课程问题强制检索** —— 
 
 这些判断的来龙去脉和走过的弯路，见 [docs/design-decisions.md](docs/design-decisions.md)；评测细节见 [eval/README.md](eval/README.md)。
