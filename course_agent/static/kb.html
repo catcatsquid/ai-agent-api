@@ -75,8 +75,6 @@
   .import-row { display: flex; gap: 10px; margin-bottom: 12px; align-items: center; }
   .import-row input { flex: 1; padding: 10px 14px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; }
   .import-row input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
-  .checkbox-row { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #6b7280; }
-  .checkbox-row input { width: 16px; height: 16px; }
 
   /* Toast */
   .toast { position: fixed; bottom: 30px; right: 30px; padding: 14px 24px; border-radius: 8px; color: #fff; font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index: 9999; transition: opacity .3s; }
@@ -245,10 +243,6 @@
           <div class="dir-selected-bar">
             <span class="selected-path" id="selected-path">当前选择: data</span>
             <div style="display:flex;gap:10px;align-items:center;">
-              <div class="checkbox-row">
-                <input type="checkbox" id="skip-textbook" checked>
-                <label for="skip-textbook">跳过课本</label>
-              </div>
               <button class="btn btn-primary" id="btn-add-dir" onclick="addDirectory()">扫描导入</button>
             </div>
           </div>
@@ -723,7 +717,6 @@ async function addFile() {
 async function addDirectory() {
   const path = currentDir;
   if (!path) { showToast('请先选择一个目录', 'info'); return; }
-  const skipTextbook = document.getElementById('skip-textbook').checked;
 
   const btn = document.getElementById('btn-add-dir');
   btn.disabled = true; btn.textContent = '扫描中...';
@@ -731,7 +724,7 @@ async function addDirectory() {
   resultDiv.innerHTML = '<div class="loading">扫描并导入中，请耐心等待...</div>';
 
   try {
-    const url = `/kb/add-directory?dir_path=${encodeURIComponent(path)}&skip_textbook=${skipTextbook}`;
+    const url = `/kb/add-directory?dir_path=${encodeURIComponent(path)}`;
     const data = await api(url, { method: 'POST' });
     if (data.code === 0) {
       const r = data.data;

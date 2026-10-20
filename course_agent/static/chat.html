@@ -479,20 +479,49 @@ showToast('对话已删除', 'info');
 // 服务端是知道的。这里把"服务端有、本地没有"的补进来 —— 补进来之后就走原来的
 // loadChat 路径（threadId 与 reasoningMode 都在，能直接接着聊）。
 //
+// 另一半：服务端**已经不在了**的会话，本地也要跟着消失
+//
+// 为什么需要（2026-10-18 用户实测反馈）：会话列表是"服务端库 + 浏览器 localStorage"
+// 合起来的，而 `srv_*` 这些条目一旦被导进 localStorage 就永远留在那儿 ——
+// 开发/验收时用真模型跑的探针会话（"我要开始学习了！"…）当初被导进来过一次，
+// 后来库里的记录删掉了，列表里却还挂着，看着就像"测试记录混进了我的消息列表"。
+//
+// 判据只能拿**完整**的服务端列表来比：`/chat/conversations` 有 limit 上限，
+// 所以调用方只在"拿到的条数 < limit"（= 确实拿全了）时才调这里，避免误删
+// 排在 limit 之外的真实会话。
+function pruneStaleServerChats(liveThreadIds) {
+const before = chats.length;
+chats = chats.filter(c => !(c && c.fromServer && c.threadId && !liveThreadIds.has(c.threadId)));
+const removed = before - chats.length;
+if (removed > 0) {
+saveChats();
+renderChatList();
+console.info('[会话列表] 清掉 ' + removed + ' 条服务端已不存在的会话');
+}
+return removed;
+}
+
 // 刻意做得很小心：拿不到就静默放弃（离线时本地功能必须照旧可用），
 // 单条失败不影响其它会话，已有同 thread 的本地会话不重复导入。
 async function importServerConversations() {
 if (isStreaming) return;
+const LIMIT = 200;                 // 与 /chat/conversations 的上限一致
 let list = [];
 try {
-const resp = await fetch('/chat/conversations?limit=20');
+const resp = await fetch('/chat/conversations?limit=' + LIMIT);
 if (!resp.ok) return;
 list = ((await resp.json()).data) || [];
 } catch (e) {
 return;   // 锦上添花的功能，不能影响本地
 }
+// 拿全了才敢清理：没拿全时（正好等于上限）不知道 limit 之外还有什么
+if (list.length < LIMIT) {
+pruneStaleServerChats(new Set(list.map(conv => conv && conv.thread_id)));
+}
 let added = 0;
-for (const conv of list) {
+// 只**导入**最近 20 条（每条都要再取一次消息，20 条已经是 20 个请求）；
+// 清理则用上面拿全的整份列表判断。
+for (const conv of list.slice(0, 20)) {
 const tid = conv && conv.thread_id;
 if (!tid) continue;
 if (chats.some(c => c.threadId === tid)) continue;

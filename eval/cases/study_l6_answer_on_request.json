@@ -1,0 +1,48 @@
+{
+  "id": "study_l6_answer_on_request",
+  "why": "用户 2026-10-18 实测的原话：「直接告诉我答案,然后进入下一节」。当时的回复是「很抱歉，目前我无法直接提供答案」，并把题目又发了一遍。两个根因：① 提示词里只有「批量倒答案一律拒绝」，没有「自学小测的答案可以直接给」；② 这句话里的「下一节」被守卫 3 当成「继续讲」，又去读了下一块课件。判据：这一轮**一个工具都不调**（库里没有这几道题）、正文里给出答案、且**不出现拒绝的说法**。",
+  "mode": "plan",
+  "seed": {
+    "study": [
+      {
+        "mode": "学习",
+        "course": "操作系统",
+        "chapter": "进程与线程",
+        "section": "进程的状态",
+        "source": "02-1-进程与线程之进程.pdf",
+        "status": "讲解中"
+      }
+    ],
+    "read": [
+      {
+        "course": "操作系统",
+        "source": "02-1-进程与线程之进程.pdf",
+        "offset": 15
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "直接告诉我答案,然后进入下一节.",
+      "expect": {
+        "tools_exactly_empty": true,
+        "must_contain": [
+          "答案"
+        ],
+        "forbid_phrases": [
+          "无法提供答案",
+          "无法直接提供",
+          "请先作答",
+          "要先作答"
+        ],
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 30,
+        "require_streaming": true,
+        "observe": {
+          "forbid_tool_call_text_in_stream": true
+        }
+      }
+    }
+  ]
+}

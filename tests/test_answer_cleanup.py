@@ -71,6 +71,30 @@ class TestCleanAnswerText:
         out = nodes.clean_answer_text("……讲解……", {"session": {}})
         assert "本节结束" not in out
 
+    def test_skip_closing_when_the_student_is_asking_for_answers(self):
+        """学生要答案的那一轮不是"讲完一节"，不许补收尾标记"""
+        state = {"session": {"study": {"course": "操作系统"}}}
+        out = nodes.clean_answer_text("1. A 2. B 3. C", state, skip_closing=True)
+        assert "本节结束" not in out
+        assert out == "1. A 2. B 3. C"
+
+    def test_keyword_argument_style_call_is_stripped(self):
+        """2026-10-18 真会话里抓到的第三种泄漏形态（关键字参数）
+
+        学生气泡里出现了：`请稍等片刻……read_section(course="操作系统",
+        section="02-1-进程与线程之进程")` —— 前两条正则只认 JSON，漏了它。
+        """
+        t = ('请稍等片刻，我马上为您准备好课程内容。'
+             'read_section(course="操作系统", section="02-1-进程与线程之进程")')
+        out = nodes.clean_answer_text(t)
+        assert "read_section" not in out, out
+        assert "请稍等片刻" in out, "正文不能被误删"
+
+    def test_a_real_function_name_in_the_lesson_is_kept(self):
+        """空括号不许当工具调用 —— `pthread_cancel()` 是讲义正文"""
+        t = "线程可以用 pthread_cancel() 取消，也可以用 pthread_exit() 退出。"
+        assert nodes.clean_answer_text(t) == t
+
 
 # ============================================================
 # ①b 原始协议帧（模型把工具调用协议当正文写出来）

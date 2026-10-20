@@ -9,6 +9,7 @@
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,6 +25,8 @@ from course_agent import server
 from course_agent.graph import build_graph, build_react_graph
 from course_agent.memory import SUMMARY_MARK
 from course_agent.server import _checkpoint_time, app
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture
@@ -111,6 +114,47 @@ class TestConversationList:
                 {"configurable": {"thread_id": f"t{i}"}},
                 {"messages": [HumanMessage(content=f"第{i}问", id=f"m{i}")]})
         assert len(server.list_server_conversations(2)) == 2
+
+    @pytest.mark.parametrize("tid", ["probe-0c59ff78", "eval-quiz_no_leak-0-abc"])
+    def test_probe_threads_are_hidden(self, tmp_checkpointers, tid):
+        """探针会话（真跑验收 / 评测）不许出现在用户的消息列表里
+
+        2026-10-18 用户实测反馈：用真模型跑验收对话（"我要开始学习了！"…）会落到
+        同一个 checkpoint 库，于是**混进了他的会话列表**。约定与 `progress` 一致：
+        `probe-*` / `eval-*` 是测试造的，不是用户聊出来的。
+        """
+        server.graph.update_state(
+            {"configurable": {"thread_id": tid}},
+            {"messages": [HumanMessage(content="我要开始学习了！", id="p1")]})
+        server.graph.update_state(
+            {"configurable": {"thread_id": "real-1"}},
+            {"messages": [HumanMessage(content="真正的会话", id="r1")]})
+        got = [r["thread_id"] for r in server.list_server_conversations(10)]
+        assert got == ["real-1"], got
+
+
+class TestChatListForgetsDeletedServerChats:
+    """服务端**删掉/清掉**的会话，浏览器列表里也要跟着消失
+
+    2026-10-18 用户实测反馈："之前你做测试的聊天记录会留在消息列表"。
+    根因是两截：① 探针会话落在了真实 checkpoint 库（清单接口现在过滤 `probe-*`/`eval-*`）；
+    ② 更麻烦的是 `srv_*` 条目一旦被导进 localStorage 就永远留着 —— 库里删了它还挂着。
+    所以前端要按"服务端完整列表"清掉 `fromServer` 的僵尸条目。
+    """
+
+    HTML = (ROOT / "course_agent/static/chat.html").read_text(encoding="utf-8")
+
+    def test_the_prune_helper_exists_and_is_wired(self):
+        assert "function pruneStaleServerChats(" in self.HTML
+        assert "pruneStaleServerChats(new Set(" in self.HTML, "算出来了却没清"
+
+    def test_it_only_prunes_when_the_server_list_is_complete(self):
+        """列表接口有 limit：没拿全就不知道 limit 之外还有什么，不许清"""
+        assert "list.length < LIMIT" in self.HTML
+
+    def test_it_only_touches_server_imported_chats(self):
+        """本地聊的会话（没有 fromServer / 没有 threadId）不许被误删"""
+        assert "c.fromServer" in self.HTML
 
 
 class TestConversationsEndpoint:

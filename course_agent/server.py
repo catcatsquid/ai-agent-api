@@ -152,6 +152,39 @@ def _place_into_data(source: FilePath, target_dir: str | None) -> FilePath:
 PLAN_ANSWER_NODES = frozenset({"synthesizer"})
 REACT_ANSWER_NODES = frozenset({"llm"})
 
+# 「从题库出题」这一轮**不逐字推正文**（2026-10-18 用户实测后拍板）
+#
+# 现象：出题那轮的正文里，每道题都带一条 `![题目](/qb_images/2024%E5%B9%B4...png)`
+# —— 百分号编码的中文文件名，一条就 100+ 字符。逐字推出去时，学生先看到的是
+# 一大串半截 URL 和 `![题目]`（渲染出来还是坏图），一条 5 题的答案光 URL 就要
+# 输出好几百 token，看着像卡住了。
+#
+# 所以：这一轮只要**真的调了取题工具**，正文就不逐字推，等 `done.answer` 一次给全
+# （前端在 done 时本来就会用 answer 覆盖气泡）。进度事件（node）照旧，学生看得到
+# "正在取题/正在出题"，不会一片空白。
+#
+# 判据取**实际工具轨迹**而不是猜正文内容 —— 猜"这段像不像题"是最脆的判法；
+# 而且这样"自拟练习 / 讲题 / 知识问答"都不受影响（它们照常流式）。
+# 常量本身放在 quiz_service（那里是题库口径的家），评测侧 import 同一份。
+QUIZ_TOOLS = quiz_service.QUIZ_TOOLS
+
+
+def _quiz_turn_update(node_output) -> bool:
+    """这次节点输出里有没有"从题库取题"的动作
+
+    两种图都要认：
+      · plan 图：executor 返回一条**声明**了 tool_calls 的 AIMessage
+      · react 图：tool_node 返回的 ToolMessage（带 name）
+    """
+    for msg in (node_output or {}).get("messages") or []:
+        if getattr(msg, "name", None) in QUIZ_TOOLS:
+            return True
+        for tc in getattr(msg, "tool_calls", None) or []:
+            if isinstance(tc, dict) and tc.get("name") in QUIZ_TOOLS:
+                return True
+    return False
+
+
 
 def sse_content_event(msg_chunk, metadata=None, answer_nodes=None) -> str | None:
     """把一条流式消息转成 SSE content 事件；该跳过的返回 None
@@ -495,6 +528,11 @@ def qa_stream(req: QueryRequest):
     前端在 done 时用 answer 覆盖一次，所以"流式少了一个字/多了一遍"这类问题
     不会留在界面上；而模型不流式时（一个 content 都没有）答案也照样能到。
 
+    ⚠️ **出题轮不逐字推正文**（`QUIZ_TOOLS`，2026-10-18 用户实测后拍板）：
+    题库出题的正文里每条都带 `![题目](/qb_images/…%E5%B9%B4…png)` 这种长 URL，
+    逐字推出去时学生会先看到一堆半截 URL 与坏图，而且光 URL 就要输出几百 token。
+    所以这一轮只发 node 进度、正文等 done 一次给全。判据是**实际工具轨迹**。
+
     注意 `content` 的过滤有四层判据（来源白名单 / 内部 tag / 只放行 chunk / 非空），
     详见 sse_content_event —— 尤其"只放行 AIMessageChunk"这条：messages 模式会把
     节点**返回**的完整 AIMessage 也推一遍，放行就会让答案在气泡里出现两遍。
@@ -508,15 +546,22 @@ def qa_stream(req: QueryRequest):
 
     def event_stream():
         yield _sse({"type": "start", "thread_id": tid, "query": req.query})
+        # 这一轮是不是"从题库出题"（真调了取题工具才算）→ 见 QUIZ_TOOLS 的注释
+        quiz_turn = False
         try:
             for mode, chunk in active_graph.stream(
                 initial_state, config=config, stream_mode=["updates", "messages"]
             ):
                 if mode == "updates":
                     for node_name, node_output in chunk.items():
+                        if _quiz_turn_update(node_output):
+                            quiz_turn = True
                         for event in _node_progress_events(node_name, node_output or {}):
                             yield _sse(event)
                 elif mode == "messages":
+                    if quiz_turn:
+                        # 出题轮：正文不逐字推（一堆半截 URL/坏图），done 一次给全
+                        continue
                     msg_chunk, metadata = chunk
                     line = sse_content_event(msg_chunk, metadata, answer_nodes)
                     if line:
@@ -645,6 +690,11 @@ def list_server_conversations(limit: int = 30) -> list:
 
     直接查 checkpointer 的库：`checkpoints` 表按 thread_id 聚合，
     用 `checkpoint_ns = ''` 过滤掉子图（只有顶层才是"一个会话"）。
+
+    ⚠️ **探针会话（`probe-*` / `eval-*`）不进列表**。这是 2026-10-18 用户实测反馈：
+    开发/验收时用真模型跑的那些会话（"我要开始学习了！""直接告诉我答案"…）会落到
+    同一个 checkpoint 库里，于是**混进了用户的消息列表**。约定与 `progress` 一致
+    （`progress.is_ephemeral`）：这类 thread_id 是"测试造的"，不是用户聊出来的。
     """
     rows = []
     for saver, app, mode in ((plan_checkpointer, graph, "plan"),
@@ -659,6 +709,8 @@ def list_server_conversations(limit: int = 30) -> list:
             logger.warning("会话列表查询失败(%s): %s", mode, e)
             continue
         for thread_id, latest, n in found:
+            if progress.is_ephemeral(thread_id):
+                continue
             rows.append({
                 "thread_id": thread_id,
                 "mode": mode,
@@ -865,8 +917,17 @@ def kb_add_document(
     if doc_type is None and _classify_doc(resolved, DATA_ROOT) is None:
         return {"code": 0, "msg": "已跳过（该目录不进知识库）", "added_chunks": 0,
                 "skipped_reason": "「往年题」目录不进知识库 —— 它是题库的源材料，"
-                                  "走题库导入那条管线（/qb 页面）。"
+                                  "走题库导入那条管线（命令行："
+                                  "`python -m course_agent.question_bank <试卷 PDF>`；"
+                                  "/qb 页面只做检索）。"
                                   "要让它进知识库，请放入「课本」或含 ppt 的目录。",
+                "path": str(resolved), "copied": copied}
+    # 已经入过库、内容也没变 → 说明白"已是最新"，别只说"成功 0 个分块"
+    if kb.is_unchanged(str(resolved)):
+        return {"code": 0, "msg": "ok（文件没变化）", "added_chunks": 0,
+                "skipped_reason": "文件内容与上次入库时一致，已是最新 —— "
+                                  "本次没有重复入库（要重新分块请先删除这份文档，"
+                                  "或改了文件再导入）。",
                 "path": str(resolved), "copied": copied}
     try:
         added = kb.add_document(str(resolved), doc_type=doc_type, chapter=chapter)
@@ -965,7 +1026,6 @@ def kb_import_targets(auth: dict = Depends(any_auth)):
 @app.post("/kb/add-directory")
 def kb_add_directory(
     dir_path: str = Query(..., description="目录路径（必须位于 data/ 目录下）"),
-    skip_textbook: bool = Query(False, description="是否跳过课本"),
     auth: dict = Depends(any_auth),
 ):
     """增量导入目录下所有新文件（只允许 data/ 目录下的目录）"""
@@ -978,7 +1038,7 @@ def kb_add_directory(
         return {"code": 404, "msg": f"目录不存在: {dir_path}"}
     kb = get_knowledge_base()
     try:
-        result = kb.add_directory(str(resolved), skip_textbook=skip_textbook)
+        result = kb.add_directory(str(resolved))
         return {"code": 0, "msg": "ok", "data": result}
     except Exception as e:
         return {"code": 500, "msg": f"导入失败: {str(e)[:200]}"}

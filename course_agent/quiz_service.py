@@ -746,6 +746,81 @@ def study_course_line(course: str, mode: str = "学习") -> str:
 
 _QUIZ_MARKERS = ("本节小测", "【小测】", "小测】", "测试题", "测验题", "小测")
 
+# 「从题库取题」的三个工具 —— 这一轮**不逐字推正文**（2026-10-18 用户拍板）
+#
+# 为什么单独立一个常量：这条口径有两个使用方 ——
+#   · `server.qa_stream`：决定这一轮的正文推不推（出题正文里每条都带
+#     `![题目](/qb_images/…%E5%B9%B4…png)` 的长 URL，逐字推会刷出一堆半截 URL 和坏图）
+#   · `eval.runner`：`require_streaming` 的判据要按它分支（出题轮反过来要求"不流式"）
+# 两处各写一份的话，改一处另一处就会变成假话（这个项目已经栽过几次）。
+QUIZ_TOOLS = frozenset({"get_paper_questions", "practice_by_topic", "practice_wrong"})
+
+# 有没有"题"：题号行（1. / 2、/ （3））或选项行（A. / （B））
+_QUESTION_LINE_RE = re.compile(
+    r"(?m)^\s*(?:[（(]?\d{1,2}[).、．]|[一二三四五六七八九十][、.．])\s*\S")
+_OPTION_LINE_RE = re.compile(
+    r"(?m)^\s*(?:[A-D][).、．]|[（(][A-D][）)])\s*\S")
+# 题干的样子（"1. 进程状态：…"这种纯列点不算题）
+_QUESTION_ASK_RE = re.compile(
+    r"[？?]|什么|哪一?个|哪个|为什么|如何|简述|说明|列举|判断|填空|计算")
+
+
+def has_quiz_questions(text: str) -> bool:
+    """这段回答里到底有没有**题**（判不准时偏向"有"）
+
+    ## 为什么需要它
+
+    2026-10-18 用户实测：模型写完「本节结束」说了一句"现在我们可以进行小测，
+    准备好了吗？"，**一道题都没出**。提示词里写了格式也没用（同样的措辞病在
+    「本节结束」上已经量过一轮）—— 所以这条也要有代码侧的判据。
+
+    判据刻意保守：只要像题（有选项行，或题号行 + 疑问/作答词）就算"有"。
+    漏判的代价是"明明出了题又被补一遍"，那比不补更糟。
+    """
+    t = str(text or "")
+    if _OPTION_LINE_RE.search(t):
+        return True
+    return bool(_QUESTION_LINE_RE.search(t) and _QUESTION_ASK_RE.search(t))
+
+
+# 「小测」当**小标题**用的样子（行首、可带 markdown 前缀、行尾可带冒号）。
+# 注意不能只按"句子里出现小测"判断 —— "还没通过本节小测"这种说法很常见，
+# 它不是标题，也就不是"这一节讲完了在出题"。
+_QUIZ_HEADING_RE = re.compile(
+    r"(?m)^\s*(?:[#>*\-]{1,4}\s*)?(?:【?\s*本节小测\s*】?|【小测】|小测】|"
+    r"测试题|测验题|小测)\s*[：:]?\s*$")
+
+
+def has_quiz_heading(text: str) -> bool:
+    """这段回答里有没有一个"小测"小标题（行首那种）"""
+    return bool(_QUIZ_HEADING_RE.search(str(text or "")))
+
+
+# 结尾那句"要不要做小测 / 准备好了吗" —— 它出现就说明这一轮**没出题**
+_PERMISSION_ASK_RE = re.compile(
+    r"(?:^|(?<=[。！？!?\n]))[^。！？!?\n]{0,60}?"
+    r"(?:准备好了吗|要不要(?:开始)?(?:做|来)?(?:个)?小测|要不要我?(?:来)?出题|"
+    r"需要我?(?:来)?出题|想不想(?:做|来)?(?:个)?小测|开始小测[了吧])"
+    r"[^。！？!?\n]{0,30}[。！？!?]?\s*$")
+
+
+def strip_permission_ask(text: str) -> str:
+    """摘掉结尾"准备好了吗 / 要不要做小测"这类**问许可**的句子
+
+    它和「本节结束」是同一类问题：模型爱用"要不要"把决定权推回给学生，
+    而用户明确要的是"讲完直接出题"。补题之前先把它摘掉，否则补完会变成
+    "准备好了吗？【本节小测】1…"这种半句话接题。
+
+    可能连着一两句（"…准备好了吗？我们可以开始小测了。"），所以循环剥到不动为止。
+    """
+    t = str(text or "")
+    for _ in range(3):
+        stripped = _PERMISSION_ASK_RE.sub("", t).rstrip()
+        if stripped == t.rstrip():
+            break
+        t = stripped
+    return re.sub(r"\n{3,}", "\n\n", t)
+
 
 def ensure_closing(text: str) -> tuple:
     """兜底补上「本节结束」标记，返回 (文本, 是否补过)
@@ -790,7 +865,15 @@ def closing_block() -> str:
         "\n"
         "请作答，我来逐题批改。\n"
         "```\n"
-        "没有「本节结束」这四个字，学生会以为后面还有内容、不敢往下走。"
+        "没有「本节结束」这四个字，学生会以为后面还有内容、不敢往下走。\n"
+        "⚠️ 反过来也**不许「没讲完就说讲完」**：**不要**写"
+        "「请注意，这只是一个简要的概述，接下来我会详细讲解每个部分的内容」这类"
+        "**过渡套话**（2026-10-18 实测每轮都带，学生以为你在糊弄）——"
+        "要么把这一节讲完再收尾，要么先别写「本节结束」。\n"
+        "⚠️ **题必须和「本节结束」写在同一轮回答里**：**不许**写"
+        "「要不要做个小测？」「准备好了吗？」「需要我出题吗？」"
+        "—— 学生要的就是直接做题，问一句等于把这一轮浪费掉"
+        "（2026-10-18 实测：它说了「准备好了吗」，一道题没出）。"
     )
 
 
@@ -1227,6 +1310,129 @@ def pick_questions_by_topic(topic: str, course: str = "", count: int = 5,
                  "逐个贴给学生；学生作答后用 grade_answers(paper_source=对应卷名, "
                  "qids=[该题 qid], user_answer_text=...) 批改。"),
     }
+
+
+def quiz_questions_with_images(tool_contents) -> list[dict]:
+    """从**本轮工具结果**里取出"这一组题的图片"，按展示顺序排好
+
+    为什么要它（2026-10-18 用户实测后拍的第二步）：出题那轮的正文里，每条题都带
+    `![题目](/qb_images/2024%E5%B9%B4…png)` 这种百分号编码的长 URL。之前只是
+    "不逐字推"，但模型**还是得把几百 token 的 URL 打出来**，出题一轮 33 秒。
+    改成：模型只写「题号 + 知识点」，图片由服务端按题号补（`attach_quiz_images`）。
+
+    两种来源，题号口径不一样（这里统一成"展示题号"）：
+      · `get_paper_questions` → `questions[]`（同一份卷子的一组）→ **用题库给的 no**
+      · `practice_by_topic` / `practice_wrong` → `items[]`（可能跨多份卷子，no 会撞）
+        → **按列表顺序编号 1..N**（学生看到的顺序就是这样）
+    """
+    questions: list[dict] = []
+    items: list[dict] = []
+    for raw in tool_contents or []:
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        for q in data.get("questions") or []:            # 同一卷的一组：题号可信
+            if not isinstance(q, dict) or not q.get("image_url"):
+                continue
+            try:
+                no = int(q.get("no"))
+            except (TypeError, ValueError):
+                continue
+            if no:
+                questions.append({"no": no, "topic": q.get("topic") or "",
+                                  "image_url": q["image_url"]})
+        for q in data.get("items") or []:                # 跨卷抽题：按顺序重编号
+            if not isinstance(q, dict) or not q.get("image"):
+                continue
+            items.append({"no": len(items) + 1, "topic": q.get("topic") or "",
+                          "image_url": q["image"]})
+
+    picked = questions or items
+    out, seen = [], set()
+    for q in picked:
+        if q["no"] in seen:
+            continue
+        seen.add(q["no"])
+        out.append(q)
+    return out
+
+
+# 一行"题目清单"：`1. 进程调度`、`**2、死锁**`、`- 3) 银行家算法`
+_QUESTION_LINE_RE = re.compile(
+    r"(?m)^[ \t]*(?:[-*+][ \t]*)?\*{0,2}[ \t]*(\d{1,3})[ \t]*\*{0,2}[ \t]*[.、)．]")
+
+
+def attach_quiz_images(text: str, questions: list[dict]) -> str:
+    """把题库图片按**题号**补到学生看到的那份清单上（模型不写链接）
+
+    规则：
+      · 先把模型自己写的图片 markdown 全摘掉 —— 它写的往往就是那串长 URL，
+        而且是它最费 token 的部分；
+      · 再按题号找行（`1. 进程调度` 这种），在行尾补 `![题目](题库图片)`；
+      · 没找到对应行的题（模型漏了/换了写法）→ 在最后一条清单行后面补一整行，
+        **保证"有几道题就有几张图"**（这条以前靠提示词求模型，现在由代码保证）；
+      · 不是出题轮（没有题）→ 原样返回。
+    """
+    if not questions or not str(text or "").strip():
+        return text
+    cleaned = _IMG_MD_RE.sub("", str(text))
+    lines = cleaned.split("\n")
+
+    # 题号 → 行号（同一题号取第一处；一行只用一次）
+    line_of: dict[int, int] = {}
+    for i, line in enumerate(lines):
+        m = _QUESTION_LINE_RE.match(line)
+        if not m:
+            continue
+        no = int(m.group(1))
+        line_of.setdefault(no, i)
+
+    attached, last_line = set(), -1
+    for q in questions:
+        no, url = q["no"], q["image_url"]
+        idx = line_of.get(no)
+        if idx is None:
+            continue
+        lines[idx] = lines[idx].rstrip() + f"  ![题目]({url})"
+        attached.add(no)
+        last_line = max(last_line, idx)
+
+    missing = [q for q in questions if q["no"] not in attached]
+    if missing:
+        block = [f"{q['no']}. {q.get('topic') or ''}  ![题目]({q['image_url']})"
+                 for q in missing]
+        if last_line >= 0:
+            lines[last_line + 1:last_line + 1] = block
+        else:
+            lines.extend([""] + block)
+    return "\n".join(lines)
+
+
+def redact_quiz_image_urls(text: str, questions: list[dict]) -> str:
+    """把工具结果里的题库图片链接换成一句占位说明
+
+    为什么不能只靠提示词（2026-10-18 实测）：`get_paper_questions` 的返回里带着
+    `render_example` / `reply_text`，那两段本身就是**写好的**「题号 + 知识点 +
+    ![题目](长URL)」。模型看到现成的东西就会抄 —— 提示词写了"不要写图片链接"，
+    实测它照样抄，出题那轮还是输出 5 条百分号编码的长 URL（`补前 5 张`）。
+
+    所以这里把 URL 从**模型能看到的那份上下文**里换掉：它抄不到长串，就只能写
+    「题号 + 知识点」，图由 `attach_quiz_images` 按题号补。
+    """
+    out = str(text or "")
+    for q in questions or []:
+        url = (q or {}).get("image_url") or ""
+        if not url:
+            continue
+        # 先把**整段图片 markdown** 去掉：只换 URL 的话，模型会把
+        # `![题目]（图片由系统补）` 这种半成品抄进正文，再被 sanitize 当成"编造的图片"
+        # 摘掉（实测日志里就是那条 warning）。
+        out = out.replace(f"![题目]({url})", "")
+        out = out.replace(url, "（系统按题号补图）")
+    return out
 
 
 def wrong_questions_payload(paper: dict, wrong_qids: list) -> dict:

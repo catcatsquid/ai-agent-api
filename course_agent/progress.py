@@ -371,28 +371,22 @@ def has_any() -> bool:
         return False
 
 
-def brief() -> str:
-    """给学生的「进度 + 四种模式建议」——**代码生成、可照抄**
+def _options() -> list[str]:
+    """四个模式的具体选项（**代码生成、可照抄**）—— brief() 与 opening_text() 共用
 
-    为什么要代码生成：这句话每次开场都要说，而"措辞 + 别漏掉某个建议"交给模型
-    会时好时坏（这个项目在 `group_payload` / `closing_block` 上已经这么做过）。
-    模型只需要按进度挑一条、或原样转述。
+    空账本时没有"接着学"和"复习"可指，改成"开始学"+ 自拟练习 + 刷题
+    （`_empty_options`）—— 学生第一次开窗也得有可选项，不能只说"你想学哪章"。
     """
     data = load()
     courses = data.get("courses") or {}
     papers = data.get("papers") or {}
-    if not courses and not papers:
-        return ""
-
-    lines = ["【已知进度】（直接用，**不要再问「你之前学到哪了」**）"]
-    lines.append(summary() or "- （暂无）")
-
     opts = []
-    # ① 继续学：挑最近活跃的那门课
+
+    # ① 接着学：挑最近活跃的那门课
     active = [(c.get("last_at") or "", c) for c in courses.values() if c.get("last")]
     last_sec, last_course = None, ""
     if active:
-        active.sort(reverse=True)
+        active.sort(key=lambda x: x[0], reverse=True)
         bucket = active[0][1]
         last_course = next((c for c, b in courses.items() if b is bucket), "")
         sec = (bucket.get("sections") or {}).get(bucket.get("last"))
@@ -412,20 +406,98 @@ def brief() -> str:
     half = [(p, r) for p, r in papers.items() if not r.get("finished")]
     if half:
         p, r = half[0]
-        nxt = (r.get("cursor") or {}).get("next_group_index")
-        where = f"第 {nxt} 组" if nxt is not None else "新的组"
-        opts.append(f"刷题：把《{p}》的{where}做完（刷题模式）")
+        cur = r.get("cursor") or {}
+        gi, nxt = cur.get("group_index"), cur.get("next_group_index")
+        # 进度块（summary）说的是"做到第 N 组，下一组是第 M 组"，
+        # 这里必须同一口径 —— 早先用 next_group_index 说成"刷到第 3 组"，
+        # 与进度块"做到第 2 组"自相矛盾（2026-10-18 实测抓到的文案不一致）。
+        if gi is not None and nxt is not None:
+            hint = f"上次做到第 {gi} 组，可接着做第 {nxt} 组"
+        elif nxt is not None:
+            hint = f"可接着做第 {nxt} 组"
+        else:
+            hint = "也可以接着做"
+        # 动作统一是"挑一套"，进度只作括注 —— 否则学生回一句"想刷题"会被读成
+        # "选这一条"，直接跳进某一份卷子，一份目录都不给。
+        opts.append(f"刷题：自己挑一套卷子做（《{p}》{hint}）")
     else:
         opts.append("刷题：从题库里挑一套卷子做（刷题模式）")
     # ④ 复习
     if courses:
         total = sum(len(c.get("sections") or {}) for c in courses.values())
         opts.append(f"复习：把已学过的 {total} 节快速过一遍（复习模式）")
+    return opts
 
+
+def _empty_options(course_hint: str = "") -> list[str]:
+    """第一次开窗（账本为空）时的选项：没有"接着学"和"复习"可指"""
+    course = str(course_hint or "").strip()
+    first = f"「{course}」的第一章" if course else "第一章"
+    return [
+        f"开始学：从{first}开始讲（学习模式）",
+        "自拟练习：说一个知识点，我出 3~5 道题（AI 出题）",
+        "刷题：从题库里挑一套卷子做（刷题模式）",
+    ]
+
+
+def brief(include_empty: bool = False, course: str = "") -> str:
+    """给模型的「进度 + 模式建议」——**代码生成、可照抄**
+
+    为什么要代码生成：这句话每次开场都要说，而"措辞 + 别漏掉某个建议"交给模型
+    会时好时坏（这个项目在 `group_payload` / `closing_block` 上已经这么做过）。
+    模型只需要按进度挑一条、或原样转述。
+
+    Args:
+        include_empty: 账本为空时也给一份"还没有记录 + 从第一章开始"的建议。
+            默认 False（老调用方/测试默认"没进度就别说已知进度"）；
+            开场轮（学生只说"想学某门课"）传 True —— 用户 2026-10-18 实测反馈：
+            没有记录时它直接开讲了一节，学生根本没机会选。
+        course: 学生这句话里提到的课程名（空账本时拿它说"从「操作系统」的第一章开始"）
+    """
+    data = load()
+    courses = data.get("courses") or {}
+    papers = data.get("papers") or {}
+    if not courses and not papers:
+        if not include_empty:
+            return ""
+        opts = _empty_options(course)
+        lines = ["【已知进度】**还没有任何学习记录**"
+                 "（这是第一次开窗，别反问「你之前学到哪」—— 他不知道，也不需要知道）",
+                 "",
+                 "【这一轮只能做一件事：告诉他还没有记录，并建议他从下面挑一条】",
+                 "⚠️ 学生还没选之前，**不要开始讲内容**（不要说\"我们来看这一节\"）、"
+                 "也不要调工具。"]
+        for i, o in enumerate(opts, 1):
+            lines.append(f"{i}. {o}")
+        return "\n".join(lines)
+
+    lines = ["【已知进度】（直接用，**不要再问「你之前学到哪了」**）"]
+    lines.append(summary() or "- （暂无）")
     lines.append("")
     lines.append("【这一轮只能做一件事：把上面的进度说给学生，并让他在下面选一条】")
     lines.append("⚠️ 学生还没选之前，**不要开始讲内容**（不要说\"我们来看这一节\"）、"
                  "不要调 read_section / list_course_sections。")
+    for i, o in enumerate(_options(), 1):
+        lines.append(f"{i}. {o}")
+    return "\n".join(lines)
+
+
+def opening_text(course_hint: str = "") -> str:
+    """**给学生看**的开场（进度 + 建议）—— 代码直接产出，不经过模型
+
+    为什么要这份：开场那条路模型时好时坏 —— 2026-10-18 用户实测，"我们来学习
+    一下操作系统吧" 之后它直接讲了一整节，一条进度都没报。而"报进度 + 让他选"
+    这件事不需要模型参与就能说得对（与 `closing_block` 的「本节结束」同一思路：
+    不可靠的动作交给代码）。
+    """
+    data = load()
+    if not (data.get("courses") or data.get("papers")):
+        body = ["你还没有任何学习记录，我们可以从头开始。"]
+        opts = _empty_options(course_hint)
+    else:
+        body = ["**你现在的进度**", ""] + (summary() or "- （暂无）").splitlines()
+        opts = _options()
+    lines = body + ["", "接下来想做哪一件？（回我一个编号，或者说你其实想学哪一章）"]
     for i, o in enumerate(opts, 1):
         lines.append(f"{i}. {o}")
     return "\n".join(lines)
@@ -441,34 +513,48 @@ def snapshot() -> dict:
 # ============================================================
 
 _MODE_KEYS = {
-    "接着学": ("接着学", "继续学"),
+    # 空账本时第一条叫「开始学」（没有"上次"可接着）—— 判据里一起认
+    "接着学": ("接着学", "继续学", "开始学", "从头学"),
     "自拟练习": ("自拟练习", "自拟", "AI 出题", "出几道题", "出 3"),
     "刷题": ("刷题", "做题", "卷子"),
     "复习": ("复习",),
 }
 
 
-def missing_modes(answer: str) -> list[str]:
+def applicable_modes() -> list[str]:
+    """当前账本下**该给**哪几种模式（空账本时没有「复习」可做）"""
+    data = load()
+    if data.get("courses") or data.get("papers"):
+        return ["接着学", "自拟练习", "刷题", "复习"]
+    return ["接着学", "自拟练习", "刷题"]
+
+
+def missing_modes(answer: str, modes: list[str] | None = None) -> list[str]:
     """回答里漏掉哪几种模式（用于兜底补全）"""
     text = str(answer or "")
-    return [m for m, keys in _MODE_KEYS.items() if not any(k in text for k in keys)]
+    names = modes if modes is not None else applicable_modes()
+    return [m for m in names if not any(k in text for k in _MODE_KEYS[m])]
 
 
 def ensure_modes(answer: str) -> tuple[str, list[str]]:
-    """保证开场回答里**四种模式都在**，漏的用代码补在后面
+    """保证开场回答里**该有的模式都在**，漏的用代码补在后面
 
     为什么要兜底（实测）：提示里写清"四条全部列出"，模型仍然只说了三条
     （把「自拟练习」漏了）。这与 `ensure_closing` 是同一类问题：措辞模型化、
     但"不能漏项"这种可靠动作交给代码。
+
+    空账本（第一次开窗）只要求三条（没有"复习"可做），所以文本取自
+    `brief(include_empty=True)`。
     """
     missing = missing_modes(answer)
     if not missing:
         return answer, []
-    text = brief()
+    text = brief(include_empty=True)
     lines = [ln for ln in text.splitlines() if ln[:2].strip().rstrip(".").isdigit()]
     add = []
     for name in missing:
-        hit = next((ln for ln in lines if name in ln or (name == "刷题" and "刷题" in ln)), None)
+        keys = _MODE_KEYS.get(name, (name,))
+        hit = next((ln for ln in lines if any(k in ln for k in keys)), None)
         if hit:
             # 去掉原编号，免得后面出现"2. ... 1. ..."这种怪编号
             add.append(re.sub(r"^\d+\.\s*", "", hit.strip()))

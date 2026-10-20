@@ -48,6 +48,8 @@ REPORTS_DIR = EVAL_DIR / "reports"
 # 直接 import 而不是复制 —— 复制的话生产改了正则，评测还在按旧规则判，
 # 而注释里那句"与生产同一条"就变成假话（这个项目在别处已经栽过好几次了）。
 from course_agent.nodes import _TOOL_CALL_TEXT_RE  # noqa: E402
+# 出题轮"不逐字流式"这条口径的唯一出处（生产用它决定推不推正文）
+from course_agent.quiz_service import QUIZ_TOOLS  # noqa: E402
 # 只在"明确给答案"的语境里才算泄题（避免"B 选项说…"这种讲解被误判）
 _ANSWER_LETTER_RE = re.compile(r"(答案|正确答案|正确选项)\s*[:：是为]?\s*([A-D])\b")
 _IMG_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
@@ -317,10 +319,21 @@ def _eval_criteria(expect: dict, turn: dict, truth: dict) -> list[dict]:
     # ⚠️ 这两条是"真空通过"的解药：正文为空时，上面那些"不含泄漏"的断言会
     # **全部轻松通过**（空字符串当然不含参考答案）。所以必须有非空与流式门槛。
     if expect.get("require_streaming"):
-        add("回答是逐字流式出来的（不是最后一次性给出）",
-            turn["content_events"] > 0 and turn["answer_source"] == "content",
-            f"content 事件 {turn['content_events']} 个，正文来源={turn['answer_source']}"
-            f"（来源为 done 意味着流式没生效：首响=总时长）")
+        # 「出题轮」是**例外**（2026-10-18 用户拍板：题库出题的正文不逐字推）：
+        # 出题那轮的正文里每条都带 `![题目](/qb_images/...png)` 的长 URL，逐字推出去
+        # 学生先看到一堆半截 URL 和坏图。所以这一轮只发进度、正文由 `done` 一次给全。
+        # 判据跟着改：出题轮要求 `answer_source == "done"`（正相反！）——
+        # 哪天它又开始流式吐 URL，这条会红。
+        if set(turn.get("tools") or []) & QUIZ_TOOLS:
+            add("出题轮不做逐字流式（正文由 done 一次给全）",
+                turn["content_events"] == 0 and turn["answer_source"] == "done",
+                f"content 事件 {turn['content_events']} 个，正文来源={turn['answer_source']}"
+                f"（出题轮的正文里有长图片链接，逐字推会刷屏）")
+        else:
+            add("回答是逐字流式出来的（不是最后一次性给出）",
+                turn["content_events"] > 0 and turn["answer_source"] == "content",
+                f"content 事件 {turn['content_events']} 个，正文来源={turn['answer_source']}"
+                f"（来源为 done 意味着流式没生效：首响=总时长）")
 
     if expect.get("max_ttft_ms"):
         ttft = turn["ttft_ms"]

@@ -1,0 +1,55 @@
+{
+  "id": "entry_kickoff_begin_learning",
+  "why": "用户 2026-10-18 要求补的一条：**「我要开始学习了！」必须等效于「我想学习」**。这句话比 `entry_kickoff_from_progress` 里的「我想学习」更容易被漏掉——它没有「想」字，动词是「开始学习」，后面还带个语气词。判据与那条保持一致：① 报出真实进度（课程 / 章节 / 半刷的卷子）② 给出四种模式（接着学 / 自拟练习 / 刷题 / 复习）③ 不反问「你之前学到哪」④ **一个工具都不调**（不许直接开讲）。",
+  "mode": "plan",
+  "seed": {
+    "study": [
+      {
+        "mode": "学习",
+        "course": "操作系统",
+        "chapter": "死锁",
+        "section": "死锁的四个必要条件",
+        "source": "05-死锁.pdf",
+        "status": "讲解中"
+      }
+    ],
+    "quiz": [
+      {
+        "paper": "2025年秋操作系统期末试题（回忆版）",
+        "type": "选择题",
+        "group_index": 1,
+        "next_group_index": 2,
+        "qids": [
+          "2025OS_Q1",
+          "2025OS_Q2"
+        ]
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "我要开始学习了！",
+      "expect": {
+        "tools_exactly_empty": true,
+        "must_contain": [
+          "操作系统",
+          "死锁",
+          "自拟练习"
+        ],
+        "forbid_phrases": [
+          "你之前学到哪",
+          "你学到哪了",
+          "我们来看这一节",
+          "本节结束"
+        ],
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 40,
+        "require_streaming": true,
+        "observe": {
+          "forbid_tool_call_text_in_stream": true
+        }
+      }
+    }
+  ]
+}

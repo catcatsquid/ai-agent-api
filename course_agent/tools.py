@@ -402,8 +402,13 @@ def get_paper_questions(paper_source: str, group_index: int = 1) -> str:
         "questions": payload["questions"],
         "qids": payload["qids"],
         "reply_text": payload["reply_text"],
-        "render_hint": ("直接把 reply_text 作为回复主体发出去；题目必须整组出现，"
-                        "图片必须用 reply_text 里的 /qb_images/ 地址。"
+        # ⚠️ 这条提示 2026-10-18 改过（用户实测：出题一轮 33 秒，一半时间在吐图片 URL）。
+        # 原来写的是"直接把 reply_text 发出去，图片必须用这里的 /qb_images/ 地址" ——
+        # 那是**明确教模型抄长 URL**。现在图片由 `nodes.synthesizer_node` 按题号自动补，
+        # 模型只写「题号 + 知识点」即可。别再把"抄 URL"写回来。
+        "render_hint": ("出题时**只写「题号 + 知识点」一行一道题**；"
+                        "**不要写 `![题目](...)` 图片链接** —— 系统会在返回前"
+                        "按题号把题库原图补到对应行上。题目必须整组出现，"
                         "不要改动题号或知识点，也不要自己补题目文字或选项。"),
     }, ensure_ascii=False)
 

@@ -95,3 +95,19 @@ multi_tool_agent.py
 #   !docs/架构决策.md
 docs/*.md
 !docs/README.md
+# 设计取舍与踩坑复盘（README 首屏会链过去，必须能入库）
+!docs/design-decisions.md
+
+# ============================================================
+# 演示数据集（demo/seed/）—— 必须进仓库
+# 理由：README 承诺"docker compose -f docker-compose.demo.yml up 就能看到东西"，
+#       而上面的 vector_store/ 通配会把 seed 的向量库一并忽略，所以这里显式放回
+# ============================================================
+!demo/seed/
+!demo/seed/vector_store/
+!demo/seed/vector_store/**
+# Chroma 运行时写出来的 WAL/SHM 是临时文件，不提交
+demo/seed/vector_store/*-wal
+demo/seed/vector_store/*-shm
+demo/seed/vector_store/**/*-wal
+demo/seed/vector_store/**/*-shm
