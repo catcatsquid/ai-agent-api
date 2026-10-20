@@ -159,6 +159,17 @@
     </div>
     <div class="panel">
       <div class="panel-header">
+        <h2>课程</h2>
+        <div>
+          <input id="new-course-name" placeholder="新课名，如 数据结构"
+                 style="width:180px;padding:6px 8px;border:1px solid #dadce0;border-radius:6px">
+          <button class="btn btn-primary btn-sm" onclick="createCourse()">新增课程</button>
+        </div>
+      </div>
+      <div id="courses-list" style="padding:12px 16px;color:#5f6368">加载中...</div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
         <h2>文档列表</h2>
         <button class="btn btn-primary btn-sm" onclick="loadDocuments()">刷新</button>
       </div>
@@ -468,13 +479,50 @@ async function api(path, options = {}) {
   return res.json();
 }
 
+async function loadCourses() {
+  const box = document.getElementById('courses-list');
+  if (!box) return;
+  try {
+    const d = await api('/kb/courses');
+    const list = d.data || [];
+    if (!list.length) { box.textContent = '还没有课程'; return; }
+    box.innerHTML = list.map(c => {
+      const m = c.materials || {};
+      return '<div style="padding:4px 0">' + c.name +
+        '<span style="color:#80868b">　往年题 ' + (m['往年题'] || 0) + ' · 课本 ' +
+        (m['课本'] || 0) + ' · ppt ' + (m['ppt'] || 0) + '</span></div>';
+    }).join('');
+  } catch (e) {
+    box.textContent = '加载失败：' + e.message;
+  }
+}
+
+async function createCourse() {
+  const input = document.getElementById('new-course-name');
+  const name = (input.value || '').trim();
+  if (!name) { showToast('请先填课程名', 'warn'); return; }
+  try {
+    await api('/kb/courses', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    input.value = '';
+    await loadCourses();
+    showToast('已新增课程：' + name);
+    if (typeof loadStats === 'function') loadStats();
+  } catch (e) {
+    showToast('新增失败：' + e.message, 'error');
+  }
+}
+
 function switchTab(name) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
   document.getElementById(`tab-${name}`).classList.add('active');
   event.target.classList.add('active');
 
-  if (name === 'overview') { loadStats(); loadDocuments(); }
+  if (name === 'overview') { loadStats(); loadDocuments(); loadCourses(); }
   if (name === 'questionbank') loadQBTopics();
 }
 
@@ -933,6 +981,8 @@ browseDir('data');
 loadImportTargets();
 // 题库检索知识点加载
 loadQBTopics();
+// 课程清单（真相源是 data/ 下的目录）
+loadCourses();
 </script>
 
 </body>

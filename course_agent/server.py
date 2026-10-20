@@ -35,7 +35,9 @@ from course_agent.auth import any_auth, create_jwt
 from course_agent.logger import logger
 from course_agent.memory import INTERNAL_LLM_TAG
 from course_agent.middleware import setup_middlewares
-from course_agent import qbank, quiz_service, progress
+from course_agent import progress, qbank, quiz_service
+from course_agent.courses import (CourseNameError, course_dir, create_course,
+                                  known_courses)
 from config import APP_VERSION
 from rag_tool import get_knowledge_base
 
@@ -829,6 +831,47 @@ class SearchTestRequest(BaseModel):
     top_k: int = 5
     doc_types: list[str] = None
     chapter: str = None
+
+
+class CourseCreateRequest(BaseModel):
+    name: str
+
+
+def _course_materials(name: str) -> dict:
+    """统计一门课三个子目录里的文件数（只读，给前端展示）"""
+    root = course_dir(name)
+    out = {}
+    for sub in ("往年题", "课本", "ppt"):
+        d = root / sub
+        out[sub] = len([p for p in d.rglob("*") if p.is_file()]) if d.is_dir() else 0
+    return out
+
+
+@app.get("/kb/courses")
+def kb_courses():
+    """课程清单 —— 真相源是 data/ 下的目录（见 course_agent/courses.py）"""
+    return {"code": 0, "msg": "ok",
+            "data": [{"name": c, "materials": _course_materials(c)} for c in known_courses()]}
+
+
+@app.post("/kb/courses")
+def kb_create_course(req: CourseCreateRequest):
+    """新增课程：建 data/<课程>/{往年题,课本,ppt}
+
+    名字不合法（保留名 / 路径分隔符 / 重名）时返回 400，前端 api() 会把 msg 弹出来。
+    """
+    try:
+        data = create_course(req.name)
+    except CourseNameError as exc:
+        return JSONResponse(status_code=400,
+                            content={"code": 400, "msg": str(exc), "data": None})
+    # 课程名 → 文件名列表的缓存必须失效，否则这门课的资料在检索里还看不见
+    try:
+        from course_agent import quiz_service
+        quiz_service._COURSE_SOURCE_CACHE.clear()
+    except Exception:
+        pass
+    return {"code": 0, "msg": "ok", "data": data}
 
 
 @app.get("/kb/stats")
