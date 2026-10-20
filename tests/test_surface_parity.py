@@ -27,7 +27,8 @@ from pathlib import Path
 
 import pytest
 
-from course_agent import nodes, quiz_service, tools, tutor_agent
+from course_agent import nodes, quiz_service, tools
+from frozen import tutor_agent
 
 ROOT = Path(__file__).resolve().parent.parent
 

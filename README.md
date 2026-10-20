@@ -1,16 +1,10 @@
 # 知识寻回BOT —— 课程资料变成会讲课、会出题、会批改的助教
 
 > 把课件、课本、历年真题 PDF 变成一个真的能用的课程助教：按章节讲、分组出题、批改、讲题、记进度，讲不清就联网查。
->
-> 另有两块不在主流程里、但决定它能不能用的工作：把版式不规整的试卷（表格、题图、跨页题）转成带题号、题图、知识点和参考答案的结构化题库；把"不泄题、不编造题目与图片"这类硬约束放进工具的返回值，而不是提示词。
->
-> 仓库自带 974 项离线测试和 34 条行为评测用例（走真实 HTTP + SSE）。评测层发现过一个单元测试覆盖不到的问题：逐字流式在生产配置下从未生效，答案一直整段一次性出现。
+> 仓库自带 974 项离线测试和 34 条行为评测用例（走真实 HTTP + SSE）。
 
 `Python 3.12` · `LangGraph` · `FastAPI` · `ChromaDB` · `rank_bm25` · `GLM-4-Flash` · `Docker`
 
-| 974 项测试 | 34 条行为评测用例 | 17 个工具 | 24 个路由 | CI 全绿 |
-|:--:|:--:|:--:|:--:|:--:|
-| 全离线可跑 · 守卫值守 | 判据化 · 分版本存档 | Function Calling | SSE 流式 | Docker 一键 |
 
 **目录**
 
@@ -74,7 +68,6 @@
 
 ---
 
-
 ## 架构与代码结构
 
 ![架构总览](docs/screenshots/architecture.png)
@@ -101,10 +94,11 @@
 | 横切 | `course_agent/llm.py` | 智谱 HTTP 直调 + `SimpleLLM`（`BaseChatModel` 子类）+ 流式 |
 | | `course_agent/auth.py` · `middleware.py` · `logger.py` · `errors.py` | 鉴权 / 限流与 trace_id / 结构化日志 / 三层错误模型与退避 |
 | 前端 | `course_agent/static/` | `chat.html` / `kb.html`（原生 JS，零框架） |
-| 对照 | `course_agent/tutor_agent.py` | 冻结的手写 tool-calling 循环（对照实现，无 HTTP 入口） |
+| 对照 | `frozen/tutor_agent.py` | 冻结的手写 tool-calling 循环（对照实现，不参与运行） |
 | 测试 | `tests/` · `eval/` · `demo/` | 单元/契约/守卫（全离线）· 行为评测用例与归档报告 · 演示脚本与数据集 |
 
-一条纪律：`tools.py` 与 `tutor_agent.py` 都只是外壳，业务逻辑只有 `quiz_service.py` 一份。
+ps:`tools.py` 与 `tutor_agent.py` 都只是外壳，业务逻辑只有 `quiz_service.py` 一份。
+`tutor_agent.py` 已移到 `frozen/`：它的 HTTP 入口与前端接线都删了，只留模块与测试。留着它是为了给「两条路径能力等价、所以撤掉一个入口」这个决定留一份可核对的参照物，`tests/test_tutor_reference.py` 守着它不许再出现在路由表里。
 
 ### 对外接口
 
@@ -293,7 +287,7 @@ docker compose -f docker-compose.demo.yml up -d --build
   但「操作系统 / 计算机网络」这两个课程名硬编码在默认课程列表（`quiz_service`、`nodes`）、
   工具参数 `enum`（`tutor_agent` ×5，会直接拒绝其他课程名）与三处 prompt 里。
   换成别的课需要改这些 + 重建库 —— 这是明确的推广成本，不是"理论上支持"
-- 另保留一份手写 tool-calling 循环（`tutor_agent.py`）作为冻结的对照实现：与 LangGraph 路径共用 `quiz_service.py`，无 HTTP 入口
+- 另保留一份手写 tool-calling 循环（`frozen/tutor_agent.py`）作为冻结的对照实现：与 LangGraph 路径共用 `quiz_service.py`，无 HTTP 入口
 - 首响仍有约 6.5 秒 —— planner + 检索是静默的，模型"检索完才开始写"。方向：压检索耗时 / 把进度也流给学生
 - ReAct 偶发"嘴上说要调工具、实际没调"：已做两件事 —— 协议帧不再进正文（1.7.3）、补一轮强制调用（1.11.1，`tests/test_react_retry.py` 6 条守着）；残留的是流式打字过程中可能闪过一下工具调用原文，最终答案（`done.answer`）是干净的，这条降为观察档、不卡发版
 - 当前为单用户本地部署设计；多用户需在会话与配额层扩展

@@ -3,15 +3,15 @@
 除了把项目根目录加进 sys.path，这里还负责一件**容易被忽略的事**：
 告诉测试哪些"数据集"是可选的。
 
-背景：这个仓库的 `data/` 里只有题库 JSON 是文本、可跟踪；
-课程课件/课本/图片/向量库加起来 300 MB，是刻意 gitignore 的本地数据。
+背景：`data/` 下的课件、课本、试卷、题库、题图加起来 300 MB，且有版权，
+全部 gitignore，属于本地数据。
 于是"别人 clone 下来跑测试"和"CI"都会缺这些数据 ——
 以前的做法是直接报红，看起来像代码坏了，其实是数据没带。
 
 所以这里统一检测并**跳过**依赖缺失数据的用例（skip，不是 xfail），
 并把原因写清楚。这样：
   · 本地（数据齐全）跑满全部用例，一项不跳；
-  · CI / 新克隆（只有 JSON）跳过依赖本地数据的用例，其余照跑。
+  · CI / 新克隆（没有题库）跳过依赖本地数据的用例，其余照跑。
 （刻意不写测试条数：写死的数字必然过期，要看数量跑一次 pytest 就有。）
 """
 import os
@@ -114,7 +114,7 @@ AVAILABLE = {
 }
 
 _REASONS = {
-    "question_bank": "缺少题库数据（data/question_bank/questions_*.json）—— 它应该被提交进仓库",
+    "question_bank": "缺少题库（data/question_bank/questions_*.json）—— 由试卷 PDF 生成，属于本地数据",
     "images": "缺少题图（data/question_bank/images/）—— 它被 .gitignore 排除，属于本地数据",
     "vector_store": "缺少向量库（vector_store/）—— 属于本地数据，需先跑 build_knowledge.py",
     "course_files": "缺少课程资料（data/<课程>/ 下的课本/课件/笔记）—— 属于本地数据，未提交进仓库",
@@ -128,7 +128,7 @@ _REASONS = {
 # 匹配是**逐层取并集**：文件级说"要题库"，某个类再说"还要课件"，
 # 两者都会生效。这样就不必为了少数几条用例把整个文件跳过。
 DATA_NEEDS = {
-    # ---- 题库 JSON（已提交，任何克隆都有）----
+    # ---- 题库 JSON（本地生成，克隆后需先建题库）----
     "test_qbank.py": ("question_bank",),
     "test_qa_mode_tools.py": ("question_bank",),
     "test_qb_single_source.py": ("question_bank",),
