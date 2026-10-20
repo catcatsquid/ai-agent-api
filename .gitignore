@@ -111,3 +111,13 @@ demo/seed/vector_store/*-wal
 demo/seed/vector_store/*-shm
 demo/seed/vector_store/**/*-wal
 demo/seed/vector_store/**/*-shm
+
+# ============================================================
+# 本地决策簿 / 永不入库的评测用例（2026-10-18 用户拍板）
+# ============================================================
+# eval/backlog.md 是"决策树讨论期间"的待办登记簿：里面 A1/A4/A5 等仍标"待实施"，
+# 而代码里早做完了 —— 原样提上去只会误导读它的人，所以留在本地。
+eval/backlog.md
+# 这条用例本身是给「守卫 12·零步兜底」配的，但用户明确要求不入库
+# （守卫 12 的代码与单测已经在 tests/test_planner_guards_2026_10_18.py 里）
+eval/cases/plan_zero_step_must_retrieve.json
