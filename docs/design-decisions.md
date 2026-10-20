@@ -10,7 +10,7 @@
 
 ## 一、两条 Agent 路径：为什么留、为什么不对外
 
-| | LangGraph（Plan-and-Execute / ReAct） | 手写循环（`tutor_agent.py`） |
+| | LangGraph（Plan-and-Execute / ReAct） | 手写循环（`frozen/tutor_agent.py`） |
 |---|---|---|
 | 定位 | **产品主路径**，唯一有 HTTP 入口的实现 | **冻结的对照实现**，只保留模块与测试 |
 | 业务逻辑 | `course_agent/quiz_service.py`（同一份） | 同上，只包了不同的外壳 |

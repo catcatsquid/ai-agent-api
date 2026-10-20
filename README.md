@@ -1,7 +1,7 @@
 # 知识寻回BOT —— 课程资料变成会讲课、会出题、会批改的助教
 
 > 把课件、课本、历年真题 PDF 变成一个真的能用的课程助教：按章节讲、分组出题、批改、讲题、记进度，讲不清就联网查。
-> 仓库自带 974 项离线测试和 34 条行为评测用例（走真实 HTTP + SSE）。
+> 仓库自带 985 项离线测试和 34 条行为评测用例（走真实 HTTP + SSE）。
 
 `Python 3.12` · `LangGraph` · `FastAPI` · `ChromaDB` · `rank_bm25` · `GLM-4-Flash` · `Docker`
 
@@ -64,7 +64,7 @@
 | 模型 | GLM-4-Flash（对话）· embedding-3（向量）· glm-4v（图表理解） |
 | 状态 | SQLite checkpointer 持久化 + JSON 进度账本 |
 | 前端 | 原生 JS，零框架（`chat.html` / `kb.html`） |
-| 工程 | pytest 955 项 · eval 34 条判据化用例 · GitHub Actions · Docker |
+| 工程 | pytest 985 项 · eval 34 条判据化用例 · GitHub Actions · Docker |
 
 ---
 
@@ -76,7 +76,7 @@
 
 | 层 | 位置 | 负责什么 |
 |---|---|---|
-| 入口 | `course_agent/server.py` | HTTP 入口：24 个路由、SSE 推流、中间件挂载、静态页 |
+| 入口 | `course_agent/server.py` | HTTP 入口：26 个路由、SSE 推流、中间件挂载、静态页 |
 | 编排 | `course_agent/graph.py` | 两张图的组装与 checkpointer（Plan / ReAct 各一套库文件） |
 | | `course_agent/state.py` | `AgentState` 定义 |
 | | `course_agent/nodes.py` | 节点实现：planner / executor / synthesizer / llm / tool，以及各类行为守卫 |
@@ -100,12 +100,12 @@
 
 ### 对外接口
 
-对表面很窄 —— 一共 **6 组**端点、24 个路由（含 `/`、`/chat`、`/kb` 三个页面）：
+对表面很窄 —— 一共 **6 组**端点、26 个路由（含 `/`、`/chat`、`/kb` 三个页面）：
 
 | 组 | 端点 | 说明 |
 |---|---|---|
 | 问答 | `POST /qa/stream` · `POST /qa/ask` | 流式 / 非流式 |
-| 知识库 | `GET·POST·DELETE /kb/*` | 统计 / 文档 / 检索测试 / 增量导入 / 上传 / 浏览 / 删除 |
+| 知识库 | `GET·POST·DELETE /kb/*` | 统计 / 课程（列表、新增）/ 文档 / 检索测试 / 增量导入 / 上传 / 浏览 / 删除 |
 | 题库 | `GET·POST /qb/*` | 列表 / 搜索 / 知识点与来源 |
 | 会话 | `GET·DELETE /chat/conversations*` · `POST /chat/export` | 列表 / 详情 / 删除 / 导出 |
 | 认证 | `POST /auth/login` | 换 JWT（默认关闭，本地免登录） |
@@ -128,13 +128,16 @@
 
 | 指标 | 结果 | 口径 |
 |------|------|------|
-| 首字响应 TTFT | 33s → **6.5s**（p50） | v1.7.1 → v1.7.2，eval 实测，同上同判据 |
-| `content` 逐字事件 | 0 个/轮 → 517–613 个/轮 | 同上 |
-| 行为评测判据 | 202 / 204 通过 | v1.7.3 存档（6 用例 × 3 attempts） |
-| 补搜提示准确率 | 域内/域外 12 条样本 **12/12** | 修复前 7/12（当时的 `1-d` 尺度下，域内 12 条里只有 7 条过得了 0.3） |
-| 测试 | **955** 项 pytest + 107 项前端断言 + 服务探活 | CI 每次 push 自动跑 |
+| 首字响应 TTFT | **7.5s**（p50）/ 16.6s（p95） | 1.11.1 归档 |
+| 单轮总时长 | 24.2s（p50） | 1.11.1 归档 |
+| 逐字流式 | 正文逐字出；**出题轮故意不流式**（正文随 `done` 一次给全） | 1.11.x 起 |
+| 行为评测 | 判据 **900 / 903** 通过；29 条用例中 26 条稳定 | 1.11.1 归档，每用例 3 attempts |
+| 补搜提示准确率 | 域内/域外 12 条样本 **12/12** | 1.7.x 时期修的单项，之后未重测 |
+| 测试 | **985** 项 pytest + 107 项前端断言 + 服务探活 | CI 每次 push 自动跑 |
 
-> 评测走真实 HTTP + SSE + 真模型；判据全部机器可判，报告按版本存档可 diff。
+> 评测走真实 HTTP + SSE + 真模型，判据全部机器可判；报告按版本存档，见 [eval/reports/INDEX.md](eval/reports/INDEX.md)。
+> 历史对照只留一个：v1.7.1 → v1.7.2 首响 33s → 6.5s（`content` 事件 0 → 517–613 个/轮），证据在两份归档报告里。
+> 3 条不稳定用例是模型抖动（`intent_followup_reference` / `knowledge_answer_streams` / `quiz_b11_wrong_redo`），不是回归。
 
 ---
 
@@ -284,7 +287,7 @@ docker compose -f docker-compose.demo.yml up -d --build
 
 - 文档解析只有文本层：没有 OCR，也没有表格结构识别，扫描件和复杂表格会退化。题库那条线用"每题裁一张图"绕开了它，知识库那条线没有绕开
 
-- 首响约 7.5 秒（1.11.1 归档 p50）。为了让答案基于检索而不是模型记忆，planner 与检索必须在写答案之前跑完，这段是静默的 —— 这是"先检索再作答"的代价，不是顺手能调掉的延迟
+- 首响约 7.5 秒（1.11.1 归档 p50）。为了让答案基于检索而不是模型记忆，planner 与检索必须在写答案之前跑完，这段是静默的 —— 这是"先检索再作答"的代价，暂时不是能调掉的延迟
 
 - ReAct 偶发"嘴上说要调工具、实际没调"：已补一轮强制调用，残留是流式打字时可能闪过一下工具调用原文。根治要给 SSE 加回退缓冲，那会让流式变粗，所以保留现状
 
@@ -307,8 +310,6 @@ docker compose -f docker-compose.demo.yml up -d --build
 - [ ] 给知识库分块加 `course` 元数据，去掉"按文件名反查课程"这层耦合（只改 metadata，不用重新 embedding）
 
 - [ ] 新增课程后能在 Web 上传试卷 PDF 并生成题库
-
-- [ ] 首响压到 3 秒内
 
 - [ ] 讲得好不好：LLM 裁判 + 人工标注校准，先拿 10–20 条对齐再当参考值
 
