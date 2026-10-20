@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path as FilePath
 from fastapi import FastAPI, Depends, File, Query, HTTPException, UploadFile
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import StreamingResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, RedirectResponse, JSONResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage, ToolMessage, AIMessage, AIMessageChunk
 from course_agent.graph import (
@@ -849,9 +849,15 @@ def _course_materials(name: str) -> dict:
 
 @app.get("/kb/courses")
 def kb_courses():
-    """课程清单 —— 真相源是 data/ 下的目录（见 course_agent/courses.py）"""
+    """课程清单 —— 真相源是 data/ 下的目录（见 course_agent/courses.py）
+
+    每次请求都重扫目录：课程可能被**外部**加进来或删掉（手工 mkdir / git 切分支 /
+    清理磁盘），进程内缓存只在新增时失效，那种改动会让列表一直脏到重启。
+    重扫成本是一次 iterdir，可以忽略。
+    """
     return {"code": 0, "msg": "ok",
-            "data": [{"name": c, "materials": _course_materials(c)} for c in known_courses()]}
+            "data": [{"name": c, "materials": _course_materials(c)}
+                     for c in known_courses(refresh=True)]}
 
 
 @app.post("/kb/courses")

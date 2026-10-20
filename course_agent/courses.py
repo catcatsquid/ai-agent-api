@@ -39,6 +39,13 @@ RESERVED = {"question_bank", "images", "runtime", "static", "demo", "seed", "log
 _ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 _MAX_LEN = 32
 
+#: Windows 的设备名。同名目录**能建出来，却读不出、删不掉**（实测 `mkdir data\CON`
+#: 成功，之后连 ls 都列不出来，只能 `cmd /c rmdir` 收尾），所以在这里直接拒绝。
+#: 带扩展名的写法同样被系统占用，所以只比对第一个点之前的部分。
+_DEVICE_NAMES = {"CON", "PRN", "AUX", "NUL",
+                 *(f"COM{i}" for i in range(1, 10)),
+                 *(f"LPT{i}" for i in range(1, 10))}
+
 _cached: list[str] | None = None
 
 
@@ -92,6 +99,8 @@ def validate_name(name: str) -> str:
         raise CourseNameError("课程名不能以点开头")
     if raw in RESERVED or raw.lower() in {r.lower() for r in RESERVED}:
         raise CourseNameError(f"「{raw}」是系统保留名，换一个")
+    if raw.split(".")[0].upper() in _DEVICE_NAMES:
+        raise CourseNameError(f"「{raw}」是 Windows 保留设备名，换一个")
     return raw
 
 
@@ -119,4 +128,6 @@ def create_course(name: str) -> dict:
         raise CourseNameError(f"建目录失败：{exc}") from exc
 
     invalidate_cache()
-    return {"course": course, "dir": str(root), "created_subdirs": made}
+    # 只回相对位置：绝对路径会把本机的用户名/盘符带给前端，没有任何用处
+    return {"course": course, "dir": f"{DATA_DIR.name}/{course}",
+            "created_subdirs": made}
