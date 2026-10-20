@@ -22,15 +22,8 @@ vector_store_test/
 vector_store/
 chroma_db/
 
-# 原始课程资料（PDF 体积大，不入库）
+# 原始课程资料（PDF 体积大，且课件/课本/题库/题图有版权，都不入库）
 data/*
-!data/question_bank/
-# 题库结构化数据体积很小（约 0.6MB）且是人工整理成果，必须入库 ——
-# 否则别人 clone 下来题库是空的，刷题功能直接失效
-data/question_bank/*
-!data/question_bank/*.json
-# 题目图片约 130MB，默认不入库；需要图片随仓库分发时改用 Git LFS 或另建资源包
-data/question_bank/images/
 
 # 嵌入缓存
 embedding_cache/
@@ -44,6 +37,8 @@ debug/
 # Chroma 需要；pytest 的 tmp_path 也会落到它下面）
 .tmp/
 pytest-of-*/
+# 沙箱权限诊断报告（diagnose-windows-sandbox-acl 的产物，本机排查用）
+.acl-fix/
 
 # TRAE 内部文件
 .trae-html-share-packages/
