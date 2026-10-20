@@ -502,7 +502,9 @@ def section_index(course: str = "") -> dict:
     """
     from rag_tool import get_knowledge_base
 
-    courses = [course] if course else ["操作系统", "计算机网络"]
+    from course_agent.courses import known_courses
+
+    courses = [course] if course else known_courses()
     kb_docs = {d["source"]: d for d in get_knowledge_base().list_documents()}
 
     out = {}
@@ -626,7 +628,9 @@ def as_int(v, default: int) -> int:
 
 def course_of(source: str) -> str:
     """反查某份资料属于哪门课（知识库 metadata 里没有课程字段，只能按目录反查）"""
-    for c in ("操作系统", "计算机网络"):
+    from course_agent.courses import known_courses
+
+    for c in known_courses():
         try:
             if source in set(course_sources(c)):
                 return c

@@ -149,7 +149,9 @@ def _looks_like_study_request(text: str) -> bool:
 def _course_from_text(text: str) -> str:
     """从学生这句话里认出课程名（认不出就返回空，**不乱猜**）"""
     t = str(text or "")
-    for c in ("操作系统", "计算机网络"):
+    from course_agent.courses import known_courses
+
+    for c in known_courses():
         if c in t:
             return c
     return ""
@@ -1073,16 +1075,15 @@ def planner_node(state: AgentState, config=None) -> dict:
     if _is_compound_practice_request(user_content):
         topic = _topic_in_text(user_content)
         if topic:
-            course = "操作系统" if "操作系统" in user_content else (
-                "计算机网络" if "计算机网络" in user_content else "")
+            course = _course_from_text(user_content)
             logger.info("复合练习意图 → 强制 practice_by_topic(topic=%s)", topic)
             normalized = [{"tool": "practice_by_topic",
                            "args": {"topic": topic, "course": course}}]
-            if _looks_like_study_request(user_content):
-                # 学生还要"复习要点"：先取材料再抽题
+            if course and _looks_like_study_request(user_content):
+                # 学生还要"复习要点"：先取材料再抽题。
+                # 课程名认不出就不猜（猜错会把计网章节当 OS 的），这一轮只抽题。
                 normalized.append({"tool": "read_section",
-                                   "args": {"course": course or "操作系统",
-                                            "chapter": topic}})
+                                   "args": {"course": course, "chapter": topic}})
 
     # 【守卫 13·2026-10-18】学生只说"想刷题" → **先给目录**，不许直接跳进某一份卷子
     #   真会话：开场菜单第三条是"刷题：把《2024年秋…》第 3 组做完"，学生回「我想刷题」，

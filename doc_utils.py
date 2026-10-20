@@ -169,10 +169,14 @@ def _extract_chapter(file_path: Path, base_dir: Path) -> str:
     if m:
         return m.group(1)
 
-    # 匹配 "操作系统_补充知识点笔记" 或 "计算机网络_传输层" 格式
-    m = re.match(r"^(?:操作系统|计算机网络)[_\-](.+)", name)
-    if m:
-        return m.group(1)
+    # 匹配 "<课程名>_<章节>" 格式（课程清单来自 data/ 目录）
+    from course_agent.courses import known_courses
+
+    course_names = known_courses()
+    if course_names:
+        m = re.match(r"^(?:" + "|".join(map(re.escape, course_names)) + r")[_\-](.+)", name)
+        if m:
+            return m.group(1)
 
     # 匹配 "《计算机网络》复习整理文档" 格式
     m = re.match(r"^《.+》(.+)", name)

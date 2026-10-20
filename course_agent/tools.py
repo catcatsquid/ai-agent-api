@@ -319,11 +319,15 @@ def web_search(query: str) -> str:
 @tool
 def get_course_info() -> str:
     """查看知识库信息：包含哪些课程文档、共多少条知识点。"""
+    from course_agent.courses import known_courses
+
     kb = get_knowledge_base()
     count = kb.count()
+    names = known_courses()
+    head = "课程：" + ("、".join(names) if names else "（暂无，可在 /kb 新增）")
     if count == 0:
-        return "知识库为空。请先运行 python build_knowledge.py 建库。"
-    return f"知识库当前有 {count} 条文档分块。"
+        return f"{head}。知识库为空，请先导入课件并建库。"
+    return f"{head}。知识库当前有 {count} 条文档分块。"
 
 
 # ============================================================
@@ -582,7 +586,9 @@ def record_study_position(course: str, section: "str | int" = "", mode: str = "�
     # 课程名是有限集合，不是就直接当章名处理，避免污染书签里的课程字段。
     # 走 quiz_service 的共享实现 —— 它带中英对照表（传输层→transportlayer），
     # 这里原来有一份不带表的副本，导致 BOT 侧对计网章节纠不过来（已修，见 test_surface_parity）。
-    known = ("操作系统", "计算机网络")
+    from course_agent.courses import known_courses
+
+    known = tuple(known_courses())
     course = (course or "").strip()
     if course and course not in known:
         for c in known:
