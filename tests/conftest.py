@@ -198,6 +198,26 @@ requires_question_bank = pytest.mark.skipif(
     not AVAILABLE["question_bank"], reason=_REASONS["question_bank"])
 
 
+@pytest.fixture()
+def fake_course_dirs(tmp_path, monkeypatch):
+    """只建出**课程目录名**（不含课件），把 courses.DATA_DIR 指过去
+
+    重构后"认出一门课"靠的是 `data/` 下真有这个目录（`courses.known_courses()`），
+    于是所有"识别课程名"的行为都会随本机数据变化 —— CI 上没有课程数据时，
+    BOT 认不出「操作系统」，和被冻结的助教（自己写死两门课）就分叉了。
+
+    这类用例测的是**行为**，不该依赖 300 MB 真实课件：给它两门课的空目录即可。
+    """
+    from course_agent import courses
+
+    for name in ("操作系统", "计算机网络"):
+        (tmp_path / name).mkdir()
+    monkeypatch.setattr(courses, "DATA_DIR", tmp_path)
+    courses.invalidate_cache()
+    yield tmp_path
+    courses.invalidate_cache()
+
+
 def _needs_for(nodeid: str) -> list:
     """把 nodeid 归一化成 "文件名::类::用例"，再逐层取并集
 

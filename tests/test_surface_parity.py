@@ -144,7 +144,7 @@ class TestSharedImplementation:
         ("死锁", "操作系统"),
     ])
     def test_chapter_in_course_field_is_corrected_identically(
-            self, monkeypatch, chapter_in_course, expected):
+            self, monkeypatch, fake_course_dirs, chapter_in_course, expected):
         """模型把**章名**填进 course 时，两头必须纠成同一个课程名
 
         实测：计网课件是英文名（Chapter5-Transport Layer.pdf），学生说的是中文

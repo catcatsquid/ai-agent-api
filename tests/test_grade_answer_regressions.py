@@ -294,7 +294,8 @@ class TestStudyRequestAlwaysReadsMaterial:
             "messages": [nodes.HumanMessage(content="我要复习操作系统死锁那一章")],
             "plan": [], "tool_rounds": 0, "session": {}})
 
-    def test_forces_read_section_when_only_map_was_planned(self, monkeypatch):
+    def test_forces_read_section_when_only_map_was_planned(
+            self, monkeypatch, fake_course_dirs):
         out = self._plan(monkeypatch, [{"tool": "list_course_sections",
                                         "args": {"course": "操作系统"}}])
         tools_ = [s["tool"] for s in out["plan"]]
