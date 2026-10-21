@@ -92,6 +92,8 @@ docs/*.md
 !docs/README.md
 # 设计取舍与踩坑复盘（README 首屏会链过去，必须能入库）
 !docs/design-decisions.md
+# 架构展开版（README「架构」一节会链过去，必须能入库）
+!docs/architecture.md
 
 # ============================================================
 # 演示数据集（demo/seed/）—— 必须进仓库

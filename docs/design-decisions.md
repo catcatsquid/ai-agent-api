@@ -70,7 +70,7 @@
 
 ## 四、逐字流式在生产里从未生效（v1.7.1 → v1.7.2）
 
-见 README「最值得看的三个设计」第 1 条。补充三条根因链：
+[README](../README.md) 只留结论（首响 33s → 6.5s 的历史对照），这里补三条根因链：
 
 1. `SimpleLLM` 只实现 `invoke` / `bind_tools`，不是 LangChain ChatModel；
    `stream_mode="messages"` 只认实现了 `_stream` 的 Runnable
