@@ -1,4 +1,4 @@
-"""把 README.proposed.md 转成 Word（.docx）。
+"""把 README.md 转成 Word（.docx）。
 
 覆盖这份 README 用到的 Markdown 子集：标题、段落、行内 **粗体** / `代码` /
 [链接](url)（含 #锚点 → Word 书签）、无序/有序列表、GitHub 表格、
