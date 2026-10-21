@@ -201,6 +201,33 @@ class TestOpeningCriteria:
                             {"forbid_phrases": ["你之前学到哪"]})[0]["ok"] is True
 
 
+class TestStreamingCriterionHasAQuizException:
+    """出题轮反过来要求"**不**流式"（2026-10-18 用户拍板）
+
+    题库出题的正文里每条都带 `![题目](/qb_images/…png)` 的长 URL，逐字推会刷屏。
+    所以 `require_streaming` 这条判据按工具轨迹分支，两边的期望是**相反**的。
+    """
+
+    def _checks(self, tools, content_events, source):
+        turn = {"answer": "答案" * 20, "tools": tools,
+                "content_events": content_events, "answer_source": source,
+                "ttft_ms": 100, "total_ms": 200}
+        return runner.run_checks({"require_streaming": True}, turn, {})[0]
+
+    @pytest.mark.parametrize("tool", sorted(runner.QUIZ_TOOLS))
+    def test_quiz_turn_must_not_stream(self, tool):
+        ok = self._checks([tool], 0, "done")
+        assert ok["ok"] is True, ok
+        bad = self._checks([tool], 3, "content")
+        assert bad["ok"] is False, bad
+        assert "出题轮" in bad["check"]
+
+    def test_knowledge_turn_must_stream(self):
+        assert self._checks(["search_knowledge"], 3, "content")["ok"] is True
+        bad = self._checks(["search_knowledge"], 0, "done")
+        assert bad["ok"] is False, bad
+
+
 class TestSeedRequiresAnIsolatedProgressFile:
     """seed 必须 fail-closed：没设 PROGRESS_FILE 就不许跑，否则会写进真实进度"""
 

@@ -687,7 +687,7 @@ class KnowledgeBase:
         file_hash = hashlib.md5(p.read_bytes()).hexdigest()
         processed = self._load_processed()
 
-        # 已处理且 hash 没变 → 跳过
+        # 已处理且 hash 没变 → 跳过（对外要说清是"已是最新"，见 is_unchanged）
         record = processed.get(str(p))
         if record and record.get("file_hash") == file_hash:
             logger.info("文件未变化，跳过: %s", p.name)
@@ -845,6 +845,25 @@ class KnowledgeBase:
             except Exception:
                 pass
         return {}
+
+    def is_unchanged(self, file_path: str) -> bool:
+        """这份文件是不是"已经入过库、而且内容没变"
+
+        为什么要有这个方法（2026-10-18 用户实测）：重复导入同一份课件时
+        `add_document` 会**静默跳过**并返回 0 块，而 `/kb/add` 只会回一句
+        "导入成功: 0 个分块" —— 用户看不出是"失败"还是"已经是最新"。
+        接口层拿它先说一句人话。
+        """
+        p = Path(file_path)
+        if not p.is_file():
+            return False
+        record = self._load_processed().get(str(p))
+        if not record:
+            return False
+        try:
+            return record.get("file_hash") == hashlib.md5(p.read_bytes()).hexdigest()
+        except OSError:
+            return False
 
     def _save_processed(self, data: dict):
         """保存已处理文件清单"""

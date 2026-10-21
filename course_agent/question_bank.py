@@ -40,10 +40,18 @@ PAGE_HEADER_Y = 60
 PAGE_FOOTER_Y = 780
 VECTOR_DRAW_THRESHOLD = 3
 
-COURSE_DIRS = {
-    "操作系统": DATA_DIR / "操作系统" / "往年题",
-    "计算机网络": DATA_DIR / "计算机网络" / "往年题",
-}
+# 课程清单的真相源是 data/ 下的目录（见 course_agent/courses.py），这里只是投影
+COURSE_DIRS = {p.parent.name: p for p in sorted(DATA_DIR.glob("*/往年题")) if p.is_dir()}
+
+DEFAULT_COURSE_PROMPT = (
+    "你是一位大学课程教师。下面是一道考试题的文字内容。\n"
+    "请生成参考答案并分类，输出 JSON 对象：\n"
+    '1. "type"：选择题 / 简答题 / 综合题 / 分析题\n'
+    '2. "answer"：选择题只填字母；判断题只填"对"/"错"；填空题填内容；综合题填 null\n'
+    '3. "reference_points"：要点数组，每条一句完整的话\n'
+    '4. "topic"：知识点\n'
+    '5. "sub_questions"：综合题拆成 [{"label": "(1)", "answer": "..."}]；选择题填 null\n'
+)
 
 COURSE_PROMPTS = {
     "操作系统": (
@@ -501,7 +509,7 @@ def _detect_course(pdf_path: Path) -> str:
     for course, dir_path in COURSE_DIRS.items():
         if course in str(pdf_path):
             return course
-    return "操作系统"
+    return ""
 
 
 def _image_to_base64(img: Image.Image, max_size: int = 800) -> str:
@@ -548,14 +556,14 @@ def _vlm_describe_question(img: Image.Image, text: str) -> str:
     return ""
 
 
-def _llm_generate_answer(text: str, vlm_desc: str = "", course: str = "操作系统") -> dict:
+def _llm_generate_answer(text: str, vlm_desc: str = "", course: str = "") -> dict:
     headers = {"Authorization": f"Bearer {ZHIPU_API_KEY}", "Content-Type": "application/json"}
     user_content = f"以下是题目文字:\n{text}"
     if vlm_desc:
         user_content += f"\n\n[VLM 图片描述]\n{vlm_desc}"
     user_content += "\n\n请生成参考答案并分类。"
 
-    prompt = COURSE_PROMPTS.get(course, COURSE_PROMPTS["操作系统"])
+    prompt = COURSE_PROMPTS.get(course) or DEFAULT_COURSE_PROMPT
     payload = {
         "model": LLM_MODEL,
         "messages": [

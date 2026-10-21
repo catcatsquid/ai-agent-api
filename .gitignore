@@ -22,15 +22,8 @@ vector_store_test/
 vector_store/
 chroma_db/
 
-# 原始课程资料（PDF 体积大，不入库）
+# 原始课程资料（PDF 体积大，且课件/课本/题库/题图有版权，都不入库）
 data/*
-!data/question_bank/
-# 题库结构化数据体积很小（约 0.6MB）且是人工整理成果，必须入库 ——
-# 否则别人 clone 下来题库是空的，刷题功能直接失效
-data/question_bank/*
-!data/question_bank/*.json
-# 题目图片约 130MB，默认不入库；需要图片随仓库分发时改用 Git LFS 或另建资源包
-data/question_bank/images/
 
 # 嵌入缓存
 embedding_cache/
@@ -44,6 +37,8 @@ debug/
 # Chroma 需要；pytest 的 tmp_path 也会落到它下面）
 .tmp/
 pytest-of-*/
+# 沙箱权限诊断报告（diagnose-windows-sandbox-acl 的产物，本机排查用）
+.acl-fix/
 
 # TRAE 内部文件
 .trae-html-share-packages/
@@ -95,3 +90,35 @@ multi_tool_agent.py
 #   !docs/架构决策.md
 docs/*.md
 !docs/README.md
+# 设计取舍与踩坑复盘（README 首屏会链过去，必须能入库）
+!docs/design-decisions.md
+# 架构展开版（README「架构」一节会链过去，必须能入库）
+!docs/architecture.md
+
+# ============================================================
+# 演示数据集（demo/seed/）—— 必须进仓库
+# 理由：README 承诺"docker compose -f docker-compose.demo.yml up 就能看到东西"，
+#       而上面的 vector_store/ 通配会把 seed 的向量库一并忽略，所以这里显式放回
+# ============================================================
+!demo/seed/
+!demo/seed/vector_store/
+!demo/seed/vector_store/**
+# Chroma 运行时写出来的 WAL/SHM 是临时文件，不提交
+demo/seed/vector_store/*-wal
+demo/seed/vector_store/*-shm
+demo/seed/vector_store/**/*-wal
+demo/seed/vector_store/**/*-shm
+
+# ============================================================
+# 本地决策簿 / 永不入库的评测用例（2026-10-18 用户拍板）
+# ============================================================
+# eval/backlog.md 是"决策树讨论期间"的待办登记簿：里面 A1/A4/A5 等仍标"待实施"，
+# 而代码里早做完了 —— 原样提上去只会误导读它的人，所以留在本地。
+eval/backlog.md
+# 这条用例本身是给「守卫 12·零步兜底」配的，但用户明确要求不入库
+# （守卫 12 的代码与单测已经在 tests/test_planner_guards_2026_10_18.py 里）
+eval/cases/plan_zero_step_must_retrieve.json
+docker-compose.yml
+.scratch/
+_notes/
+demo/demo-full.mov

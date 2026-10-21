@@ -1,0 +1,44 @@
+# 演示编排：用仓库里的 demo/seed/ 代替宿主机的 data/ 与 vector_store/
+#
+# 目的：别人 clone 之后**不需要自备课件、也不需要花 20 分钟建库**，
+#       就能看到知识库检索与题库刷题在工作（题库是 11 道原创题，零版权风险）。
+#
+# 用法：
+#   python demo/build_seed.py                 # 仅当 seed 向量库缺失时需要（要 Key）
+#   docker compose -f docker-compose.demo.yml up -d --build
+#   → http://127.0.0.1:8003/chat
+#
+# 本地完整课程部署（挂宿主机的 data/ 与 vector_store/）的编排不随仓库分发，
+# 这一份只挂 demo/seed/（随仓库分发的小数据集）。
+
+services:
+  agent-demo:
+    build:
+      context: .
+      # 演示镜像不装 gcc/g++（见 Dockerfile.demo 顶部说明）；主镜像仍用 Dockerfile
+      dockerfile: Dockerfile.demo
+    container_name: course-agent-demo
+    ports:
+      - "8003:8003"
+    volumes:
+      # 只读：防止演示时误改 seed。/kb/add、/kb/upload 等写操作会失败 —— 这是故意的
+      - ./demo/seed/data:/app/data:ro
+      # 可写：Chroma 打开 sqlite 时需要写 -wal / -shm
+      - ./demo/seed/vector_store:/app/vector_store
+      # 会话 checkpoint 与学习进度：重启后保留。要清空演示状态就删掉这个卷
+      - demo-runtime:/app/runtime
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import requests; r=requests.get('http://localhost:8003/health'); r.raise_for_status()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  demo-runtime:

@@ -289,10 +289,13 @@ class TestStudyRequestAlwaysReadsMaterial:
                 content=json.dumps({"need_tools": True, "steps": steps},
                                    ensure_ascii=False)))
         return nodes.planner_node({
-            "messages": [nodes.HumanMessage(content="我要复习操作系统")],
+            # 2026-10-18 起「我要复习操作系统」算**开场**（先说进度、让他选模式，不调工具），
+            # 这里要测的是"讲了具体哪一章"的那条守卫，所以说清章节。
+            "messages": [nodes.HumanMessage(content="我要复习操作系统死锁那一章")],
             "plan": [], "tool_rounds": 0, "session": {}})
 
-    def test_forces_read_section_when_only_map_was_planned(self, monkeypatch):
+    def test_forces_read_section_when_only_map_was_planned(
+            self, monkeypatch, fake_course_dirs):
         out = self._plan(monkeypatch, [{"tool": "list_course_sections",
                                         "args": {"course": "操作系统"}}])
         tools_ = [s["tool"] for s in out["plan"]]
@@ -368,7 +371,9 @@ class TestClosingMarkerIsGuaranteedByCode:
                                 content="进程是程序的一次执行过程。\n\n"
                                         "### 本节小测\n1. 什么是进程？"))
         out = nodes.synthesizer_node({
-            "messages": [nodes.HumanMessage(content="我要复习操作系统")],
+            # 「我要复习操作系统」2026-10-18 起算开场（先报进度、让他选），
+            # 这里要测的是"讲了课但没写收尾标记"，所以说清章节。
+            "messages": [nodes.HumanMessage(content="继续讲操作系统死锁那一章")],
             "plan": [], "tool_rounds": 0,
             "session": {"study": {"course": "操作系统", "mode": "复习"}}})
         text = out["messages"][0].content

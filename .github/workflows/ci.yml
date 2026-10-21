@@ -4,10 +4,12 @@ name: CI
 # （这里原来写死了「404 项测试」，而实际早就涨到 583 项。
 #   同一个数字抄在文档和配置里必然过期，所以不再写具体条数 ——
 #   要看数量跑一次 pytest 就有，见 tests/conftest.py 开头的报告行。）
-# 加它的同时暴露了一个更根本的问题：仓库里的 data/ 只有题库 JSON 是可跟踪的，
-# 图片/课本/向量库（300 MB）刻意 gitignore，所以"新克隆 + 跑测试"必然缺数据。
+# 加它的同时暴露了一个更根本的问题：data/ 下的课件、试卷、题库、题图都不入库
+# （版权 + 体积，合计 300 MB），所以"新克隆 + 跑测试"必然缺数据。
 # 处理方式见 tests/conftest.py：缺数据的用例**跳过**（而不是报红），
 # 并在测试开头的报告里声明哪些数据集可用。
+# 题库可在这一步之前从私有数据仓库还原（见下方 "还原题库" 步骤）：
+# 没配 secret 就整步跳过，行为与今天一致。
 
 on:
   push:
@@ -34,9 +36,35 @@ jobs:
       # 就会统统变成 503 —— 本地因为 .env 里配了才看不出来。
       ADMIN_PASSWORD: ci-admin-password
       JWT_SECRET: ci-jwt-secret-for-tests-only
+      # 题库有版权、不进公开仓库：CI 里需要的题库从**私有数据仓库**还原，
+      # 只读 deploy key 存在 Actions secret（DATA_REPO_DEPLOY_KEY）。
+      # 没配 secret 时这一步跳过，与"克隆下来没有题库"的行为一致（相关用例 skip）。
+      # 仓库名默认 <本仓库名>-data；要换就用 Actions 变量 DATA_REPO=owner/name。
+      HAS_DATA_REPO_KEY: ${{ secrets.DATA_REPO_DEPLOY_KEY != '' }}
+      DATA_REPO: ${{ github.repository_owner }}/${{ vars.DATA_REPO || format('{0}-data', github.event.repository.name) }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: 还原题库（私有数据仓库，只读）
+        if: env.HAS_DATA_REPO_KEY == 'true'
+        env:
+          DATA_REPO_KEY: ${{ secrets.DATA_REPO_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DATA_REPO_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          git clone --depth 1 "git@github.com:${DATA_REPO}.git" /tmp/qbank
+          mkdir -p data/question_bank
+          # 只取题库 JSON：题图 13 MB，CI 用不到
+          find /tmp/qbank/question_bank -maxdepth 1 -name 'questions_*.json' \
+            -exec cp {} data/question_bank/ \;
+          n=$(find data/question_bank -maxdepth 1 -name 'questions_*.json' | wc -l)
+          echo "题库已还原：${n} 份"
+          # secret 配了却还原不出来，就是配置坏了 —— 宁可红，不要静默跳过
+          test "$n" -gt 0
 
       - uses: actions/setup-python@v5
         with:
@@ -55,8 +83,13 @@ jobs:
       - name: 跑 Python 测试
         run: python -m pytest tests/ -q
 
-      - name: 跑前端认证块测试（读真实页面，52 项断言）
-        run: node tests/js/auth_block_test.mjs
+      # 三个文件都要跑：只跑 auth_block 会漏掉对话上下文与会话列表（52 + 14 + 41 = 107 项断言）
+      - name: 跑前端断言（认证块 / 对话上下文 / 会话列表）
+        run: |
+          for f in tests/js/*.mjs; do
+            echo "=== $f"
+            node "$f"
+          done
 
       - name: 服务能起来 + 探活
         run: |

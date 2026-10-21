@@ -147,7 +147,8 @@ class TestCustomQuizToolIsRegistered:
 
     def test_both_surfaces_share_the_implementation(self):
         """助教侧与 Plan 侧必须是同一份实现"""
-        from course_agent import tools, tutor_agent
+        from course_agent import tools
+        from frozen import tutor_agent
 
         a = json.loads(tools.prepare_custom_quiz.invoke({"topic": "死锁", "count": 3}))
         sess = tutor_agent._get_session("custom-shared")

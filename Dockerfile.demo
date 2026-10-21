@@ -1,0 +1,33 @@
+# 演示专用镜像：比主 Dockerfile 少两件事
+#   1) 不 apt-get install gcc/g++  —— 主 Dockerfile 卡在这一步（Debian 源在受限网络下拉不动），
+#      而本项目需要的包在 cp312 下都有预编译 wheel，不装编译器也能装完。
+#      真装不上时再回来打开第 3 节的 fallback（已换成清华源）。
+#   2) 不 COPY data/ —— 演示数据由 docker-compose.demo.yml 以只读卷挂载。
+#
+# 主镜像仍用 Dockerfile（含 gcc/g++），两者互不影响。
+FROM docker.m.daocloud.io/library/python:3.12-slim
+
+WORKDIR /app
+
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+
+# ---- 3. fallback：只有在某个包缺 wheel、需要现场编译时才启用 ----
+# RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' \
+#         /etc/apt/sources.list.d/debian.sources \
+#  && apt-get update \
+#  && apt-get install -y --no-install-recommends gcc g++ \
+#  && rm -rf /var/lib/apt/lists/*
+# -------------------------------------------------------------
+
+COPY requirements.txt requirements.lock ./
+RUN pip install --no-cache-dir -r requirements.lock
+
+COPY course_agent/ course_agent/
+COPY knowledge_pipeline/ knowledge_pipeline/
+COPY rag_tool.py config.py build_knowledge.py doc_utils.py ./
+
+RUN mkdir -p data vector_store runtime
+
+EXPOSE 8003
+
+CMD ["python", "-m", "uvicorn", "course_agent.server:app", "--host", "0.0.0.0", "--port", "8003"]

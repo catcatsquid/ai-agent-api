@@ -197,6 +197,21 @@ class TestCleanText:
         result = clean_text(text)
         assert "目录" not in result
 
+    def test_pdf_radical_glyphs_are_normalised(self):
+        """PDF 抽出来的康熙部首要归一成正常汉字（2026-10-18 实测）
+
+        《2-01-原子操作.pdf》原本抽成「原⼦操作」「使⽤」——U+2F26 这类部首字符
+        与正常汉字是**不同码位**，于是学生问「原子操作」时 BM25/向量都命不中这份课件。
+        """
+        result = clean_text("原⼦操作与临界区：使⽤锁保护")
+        assert "原子操作" in result and "使用" in result
+        assert "⼦" not in result and "⽤" not in result
+
+    def test_normalisation_leaves_other_symbols_alone(self):
+        """只收窄到部首/兼容表意字：①、㎡、全角字母都不许动（全量 NFKC 会改掉它们）"""
+        text = "① ㎡ ＡＢＣ ½"
+        assert clean_text(text) == text.strip()
+
 
 class TestExpandQuery:
     """查询扩展"""

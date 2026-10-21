@@ -46,15 +46,20 @@ def env(monkeypatch):
     monkeypatch.setattr(server, "DATA_ROOT", data.resolve())
 
     calls = []
+    unchanged = {"paths": set()}
 
     class FakeKB:
         def add_document(self, path, doc_type=None, chapter=None):
             calls.append({"path": FilePath(path), "doc_type": doc_type})
             return 7
 
+        def is_unchanged(self, path):
+            return str(path) in unchanged["paths"]
+
     monkeypatch.setattr(server, "get_knowledge_base", lambda: FakeKB())
     try:
-        yield {"data": data.resolve(), "outside": outside.resolve(), "calls": calls}
+        yield {"data": data.resolve(), "outside": outside.resolve(), "calls": calls,
+               "unchanged": unchanged}
     finally:
         shutil.rmtree(WORK, ignore_errors=True)
 
@@ -109,6 +114,21 @@ class TestAddByPath:
         assert body["code"] == 0, body
         assert body["copied"] is False
         assert env["calls"][-1]["path"] == src.resolve()
+
+    def test_unchanged_file_says_already_up_to_date(self, env):
+        """重复导入同一份、内容没变 → 必须说"已是最新"，不能只说"成功 0 个分块"
+
+        2026-10-18 用户实测：导一遍再导一遍，界面只显示"导入成功: 0 个分块"，
+        分不清是失败还是本来就不用做。
+        """
+        src = env["data"] / "操作系统" / "ppt" / "04-并发.md"
+        src.write_text("内容", encoding="utf-8")
+        env["unchanged"]["paths"].add(str(src.resolve()))
+        body = TestClient(app).post("/kb/add", params={"file_path": str(src)}).json()
+        assert body["code"] == 0, body
+        assert body["added_chunks"] == 0
+        assert "最新" in body["skipped_reason"]
+        assert not env["calls"], "已经是最新时不该再调 add_document"
 
     def test_source_outside_data_is_copied_in(self, env):
         """**用户要的就是这条**：从任意位置导入，文件真正落进 data/"""

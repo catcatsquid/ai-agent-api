@@ -328,8 +328,20 @@ class TestItReachesTheModel:
         assert "已知进度" not in prompt, prompt[-300:]
 
     def test_no_progress_no_noise(self, monkeypatch):
-        prompt = self._capture(monkeypatch, nodes.planner_node)
+        """没有进度、**也不是开场**时不许插进度块（空会话不是注入的理由）"""
+        prompt = self._capture(monkeypatch, nodes.planner_node, user="死锁是什么？")
         assert "已知进度" not in prompt
+
+    def test_empty_store_still_gets_an_opening_brief_on_the_kickoff(self, monkeypatch):
+        """空账本也要有开场块（用户 2026-10-18 实测的要求）
+
+        原文：「我说我想学操作系统（没有明确说要学哪章），它并没有先给我展示
+        当前的进度然后给我推荐」。旧实现是"没进度就直接开讲"，实测它讲了一节
+        **记忆里的**通用内容；现在改成先说"还没有记录 + 建议从第一章开始"。
+        """
+        prompt = self._capture(monkeypatch, nodes.planner_node)
+        assert "还没有任何学习记录" in prompt
+        assert "不要开始讲内容" in prompt
 
     def test_a_concept_question_on_a_fresh_thread_gets_no_progress_block(self, monkeypatch):
         """回归（评测 `knowledge_answer_streams` 抓到的）：新会话里问概念题，
@@ -393,10 +405,25 @@ class TestKickoffAsksBeforeTeaching:
                                 "plan": [], "tool_rounds": 0, "session": {}})
         assert "已知进度" in captured["p"] and "不要开始讲内容" in captured["p"]
 
-    def test_without_progress_it_keeps_the_old_behaviour(self, monkeypatch):
-        """没有进度时保持原行为：先给资料地图 / 取材料，不许被这条守卫改坏"""
+    def test_without_progress_it_also_asks_first(self, monkeypatch):
+        """没有进度时**也要先问**（用户 2026-10-18 实测要求，这条改了产品行为）
+
+        旧行为是"没进度就直接开讲"（先给资料地图），实测后果：学生只说想学
+        操作系统，它直接讲了一节"操作系统基本概念"，一条进度都没报、也没给他
+        选"继续/复习/刷题"的机会。现在空账本同样先展示状态 + 建议。
+        """
         plan = self._plan(monkeypatch, "我想学习")
-        assert plan, "没有进度时不该被清空计划"
+        assert plan == [], f"空账本的开场也不许直接开讲：{plan}"
+
+    def test_a_vague_course_request_is_a_kickoff_too(self, monkeypatch):
+        """用户原话「我们来学习一下操作系统吧」—— 旧判据（固定句式 + 长度≤20）漏了它"""
+        plan = self._plan(monkeypatch, "我们来学习一下操作系统吧！")
+        assert plan == [], f"这种最常见的开场也不许直接开讲：{plan}"
+
+    def test_i_want_to_learn_os_is_a_kickoff(self):
+        """「我想学操作系统」只有"想学"、没有"学习"，旧判据同样漏了"""
+        assert nodes._is_study_kickoff("我想学操作系统")
+        assert nodes._is_study_kickoff("学操作系统吧")
 
     def test_a_concrete_target_is_not_a_kickoff(self, monkeypatch):
         """说清楚学什么时照常规划（"我想学习死锁那一章" 不许被当成开场）"""

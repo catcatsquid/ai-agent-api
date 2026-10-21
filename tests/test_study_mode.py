@@ -121,10 +121,25 @@ class TestSectionSelectionIsStructural:
         assert "本课课件 1/" in out
 
     def test_section_index_walks_the_course(self):
+        """第 N 节按**课件顺序**走，不是按文件夹里的字符串排序
+
+        ⚠️ 这条原来写死"第 3 份是 03-OS调度"——2026-10-18 新导入《2-01-原子操作》
+        与《2-02-临界区、互斥与锁》之后它就红了。那是"测试依赖本地数据"的典型：
+        课程加一份课件本来不该让测试失败。改成只守在**顺序关系**上。
+        """
         first = tools.read_section.invoke({"course": "操作系统", "section": 1, "limit": 1})
-        third = tools.read_section.invoke({"course": "操作系统", "section": 3, "limit": 1})
-        assert "02-1-" in first and "03-OS调度" in third
-        assert "下一份是第 2 份" in first
+        assert "02-1-" in first and "下一份是第 2 份" in first
+
+        # 把整份索引走一遍，确认 02-1 → 02-2 → 03-OS调度 的**相对顺序**没变
+        from course_agent import quiz_service
+        order = [p["source"] for p in quiz_service.section_index("操作系统")["ppt"]]
+        idx = {name: i for i, name in enumerate(order)}
+        assert idx["02-1-进程与线程之进程.pdf"] < idx["02-2-进程与线程之线程.pdf"]
+        assert idx["02-2-进程与线程之线程.pdf"] < idx["03-OS调度.pdf"]
+        # 第 N 节取到的就是索引里第 N 份
+        for n in (1, 3):
+            out = tools.read_section.invoke({"course": "操作系统", "section": n, "limit": 1})
+            assert f"本课课件 {n}/{len(order)}" in out, out[:80]
 
     def test_out_of_range_section_falls_back_to_first(self):
         out = tools.read_section.invoke({"course": "操作系统", "section": 99, "limit": 1})

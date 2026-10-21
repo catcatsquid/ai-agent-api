@@ -1,0 +1,55 @@
+{
+  "id": "entry_kickoff_vague_course",
+  "why": "用户 2026-10-18 实测的原话：「我们来学习一下操作系统吧」。这是最自然的一种开场，而旧的 `_is_study_kickoff` 只认 `我想学习/我要复习` 这类固定句式，于是它直接讲了一节（还漏了 read_section）。这条用例守的是：**没有具体目标的开场 → 一个工具都不调，先报真实进度 + 给出模式建议**。与 `entry_kickoff_from_progress`（只说「我想学习」）是同一件事的两种说法，两个都留着，因为措辞一变行为就可能分叉。",
+  "mode": "plan",
+  "seed": {
+    "study": [
+      {
+        "mode": "学习",
+        "course": "操作系统",
+        "chapter": "进程与线程",
+        "section": "进程的状态",
+        "source": "02-1-进程与线程之进程.pdf",
+        "status": "讲解中"
+      }
+    ],
+    "quiz": [
+      {
+        "paper": "2025年秋操作系统期末试题（回忆版）",
+        "type": "选择题",
+        "group_index": 1,
+        "next_group_index": 2,
+        "qids": [
+          "2025OS_Q1",
+          "2025OS_Q2"
+        ]
+      }
+    ]
+  },
+  "turns": [
+    {
+      "user": "我们来学习一下操作系统吧！",
+      "expect": {
+        "tools_exactly_empty": true,
+        "must_contain": [
+          "操作系统",
+          "进程的状态",
+          "自拟练习"
+        ],
+        "forbid_phrases": [
+          "你之前学到哪",
+          "你学到哪了",
+          "我们来看这一节",
+          "本节结束"
+        ],
+        "forbid_tool_call_text": true,
+        "no_internal_artifacts": true,
+        "answer_min_chars": 40,
+        "require_streaming": true,
+        "observe": {
+          "forbid_tool_call_text_in_stream": true
+        }
+      }
+    }
+  ]
+}

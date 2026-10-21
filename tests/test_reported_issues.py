@@ -301,5 +301,10 @@ class TestToolCallTextIsStripped:
         nxt = re.search(r"\ndef \w", src[i + 10:])
         body = src[i:i + 10 + nxt.start()] if nxt else src[i:]
         assert "clean_answer_text" in body, "synthesizer 没有应用兜底清理"
-        # 收紧一点：不能只是"提到了"，必须真的调用了
-        assert "clean_answer_text(str(response.content), state)" in body
+        # 收紧一点：不能只是"提到了"，必须真的**用模型的原文**调用了
+        # （2026-10-18 起先把 `str(response.content)` 存进 `raw`，因为"有没有写「本节结束」"
+        #  要看原文、而"清理后"用了补收尾标记，两者不能混。后面还可能多一个
+        #  `skip_closing=` 之类的关键字参数，所以只钉"原文 + state"这个开头。）
+        assert re.search(
+            r"clean_answer_text\(\s*(?:raw|str\(response\.content\))\s*,\s*state\b[^)]*\)",
+            body), "没拿模型的原文调 clean_answer_text"

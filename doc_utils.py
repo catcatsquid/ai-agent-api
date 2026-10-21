@@ -17,7 +17,46 @@
 """
 
 import re
+import unicodedata
 from pathlib import Path
+
+# ---------------------------------------------------------------
+# PDF 里的"部首字符"要归一成正常汉字（2026-10-18 实测发现）
+#
+# 现象：新导入的《2-01-原子操作.pdf》《2-02-临界区、互斥与锁.pdf》抽出来是
+#     「原⼦操作」「使⽤」
+# 其中 U+2F26（KANGXI RADICAL CHILD）之类的**康熙部首/部首补充**字符，跟正常的
+# 「子」「用」是**不同码位**。后果有两层：
+#   1. 检索命不中 —— 学生/模型说「原子操作」，BM25 与向量都碰不到那份课件
+#      （实测：查「原子操作」只回 04-并发与同步 与课本，新课件一条都不出）；
+#   2. 模型读到的课件里混着怪字，讲课会照抄。
+#
+# 归一范围刻意收窄到「部首类 + CJK 兼容表意文字」，**不做整个 NFKC** ——
+# 全量 NFKC 会把 ①→1、㎡→m2、全角字母变半角，那些在本项目里是噪声改动。
+# ---------------------------------------------------------------
+
+
+def _build_radical_table() -> dict:
+    """部首/兼容表意字 → 正常汉字（只收真的会变的那些）"""
+    table = {}
+    for cp in (list(range(0x2E80, 0x2EFF + 1))       # CJK Radicals Supplement
+               + list(range(0x2F00, 0x2FDF + 1))      # Kangxi Radicals
+               + list(range(0xF900, 0xFAFF + 1))):    # CJK Compatibility Ideographs
+        fixed = unicodedata.normalize("NFKC", chr(cp))
+        if fixed != chr(cp):
+            table[cp] = fixed
+    return table
+
+
+_RADICAL_TABLE = _build_radical_table()
+
+
+def normalize_glyphs(text: str) -> str:
+    """把 PDF 抽出来的部首字符归一成正常汉字（幂等，不碰 ①/㎡/全角字母）"""
+    if not text:
+        return text
+    return text.translate(_RADICAL_TABLE)
+
 
 def load_document(path: str) -> str:
     """加载文档文件，返回纯文本
@@ -69,12 +108,16 @@ def clean_text(text: str) -> str:
     """清洗文档文本
 
     处理:
+      0. **部首/兼容表意字归一**（PDF 里常见的怪字，见上方 `normalize_glyphs`）
       1. 去除多余空行和空格
       2. 合并被换行打断的句子（中文句号/问号/叹号后不应有换行）
       3. 去除页眉页脚模式（如"第X章"/"Page X"等重复行）
       4. 去除纯数字行（页码）
       5. 标准化空白字符
     """
+    # 0. 怪字归一：必须在分块/建索引之前做，否则检索永远命不中（见上）
+    text = normalize_glyphs(text)
+
     # 1. 统一换行符，标准化空白
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"[ \t]+", " ", text)
@@ -126,10 +169,14 @@ def _extract_chapter(file_path: Path, base_dir: Path) -> str:
     if m:
         return m.group(1)
 
-    # 匹配 "操作系统_补充知识点笔记" 或 "计算机网络_传输层" 格式
-    m = re.match(r"^(?:操作系统|计算机网络)[_\-](.+)", name)
-    if m:
-        return m.group(1)
+    # 匹配 "<课程名>_<章节>" 格式（课程清单来自 data/ 目录）
+    from course_agent.courses import known_courses
+
+    course_names = known_courses()
+    if course_names:
+        m = re.match(r"^(?:" + "|".join(map(re.escape, course_names)) + r")[_\-](.+)", name)
+        if m:
+            return m.group(1)
 
     # 匹配 "《计算机网络》复习整理文档" 格式
     m = re.match(r"^《.+》(.+)", name)

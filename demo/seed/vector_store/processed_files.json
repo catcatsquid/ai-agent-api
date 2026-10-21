@@ -1,0 +1,42 @@
+{
+  "C:\\Users\\CLAW\\Desktop\\ai-agent-learning\\demo\\seed\\data\\操作系统\\ppt\\操作系统_死锁.md": {
+    "source": "操作系统_死锁.md",
+    "doc_type": "ppt",
+    "chapter": "死锁",
+    "chunk_count": 11,
+    "file_hash": "179d9debe78eece91bc53b3e6d609b4b",
+    "added_at": "2026-10-18T18:57:15.994294"
+  },
+  "C:\\Users\\CLAW\\Desktop\\ai-agent-learning\\demo\\seed\\data\\操作系统\\ppt\\操作系统_补充知识点笔记.md": {
+    "source": "操作系统_补充知识点笔记.md",
+    "doc_type": "ppt",
+    "chapter": "补充知识点笔记",
+    "chunk_count": 75,
+    "file_hash": "4c91529672e05ef0de3910cbeb143064",
+    "added_at": "2026-10-18T18:57:21.696258"
+  },
+  "C:\\Users\\CLAW\\Desktop\\ai-agent-learning\\demo\\seed\\data\\操作系统\\ppt\\操作系统_补充知识点笔记2.md": {
+    "source": "操作系统_补充知识点笔记2.md",
+    "doc_type": "ppt",
+    "chapter": "补充知识点笔记2",
+    "chunk_count": 99,
+    "file_hash": "dfbaa79ccb40611e114057ad6c40e58c",
+    "added_at": "2026-10-18T18:57:28.775253"
+  },
+  "C:\\Users\\CLAW\\Desktop\\ai-agent-learning\\demo\\seed\\data\\操作系统\\ppt\\操作系统_进程管理.md": {
+    "source": "操作系统_进程管理.md",
+    "doc_type": "ppt",
+    "chapter": "进程管理",
+    "chunk_count": 10,
+    "file_hash": "aba1cdb31582b377b8c799a704e18b5b",
+    "added_at": "2026-10-18T18:57:30.063787"
+  },
+  "C:\\Users\\CLAW\\Desktop\\ai-agent-learning\\demo\\seed\\data\\计算机网络\\ppt\\计算机网络_传输层.md": {
+    "source": "计算机网络_传输层.md",
+    "doc_type": "ppt",
+    "chapter": "传输层",
+    "chunk_count": 14,
+    "file_hash": "e4d92027d6d2842b927653ada653ce7b",
+    "added_at": "2026-10-18T18:57:31.425764"
+  }
+}

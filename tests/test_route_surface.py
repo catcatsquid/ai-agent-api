@@ -34,6 +34,8 @@ EXPECTED_ROUTES = {
     ("GET", "/chat/conversations"),
     ("GET", "/chat/conversations/{thread_id}"),
     ("DELETE", "/chat/conversations/{thread_id}"),
+    ("GET", "/kb/courses"),
+    ("POST", "/kb/courses"),
     ("GET", "/kb/stats"),
     ("GET", "/kb/documents"),
     ("DELETE", "/kb/documents/{source}"),

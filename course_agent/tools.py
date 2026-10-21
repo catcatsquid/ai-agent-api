@@ -319,11 +319,15 @@ def web_search(query: str) -> str:
 @tool
 def get_course_info() -> str:
     """查看知识库信息：包含哪些课程文档、共多少条知识点。"""
+    from course_agent.courses import known_courses
+
     kb = get_knowledge_base()
     count = kb.count()
+    names = known_courses()
+    head = "课程：" + ("、".join(names) if names else "（暂无，可在 /kb 新增）")
     if count == 0:
-        return "知识库为空。请先运行 python build_knowledge.py 建库。"
-    return f"知识库当前有 {count} 条文档分块。"
+        return f"{head}。知识库为空，请先导入课件并建库。"
+    return f"{head}。知识库当前有 {count} 条文档分块。"
 
 
 # ============================================================
@@ -402,8 +406,13 @@ def get_paper_questions(paper_source: str, group_index: int = 1) -> str:
         "questions": payload["questions"],
         "qids": payload["qids"],
         "reply_text": payload["reply_text"],
-        "render_hint": ("直接把 reply_text 作为回复主体发出去；题目必须整组出现，"
-                        "图片必须用 reply_text 里的 /qb_images/ 地址。"
+        # ⚠️ 这条提示 2026-10-18 改过（用户实测：出题一轮 33 秒，一半时间在吐图片 URL）。
+        # 原来写的是"直接把 reply_text 发出去，图片必须用这里的 /qb_images/ 地址" ——
+        # 那是**明确教模型抄长 URL**。现在图片由 `nodes.synthesizer_node` 按题号自动补，
+        # 模型只写「题号 + 知识点」即可。别再把"抄 URL"写回来。
+        "render_hint": ("出题时**只写「题号 + 知识点」一行一道题**；"
+                        "**不要写 `![题目](...)` 图片链接** —— 系统会在返回前"
+                        "按题号把题库原图补到对应行上。题目必须整组出现，"
                         "不要改动题号或知识点，也不要自己补题目文字或选项。"),
     }, ensure_ascii=False)
 
@@ -577,7 +586,9 @@ def record_study_position(course: str, section: "str | int" = "", mode: str = "�
     # 课程名是有限集合，不是就直接当章名处理，避免污染书签里的课程字段。
     # 走 quiz_service 的共享实现 —— 它带中英对照表（传输层→transportlayer），
     # 这里原来有一份不带表的副本，导致 BOT 侧对计网章节纠不过来（已修，见 test_surface_parity）。
-    known = ("操作系统", "计算机网络")
+    from course_agent.courses import known_courses
+
+    known = tuple(known_courses())
     course = (course or "").strip()
     if course and course not in known:
         for c in known:

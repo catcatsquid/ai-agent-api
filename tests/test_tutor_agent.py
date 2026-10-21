@@ -4,7 +4,8 @@ import json
 
 import pytest
 
-from course_agent import qbank, tools, tutor_agent
+from course_agent import qbank, tools
+from frozen import tutor_agent
 
 
 @pytest.fixture(autouse=True)

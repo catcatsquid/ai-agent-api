@@ -11,7 +11,8 @@ tools.py 那边的阅卷缺 `basis_warning`，也没把题号传给 `build_llm_b
 import json
 import threading
 
-from course_agent import quiz_service, tools, tutor_agent
+from course_agent import quiz_service, tools
+from frozen import tutor_agent
 
 PAPER = "2019秋本部计算机网络模拟题"
 

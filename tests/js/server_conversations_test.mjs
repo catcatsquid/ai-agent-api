@@ -44,7 +44,7 @@ function extractFn(src, name) {
   throw new Error('函数 ' + name + ' 的花括号不配对');
 }
 
-const LIST_URL = '/chat/conversations?limit=20';
+const LIST_URL = '/chat/conversations?limit=200';   // 与页面里的 LIMIT 一致
 
 function listOf(...rows) {
   return { code: 0, data: rows };
@@ -94,7 +94,8 @@ function makeCtx({ responses = {}, chats = [], dismissed = [], isStreaming = fal
   };
   vm.createContext(ctx);
   vm.runInContext(
-    ['importServerConversations', 'deleteServerConversation', 'forgetDismissed',
+    ['importServerConversations', 'pruneStaleServerChats', 'deleteServerConversation',
+     'forgetDismissed',
      'deleteChat']
       .map((n) => extractFn(html, n)).join('\n')
     + '\nglobalThis.__import = importServerConversations;'
@@ -174,6 +175,44 @@ console.log(`\n前端服务端会话导入（读真实页面：${PAGE}）\n`);
   try { await ctx.__import(); } catch (e) { threw = e; }
   check('列表请求抛异常时不往外冒', threw === null, `threw=${threw}`);
   check('也没有改动本地列表', ctx.chats.length === 0);
+}
+
+// ---- 4. 服务端已经不在了的会话，刷新后要从列表里消失 ----
+// 2026-10-18 用户实测反馈："之前你做测试的聊天记录会留在消息列表" ——
+// 探针会话被导进来过，库里删掉之后 localStorage 还挂着，所以这里要清僵尸条目。
+{
+  const stale = { id: 'srv_T-OLD', threadId: 'T-OLD', title: '测试探针会话',
+                  messages: [{ role: 'user', content: '我要开始学习了！' }],
+                  fromServer: true };
+  const localOnly = { id: 'local-1', title: '我自己聊的', messages: [] };
+  const { ctx, calls } = makeCtx({
+    chats: [stale, localOnly],
+    responses: {
+      [LIST_URL]: listOf(PLAN_CONV),
+      '/chat/conversations/T-1?mode=plan': PLAN_DETAIL,
+    },
+  });
+  await ctx.__import();
+  const ids = ctx.chats.map((c) => c.id);
+  check('服务端没了的会话被清掉', !ids.includes('srv_T-OLD'), JSON.stringify(ids));
+  check('本地自己聊的会话不许动', ids.includes('local-1'), JSON.stringify(ids));
+  check('服务端还在的照常导入', ids.includes('srv_T-1'), JSON.stringify(ids));
+  check('清完落了一次盘', ctx.saveCount >= 1, `saveCount=${ctx.saveCount}`);
+  check('没有去请求被清掉那条的详情',
+        !calls.some((u) => u.includes('T-OLD')), JSON.stringify(calls));
+}
+
+// ---- 4b. 拿到的条数正好等于 limit 时，**不许**清理（list 之外还可能有会话）----
+{
+  const stale = { id: 'srv_T-OLD', threadId: 'T-OLD', messages: [], fromServer: true };
+  const full = { code: 0, data: Array.from({ length: 200 }, (_, i) => ({
+    thread_id: `F-${i}`, mode: 'plan', title: `会话${i}`,
+    updated_at: '2026-10-13T04:00:00+00:00' })) };
+  const { ctx } = makeCtx({ chats: [stale], responses: { [LIST_URL]: full } });
+  await ctx.__import();
+  check('列表可能是截断的 → 不清理',
+        ctx.chats.some((c) => c.id === 'srv_T-OLD'),
+        JSON.stringify(ctx.chats.map((c) => c.id)));
 }
 
 // ---- 5. 单条详情失败，不影响其它会话 ----
