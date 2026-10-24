@@ -7,6 +7,13 @@
 
 Week 4/5/7 的 Agent 都用这个。
 
+## 重试只有一处（`_post_chat`）
+
+所有对智谱 chat 端点的请求都经过 `_post_chat`：429/5xx/超时/断连重试，
+401/400 立即抛；**流式只在第一个 chunk 之前可重试**（这条边界由生成器的
+惰性执行天然保证）。别再在调用方另包一层循环 —— 见下方"统一调用边界"。
+回归测试见 `tests/test_llm_retry.py`。
+
 ## 为什么 llm 必须是 BaseChatModel（1.7.2 修的真问题）
 
 原来是"看起来像 ChatModel"的普通类：只有 `invoke`/`bind_tools`，外加一个
@@ -22,6 +29,7 @@ Week 4/5/7 的 Agent 都用这个。
 """
 
 import json
+import re
 import time
 from typing import Iterator
 
@@ -31,11 +39,121 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 from config import ZHIPU_API_KEY, ZHIPU_CHAT_URL, ZHIPU_MODEL, LLM_TEMPERATURE
+from course_agent.logger import logger
 
 _headers = {
     "Authorization": f"Bearer {ZHIPU_API_KEY}",
     "Content-Type": "application/json",
 }
+
+
+# ============================================================
+# 统一调用边界：重试只发生在"建连 + 状态码"阶段
+# ============================================================
+#
+# ## 为什么要把重试收进**一个**函数
+#
+# 重试原来只写在 `chat_with_tools` 里（非流式那条路）；流式那条
+# （`_iter_stream_events`，也就是 `/qa/stream` 真正走的）**一次都不重试**。
+# 而智谱偶发把请求挂死到 120s 超时是实测过的（eval runner 因此单独加过传输层重试）——
+# 于是用户主路径上一次抖动就等于"学生收到一句道歉，而不是答案"。
+#
+# ## 重试的**安全边界**：第一个 chunk 之前
+#
+# `_iter_stream_events` 是生成器：`requests.post` 直到第一次 next() 才执行。
+# 所以把重试放在 `_post_chat` 里，天然只覆盖"还没吐过正文"的阶段。
+# **一旦开始 yield 就不再重试** —— 重发会让前端把前半段正文再收一遍。
+# 首 token 之后断流只能由节点降级处理，不归这一层管（见 nodes 的 LLMError 兜底）。
+#
+# ## 只重试"会自己好"的失败
+#
+# 429 / 5xx / 超时 / 断连 → 重试；401（密钥错）、400（请求体错）→ 立即抛。
+# 原来 `chat_with_tools` 的 `except Exception` 连 401 都会重试 3 次，
+# 密钥配错时要白发三个请求、白等 4 秒才报错。
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+
+_CHAT_ATTEMPTS = 3        # 含首次
+_RATE_LIMIT_WAIT = 3.0    # 429: 3s → 6s（与 errors.retry_on_rate_limit 同口径）
+_NETWORK_WAIT = 2.0       # 超时/断连：固定 2s
+
+
+def _status_of(exc: Exception):
+    """尽力取 HTTP 状态码；取不到返回 None（= 不按状态码判断是否重试）"""
+    resp = getattr(exc, "response", None)
+    code = getattr(resp, "status_code", None)
+    if isinstance(code, int):
+        return code
+    # 没有 response 的异常（测试替身、requests 的少数路径）退回消息里的状态码
+    m = re.search(r"\b(429|500|502|503|504)\b", str(exc))
+    return int(m.group(1)) if m else None
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """这个异常重发一次有没有可能成功"""
+    if isinstance(exc, (requests.exceptions.Timeout,
+                        requests.exceptions.ConnectionError)):
+        return True
+    if isinstance(exc, requests.exceptions.HTTPError):
+        return _status_of(exc) in _RETRYABLE_STATUS
+    return False
+
+
+def _post_chat(payload: dict, *, stream: bool = False, timeout: int = 120):
+    """POST 到智谱 chat 端点，返回**已通过 raise_for_status** 的 response
+
+    只在这一层重试（`_CHAT_ATTEMPTS` 次），调用方不需要也不应该再包一层循环。
+    同步函数里的 `time.sleep` 会占住调用线程（LangGraph 的工作线程），
+    最坏 3s + 6s —— 这是有意的：限流退避本来就不该并发再打过去。
+    """
+    for attempt in range(_CHAT_ATTEMPTS):
+        resp = None
+        try:
+            resp = requests.post(ZHIPU_CHAT_URL, headers=_headers, json=payload,
+                                 stream=stream, timeout=timeout)
+            resp.raise_for_status()
+            return resp
+        except Exception as e:
+            if resp is not None:
+                close = getattr(resp, "close", None)
+                if close is not None:
+                    try:
+                        close()
+                    except Exception:   # noqa: BLE001 —— 关连接失败不影响重试判断
+                        pass
+            if not _is_retryable(e) or attempt == _CHAT_ATTEMPTS - 1:
+                raise
+            wait = (_RATE_LIMIT_WAIT * (2 ** attempt)
+                    if _status_of(e) == 429 else _NETWORK_WAIT)
+            logger.warning("模型调用失败(%s: %s)，%.0fs 后重试（%d/%d）",
+                           type(e).__name__, str(e)[:80], wait,
+                           attempt + 1, _CHAT_ATTEMPTS - 1)
+            time.sleep(wait)
+    # 循环只会以上面的 return 或 raise 结束；这一行只为显式闭合控制流
+    raise RuntimeError("unreachable")   # pragma: no cover
+
+
+# 200 但 body 坏了时再试一次。为什么不并进 `_post_chat`：那一层只管"建连 + 状态码"，
+# 解析是调用方的事；而这一类失败值得重试，因为 200 + 非 JSON 最常见的原因是
+# **响应体被截断**（网络中断、代理断流），属于瞬时故障，而且它失败得很快，
+# 不会像读超时那样占满 120s。只补一次：坏数据重发三次还是坏，截断重发一次基本就对了。
+#
+# 历史：旧的 `chat_with_tools` 用 `except Exception` 把解析错误一起重试了；
+# 收编到 `_post_chat` 时漏掉这一类，等于把"体被截断"从可重试变成了直接失败。
+_PARSE_ATTEMPTS = 2
+
+
+def _post_json(payload: dict) -> dict:
+    """发请求并解析 JSON body；200 但响应体不是合法 JSON 时再试一次"""
+    last = None
+    for attempt in range(_PARSE_ATTEMPTS):
+        resp = _post_chat(payload)
+        try:
+            return resp.json()
+        except ValueError as e:     # json.JSONDecodeError 是 ValueError 的子类
+            last = e
+            if attempt < _PARSE_ATTEMPTS - 1:
+                logger.warning("模型响应不是合法 JSON（%s），重试一次", str(e)[:80])
+    raise last
 
 
 def chat(messages, temperature=None, max_tokens=None):
@@ -47,9 +165,7 @@ def chat(messages, temperature=None, max_tokens=None):
     }
     if max_tokens:
         payload["max_tokens"] = max_tokens
-    resp = requests.post(ZHIPU_CHAT_URL, headers=_headers, json=payload, timeout=120)
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+    return _post_json(payload)["choices"][0]["message"]["content"]
 
 
 def stream_chat(messages, temperature=None):
@@ -60,7 +176,7 @@ def stream_chat(messages, temperature=None):
         "stream": True,
         "temperature": temperature if temperature is not None else LLM_TEMPERATURE,
     }
-    resp = requests.post(ZHIPU_CHAT_URL, headers=_headers, json=payload, stream=True, timeout=120)
+    resp = _post_chat(payload, stream=True)
     for line in resp.iter_lines():
         if not line:
             continue
@@ -79,6 +195,10 @@ def chat_with_tools(messages, tools=None, temperature=None, max_tokens=2000,
                     tool_choice="auto"):
     """调用智谱 API，支持 function calling。非流式。
 
+    重试分两段：建连/状态码在 `_post_chat`（429/5xx/超时最多 3 次，401/400 立即抛）；
+    "200 但响应体坏了"在 `_post_json`（再试一次）。
+    这里**不再自带循环**：以前那层 `except Exception` 会把 401 也重试 3 次。
+
     Returns:
         dict with keys:
           - content: str (可能为空)
@@ -94,24 +214,12 @@ def chat_with_tools(messages, tools=None, temperature=None, max_tokens=2000,
         payload["tools"] = tools
         payload["tool_choice"] = tool_choice
 
-    for attempt in range(3):
-        try:
-            resp = requests.post(ZHIPU_CHAT_URL, headers=_headers, json=payload, timeout=120)
-            resp.raise_for_status()
-            msg = resp.json()["choices"][0]["message"]
-            result = {
-                "content": msg.get("content", ""),
-                "tool_calls": msg.get("tool_calls"),
-            }
-            return result
-        except Exception as e:
-            if "429" in str(e) and attempt < 2:
-                time.sleep(3 * (attempt + 1))
-                continue
-            if attempt < 2:
-                time.sleep(2)
-                continue
-            raise
+    # 建连/状态码的重试在 _post_chat；"200 但 body 坏了"的重试在 _post_json（各管一段）
+    msg = _post_json(payload)["choices"][0]["message"]
+    return {
+        "content": msg.get("content", ""),
+        "tool_calls": msg.get("tool_calls"),
+    }
 
 
 # ============================================================
@@ -139,9 +247,9 @@ def _iter_stream_events(api_messages, tools=None, temperature=None,
         payload["tools"] = tools
         payload["tool_choice"] = tool_choice
 
-    resp = requests.post(ZHIPU_CHAT_URL, headers=_headers, json=payload,
-                         stream=True, timeout=120)
-    resp.raise_for_status()
+    # 只重试"建连 + 状态码"阶段：本函数是生成器，post 到第一次 next() 才执行，
+    # 所以这里天然满足"还没吐过正文才能重试"。开吐之后断流不重试（见文件头说明）。
+    resp = _post_chat(payload, stream=True)
 
     for line in resp.iter_lines():
         if not line:
